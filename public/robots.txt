@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://sistemadepedidosweb.com/sitemap.xml
