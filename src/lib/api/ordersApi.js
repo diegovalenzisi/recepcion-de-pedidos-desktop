@@ -1,5 +1,5 @@
 
-import { getDatabase, ref, onValue, set, get, runTransaction, update, push } from 'firebase/database';
+import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
 import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
@@ -74,14 +74,18 @@ const syncOrderCounter = async () => {
     const ordersRef = ref(db, `${LOCAL_ID}/PEDIDOS`);
 
     try {
-        const ordersSnapshot = await get(ordersRef);
-        const ordersData = ordersSnapshot.val();
+        // Lee solo el último pedido (por clave) en lugar de todos los pedidos.
+        // Firebase RTDB ordena claves enteras numéricamente, así que limitToLast(1)
+        // devuelve el pedido con el ID más alto — O(1) en lugar de O(n).
+        const lastOrderQuery = query(ordersRef, orderByKey(), limitToLast(1));
+        const snapshot = await get(lastOrderQuery);
 
-        if (ordersData) {
-            const maxIdInOrders = Object.keys(ordersData)
-                .map(id => parseInt(id, 10))
-                .filter(id => !isNaN(id))
-                .reduce((max, id) => Math.max(max, id), 0);
+        if (snapshot.exists()) {
+            const maxIdInOrders = Math.max(
+                ...Object.keys(snapshot.val())
+                    .map(id => parseInt(id, 10))
+                    .filter(id => !isNaN(id))
+            );
 
             await runTransaction(counterRef, (currentValue) => {
                 const currentCounter = currentValue || 0;
@@ -114,7 +118,7 @@ export const listenToOrders = (callback, errorCallback) => {
             }
             return order;
           })
-          .sort((a, b) => b.id - a.id);
+          .sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
         
         callback(ordersArray);
       } else {
@@ -546,7 +550,7 @@ export const fetchOrders = async () => {
     if (!data) return [];
     return Object.keys(data)
       .map(key => ({ ...data[key], id: key }))
-      .sort((a, b) => b.id - a.id);
+      .sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
   } catch (error) {
     console.error("Error fetching orders:", error);
     throw error;

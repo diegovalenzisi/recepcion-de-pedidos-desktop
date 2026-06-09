@@ -24,8 +24,6 @@ import ErrorBoundary from '@/components/ErrorBoundary.jsx';
 import { perfMonitor } from '@/lib/performanceMonitor';
 import InstallPrompt from '@/components/InstallPrompt.jsx';
 
-import WebAppPage from '@/pages/WebAppPage.jsx';
-
 const AttentionPage = React.lazy(() => import('@/pages/AttentionPage.jsx'));
 const StockPage = React.lazy(() => import('@/pages/StockPage.jsx'));
 const SettingsPage = React.lazy(() => import('@/pages/SettingsPage.jsx'));
@@ -41,6 +39,7 @@ const SalesByAppsPage = React.lazy(() => import('@/pages/SalesByAppsPage.jsx'));
 const PrepaymentReportPage = React.lazy(() => import('@/pages/PrepaymentReportPage.jsx'));
 const CashFundModal = React.lazy(() => import('@/components/cash/CashFundModal.jsx'));
 const LocalIdSetup = React.lazy(() => import('@/components/setup/LocalIdSetup.jsx'));
+const WebAppPage = React.lazy(() => import('@/pages/WebAppPage.jsx'));
 
 const NavLink = ({ to, icon: Icon, label, userPermissions, userRole, permissionPath, badge }) => {
   const location = useLocation();
@@ -178,7 +177,7 @@ function AppContent() {
         perfMonitor.startTimer('initial-data-load');
         setFirebaseLocalId(id);
         setAccountsLocalId(id);
-        initializeFirebaseApp();
+        await initializeFirebaseApp();
 
         const fetchedSettings = await fetchSettings();
         if (fetchedSettings) {

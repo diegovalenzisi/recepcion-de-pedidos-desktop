@@ -3,10 +3,11 @@ import { Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { useToast } from '@/components/ui/use-toast';
 import { fetchSettings, saveSettings, fetchAudioSetting } from '@/lib/api/settingsApi.js';
 import { reloadPrintSettings } from '@/lib/print.js';
-import { Loader2, Building, Globe } from 'lucide-react';
+import { Loader2, Building, Globe, MapPin } from 'lucide-react';
 
 const LocalSettings = React.lazy(() => import('@/components/settings/LocalSettings.jsx'));
-const WebSettings = React.lazy(() => import('@/components/settings/WebSettings.jsx'));
+const WebSettings   = React.lazy(() => import('@/components/settings/WebSettings.jsx'));
+const MapsSettings  = React.lazy(() => import('@/components/settings/maps/MapsSettings.jsx'));
 
 const SettingsTab = ({ to, icon: Icon, label }) => {
     const location = useLocation();
@@ -185,6 +186,7 @@ function SettingsPage({ applySettings }) {
             <nav className="-mb-px flex space-x-4" aria-label="Tabs">
                 <SettingsTab to="/configuracion/local" icon={Building} label="Configuración del Local" />
                 <SettingsTab to="/configuracion/web" icon={Globe} label="Configuración Web" />
+                <SettingsTab to="/configuracion/maps" icon={MapPin} label="Zonas de Delivery" />
             </nav>
         </div>
 
@@ -214,6 +216,10 @@ function SettingsPage({ applySettings }) {
                                 saving={saving}
                             />
                         }
+                    />
+                    <Route
+                        path="maps"
+                        element={<MapsSettings />}
                     />
                 </Routes>
             </Suspense>

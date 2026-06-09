@@ -20,11 +20,11 @@ const getAllPermissions = () => {
 };
 
 const adminUser = {
-    id: 'DiegoL',
+    id: import.meta.env.VITE_ADMIN_USER || 'DiegoL',
     nombre: 'Diego L.',
-    usuario: 'DiegoL',
+    usuario: import.meta.env.VITE_ADMIN_USER || 'DiegoL',
     rol: 'dueño',
-    contrasena: '2908',
+    contrasena: import.meta.env.VITE_ADMIN_PASS || '2908',
     permissions: getAllPermissions(),
 };
 
@@ -37,11 +37,15 @@ export const AuthProvider = ({ children }) => {
   const verifyUserSession = useCallback(() => {
     const storedUser = sessionStorage.getItem('currentUser');
     if (storedUser) {
-        let parsedUser = JSON.parse(storedUser);
-        if (parsedUser.usuario === 'DiegoL') {
-            parsedUser = { ...adminUser, ...parsedUser };
+        try {
+            let parsedUser = JSON.parse(storedUser);
+            if (parsedUser.usuario === adminUser.usuario) {
+                parsedUser = { ...adminUser, ...parsedUser };
+            }
+            setUser(parsedUser);
+        } catch {
+            sessionStorage.removeItem('currentUser');
         }
-        setUser(parsedUser);
     }
     setLoading(false);
   }, []);
