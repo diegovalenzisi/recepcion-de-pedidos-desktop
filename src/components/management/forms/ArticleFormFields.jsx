@@ -17,6 +17,9 @@ import { useOptionalsSorting } from '@/hooks/useOptionalsSorting';
 
 const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStockChange, onOpcionalesConfigChange, allData }) => {
   const [selectedPromoArticle, setSelectedPromoArticle] = useState('');
+  const [selectedPromoGroup, setSelectedPromoGroup] = useState('');
+  const [promoGroupName, setPromoGroupName] = useState('');
+  const [promoGroupPermitidos, setPromoGroupPermitidos] = useState([]);
   const fileInputRef = useRef(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -31,6 +34,7 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
   const allOptionalGroups = allData?.['grupos-opcionales'] || [];
   const allOpcionales = allData?.opcionales || [];
   const allRawMaterials = allData?.['materia-prima'] || [];
+  const allProductGroups = allData?.['grupos-productos'] || [];
 
   const sortedOpcionales = useOptionalsSorting(allOpcionales);
 
@@ -59,6 +63,68 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
     const updatedItems = (formData.promoItems || []).map(item =>
       item.uniqueId === uniqueId ? { ...item, cantidad: Math.max(1, parseInt(newQuantity, 10) || 1) } : item
     );
+    onPromoItemsChange(updatedItems);
+  };
+
+  const handlePromoGroupSelect = (groupId) => {
+    setSelectedPromoGroup(groupId);
+    const group = allProductGroups.find(g => g.id === groupId);
+    setPromoGroupName(group ? `${group.nombre} a elección` : '');
+    setPromoGroupPermitidos([]);
+  };
+
+  const togglePermitido = (groupArticleIds, currentPermitidos, articleId) => {
+    const currentAllowed = (currentPermitidos && currentPermitidos.length > 0) ? currentPermitidos : groupArticleIds;
+    let newAllowed;
+    if (currentAllowed.includes(articleId)) {
+      newAllowed = currentAllowed.filter(id => id !== articleId);
+      if (newAllowed.length === 0) return currentPermitidos; // mantener al menos uno permitido
+    } else {
+      newAllowed = [...currentAllowed, articleId];
+    }
+    return newAllowed.length === groupArticleIds.length ? [] : newAllowed;
+  };
+
+  const handlePromoGroupPermitidoToggle = (articleId) => {
+    const group = allProductGroups.find(g => g.id === selectedPromoGroup);
+    const groupArticleIds = group?.articulos || [];
+    setPromoGroupPermitidos(prev => togglePermitido(groupArticleIds, prev, articleId));
+  };
+
+  const handlePromoGroupAdd = () => {
+    if (!selectedPromoGroup) return;
+    const group = allProductGroups.find(g => g.id === selectedPromoGroup);
+    if (!group) return;
+
+    const newItem = {
+      tipo: 'grupo',
+      grupoId: group.id,
+      nombre: promoGroupName || `${group.nombre} a elección`,
+      cantidad: 1,
+      permitidos: promoGroupPermitidos,
+      uniqueId: `grupo-${group.id}-${Date.now()}`
+    };
+    const currentItems = formData.promoItems || [];
+    onPromoItemsChange([...currentItems, newItem]);
+    setSelectedPromoGroup('');
+    setPromoGroupName('');
+    setPromoGroupPermitidos([]);
+  };
+
+  const handlePromoGroupItemNameChange = (uniqueId, newName) => {
+    const updatedItems = (formData.promoItems || []).map(item =>
+      item.uniqueId === uniqueId ? { ...item, nombre: newName } : item
+    );
+    onPromoItemsChange(updatedItems);
+  };
+
+  const handlePromoGroupItemPermitidoToggle = (uniqueId, articleId) => {
+    const updatedItems = (formData.promoItems || []).map(item => {
+      if (item.uniqueId !== uniqueId) return item;
+      const group = allProductGroups.find(g => g.id === item.grupoId);
+      const groupArticleIds = group?.articulos || [];
+      return { ...item, permitidos: togglePermitido(groupArticleIds, item.permitidos, articleId) };
+    });
     onPromoItemsChange(updatedItems);
   };
 
@@ -347,25 +413,77 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
         <div className="p-4 border rounded-lg bg-gray-50 space-y-4">
           <h3 className="font-semibold text-lg">Contenido de la Promo</h3>
           <div className="space-y-2">
-            {formData.promoItems && formData.promoItems.map((item) => (
-              <div key={item.uniqueId} className="flex items-center justify-between p-2 bg-white rounded-md shadow-sm">
-                <span className="font-medium">{item.nombre}</span>
-                <div className="flex items-center space-x-2">
-                  <Label htmlFor={`qty-${item.uniqueId}`} className="text-sm">Cant:</Label>
-                  <Input
-                    id={`qty-${item.uniqueId}`}
-                    type="number"
-                    min="1"
-                    value={item.cantidad}
-                    onChange={(e) => handlePromoItemQuantityChange(item.uniqueId, e.target.value)}
-                    className="w-16 h-8"
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => handlePromoItemRemove(item.uniqueId)}>
-                    <Trash2 className="h-4 w-4 text-red-500" />
-                  </Button>
+            {formData.promoItems && formData.promoItems.map((item) => {
+              if (item.tipo === 'grupo') {
+                const group = allProductGroups.find(g => g.id === item.grupoId);
+                const groupArticleIds = group?.articulos || [];
+                const groupArticles = groupArticleIds.map(id => allArticles.find(a => a.id === id)).filter(Boolean);
+                const allowedIds = (item.permitidos && item.permitidos.length > 0) ? item.permitidos : groupArticleIds;
+                return (
+                  <div key={item.uniqueId} className="p-2 bg-white rounded-md shadow-sm space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-grow">
+                        <span className="text-[10px] uppercase font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full shrink-0 whitespace-nowrap">
+                          Grupo: {group ? group.nombre : '???'}
+                        </span>
+                        <Input
+                          value={item.nombre}
+                          onChange={(e) => handlePromoGroupItemNameChange(item.uniqueId, e.target.value)}
+                          className="h-8"
+                        />
+                      </div>
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <Label htmlFor={`qty-${item.uniqueId}`} className="text-sm">Cant:</Label>
+                        <Input
+                          id={`qty-${item.uniqueId}`}
+                          type="number"
+                          min="1"
+                          value={item.cantidad}
+                          onChange={(e) => handlePromoItemQuantityChange(item.uniqueId, e.target.value)}
+                          className="w-16 h-8"
+                        />
+                        <Button variant="ghost" size="icon" onClick={() => handlePromoItemRemove(item.uniqueId)}>
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="pl-2">
+                      <p className="text-xs text-gray-500 mb-1">Productos que se podrán elegir:</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                        {groupArticles.map(article => (
+                          <label key={article.id} className="flex items-center space-x-2 text-sm cursor-pointer">
+                            <Checkbox
+                              checked={allowedIds.includes(article.id)}
+                              onCheckedChange={() => handlePromoGroupItemPermitidoToggle(item.uniqueId, article.id)}
+                            />
+                            <span>{article.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={item.uniqueId} className="flex items-center justify-between p-2 bg-white rounded-md shadow-sm">
+                  <span className="font-medium">{item.nombre}</span>
+                  <div className="flex items-center space-x-2">
+                    <Label htmlFor={`qty-${item.uniqueId}`} className="text-sm">Cant:</Label>
+                    <Input
+                      id={`qty-${item.uniqueId}`}
+                      type="number"
+                      min="1"
+                      value={item.cantidad}
+                      onChange={(e) => handlePromoItemQuantityChange(item.uniqueId, e.target.value)}
+                      className="w-16 h-8"
+                    />
+                    <Button variant="ghost" size="icon" onClick={() => handlePromoItemRemove(item.uniqueId)}>
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div className="flex items-center space-x-2">
             <Select onValueChange={setSelectedPromoArticle} value={selectedPromoArticle}>
@@ -390,17 +508,75 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
               <PlusCircle className="h-5 w-5" />
             </Button>
           </div>
+
+          {allProductGroups.length > 0 && (
+            <div className="border-t pt-3 space-y-2">
+              <Label className="text-sm font-semibold">Agregar grupo de productos a elección</Label>
+              <div className="flex items-center space-x-2">
+                <Select onValueChange={handlePromoGroupSelect} value={selectedPromoGroup}>
+                  <SelectTrigger className="flex-grow">
+                    <SelectValue placeholder="Seleccionar grupo de productos..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allProductGroups.map(group => (
+                      <SelectItem key={group.id} value={group.id}>{group.nombre}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button type="button" onClick={handlePromoGroupAdd} disabled={!selectedPromoGroup}>
+                  <PlusCircle className="h-5 w-5" />
+                </Button>
+              </div>
+              {selectedPromoGroup && (() => {
+                const group = allProductGroups.find(g => g.id === selectedPromoGroup);
+                const groupArticleIds = group?.articulos || [];
+                const allowedIds = promoGroupPermitidos.length > 0 ? promoGroupPermitidos : groupArticleIds;
+                return (
+                  <div className="p-2 bg-white rounded-md space-y-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="promoGroupName" className="text-xs">Nombre a mostrar</Label>
+                      <Input
+                        id="promoGroupName"
+                        value={promoGroupName}
+                        onChange={(e) => setPromoGroupName(e.target.value)}
+                        className="h-8"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Productos que se podrán elegir (vacío = todos):</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                        {groupArticleIds.map(artId => {
+                          const article = allArticles.find(a => a.id === artId);
+                          if (!article) return null;
+                          return (
+                            <label key={artId} className="flex items-center space-x-2 text-sm cursor-pointer">
+                              <Checkbox
+                                checked={allowedIds.includes(artId)}
+                                onCheckedChange={() => handlePromoGroupPermitidoToggle(artId)}
+                              />
+                              <span>{article.nombre}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </div>
       )}
 
       {formData.isPromo ? (
-        <StockManagement 
-          stock={formData.stock || {}} 
-          onStockChange={onStockChange} 
+        <StockManagement
+          stock={formData.stock || {}}
+          onStockChange={onStockChange}
           allArticles={allArticles}
           allRawMaterials={allRawMaterials}
           allDepartments={allDepartments}
           formData={formData}
+          isPromo
         />
       ) : (
         <>

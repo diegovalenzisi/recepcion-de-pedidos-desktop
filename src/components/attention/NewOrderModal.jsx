@@ -6,6 +6,7 @@ import { fetchData } from '@/lib/api/firebaseApi';
 import { saveOrder, updateOrder } from '@/lib/api/ordersApi';
 import { useToast } from '@/components/ui/use-toast';
 import OptionalSelectionModal from '@/components/attention/OptionalSelectionModal';
+import GroupProductSelectionModal from '@/components/attention/GroupProductSelectionModal';
 import ConfirmOrderModal from '@/components/attention/ConfirmOrderModal';
 import DepartmentList from '@/components/attention/order/DepartmentList';
 import ArticleGrid from '@/components/attention/order/ArticleGrid';
@@ -24,6 +25,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   const [allArticles, setAllArticles] = useState([]);
   const [allOptionals, setAllOptionals] = useState([]);
   const [allOptionalGroups, setAllOptionalGroups] = useState([]);
+  const [allProductGroups, setAllProductGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDepartment, setSelectedDepartment] = useState(null);
@@ -37,9 +39,10 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
 
   // Hook to handle real-time stock verification
   const { verifiedArticles, isVerifying } = useStockVerification(
-    allArticles, 
-    context, 
-    isOpen && !isConfirmModalOpen && !isOptionalModalOpen
+    allArticles,
+    context,
+    isOpen && !isConfirmModalOpen && !isOptionalModalOpen,
+    allProductGroups
   );
 
   // Hook to handle promotion automation based on stock
@@ -83,22 +86,32 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     });
   }, []);
 
+  const handlePromoUnavailable = useCallback(() => {
+    toast({
+      variant: "destructive",
+      title: "Promoción no disponible",
+      description: "No hay stock suficiente de los artículos que componen esta promoción.",
+    });
+  }, [toast]);
+
   const {
     promoConfig,
     startPromo,
     handlePromoItemConfigured,
+    handleGroupItemResolved,
     resetPromoConfig,
-  } = usePromo({ allArticles, addArticleToOrder });
+  } = usePromo({ allArticles, addArticleToOrder, allProductGroups, verifiedArticles, onPromoUnavailable: handlePromoUnavailable });
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [fetchedDepartments, fetchedArticles, fetchedOptionals, fetchedOptionalGroups, fetchedAccounts] = await Promise.all([
+      const [fetchedDepartments, fetchedArticles, fetchedOptionals, fetchedOptionalGroups, fetchedProductGroups, fetchedAccounts] = await Promise.all([
         fetchData('departamentos'),
         fetchData('articulos'),
         fetchData('opcionales'),
         fetchData('grupos-opcionales'),
+        fetchData('grupos-productos'),
         fetchAccounts()
       ]);
 
@@ -112,6 +125,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       setAllArticles(fetchedArticles);
       setAllOptionals(fetchedOptionals);
       setAllOptionalGroups(fetchedOptionalGroups);
+      setAllProductGroups(fetchedProductGroups);
 
       const electronicMethods = (fetchedAccounts || []).map(acc => acc.nombre).filter(Boolean);
       setPaymentMethods(['Efectivo', ...new Set(electronicMethods)]);
@@ -441,6 +455,14 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         isPromoItem={promoConfig.isConfiguring}
         promoItemIndex={promoConfig.currentIndex}
         promoTotalItems={promoConfig.itemsToConfigure.length}
+      />
+
+      <GroupProductSelectionModal
+        isOpen={promoConfig.isResolvingGroups}
+        choice={promoConfig.groupChoicesToResolve[promoConfig.currentGroupIndex]}
+        currentIndex={promoConfig.currentGroupIndex}
+        totalChoices={promoConfig.groupChoicesToResolve.length}
+        onSelect={handleGroupItemResolved}
       />
 
       <ConfirmOrderModal

@@ -1,6 +1,7 @@
 import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
+import { resolveStockImpact } from './transactionsApi';
 
 const fetchData = async (path) => {
     checkLocalId();
@@ -237,22 +238,40 @@ export const deductStockForItem = async (item, quantity, allStockData, stockUpda
 
     affectedItems.add(itemCode);
 
-    if (articleDetails.stock && articleDetails.stock.receta && Object.keys(articleDetails.stock.receta).length > 0) {
-        for (const [componentCode, quantityNeeded] of Object.entries(articleDetails.stock.receta)) {
-            const componentItem = { id: componentCode, codigo: componentCode };
-            await deductStockForItem(componentItem, Number(quantityNeeded) * Number(quantity), allStockData, stockUpdates, affectedItems);
+    if (articleDetails.isPromo) {
+        // Use the same resolution engine as the deduction path (resolveStockImpact)
+        // so promo group items restore stock to the real chosen article (codigo),
+        // not to the group/promo itself, and propio/heredado/receta are respected.
+        const promoChildren = item.promoItems || item.promoDetails || articleDetails.promoItems || [];
+        const impactMap = {};
+        promoChildren.forEach(promoItem => {
+            const promoQty = Number(promoItem.cantidad) || 1;
+            const promoIdentifier = promoItem.codigo || promoItem.id || promoItem.nombre;
+            if (promoIdentifier) {
+                resolveStockImpact(promoIdentifier, promoQty * Number(quantity), articulos, materiaPrima, impactMap, new Set());
+            }
+        });
+
+        for (const [resolvedId, impact] of Object.entries(impactMap)) {
+            affectedItems.add(resolvedId);
+            const updatePath = impact.type === 'ARTICULO'
+                ? `ARTICULOS/${resolvedId}/stock/propio`
+                : `MATERIA_PRIMA/${resolvedId}/stock`;
+            const baseStock = impact.type === 'ARTICULO'
+                ? Number(articulos[resolvedId]?.stock?.propio) || 0
+                : Number(materiaPrima[resolvedId]?.stock) || 0;
+            const currentStock = stockUpdates[updatePath] !== undefined
+                ? Number(stockUpdates[updatePath])
+                : baseStock;
+            stockUpdates[updatePath] = currentStock - impact.quantity;
         }
         return;
     }
 
-    if (articleDetails.isPromo) {
-        const promoItemsToDeduct = item.promoDetails || articleDetails.promoItems;
-        if (promoItemsToDeduct) {
-            for (const promoItem of promoItemsToDeduct) {
-                const promoItemCode = promoItem.id || promoItem.codigo;
-                const subItem = { id: promoItemCode, codigo: promoItemCode, ...articulos[promoItemCode] };
-                await deductStockForItem(subItem, (promoItem.cantidad || 1) * quantity, allStockData, stockUpdates, affectedItems);
-            }
+    if (articleDetails.stock && articleDetails.stock.receta && Object.keys(articleDetails.stock.receta).length > 0) {
+        for (const [componentCode, quantityNeeded] of Object.entries(articleDetails.stock.receta)) {
+            const componentItem = { id: componentCode, codigo: componentCode };
+            await deductStockForItem(componentItem, Number(quantityNeeded) * Number(quantity), allStockData, stockUpdates, affectedItems);
         }
         return;
     }

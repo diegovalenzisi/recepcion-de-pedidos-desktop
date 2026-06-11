@@ -12,7 +12,7 @@ const parseQuantity = (val) => {
     return 0;
 };
 
-const resolveStockImpact = (itemId, quantity, articlesData, materiaPrimaData, impactMap, visited = new Set()) => {
+export const resolveStockImpact = (itemId, quantity, articlesData, materiaPrimaData, impactMap, visited = new Set()) => {
     if (visited.has(itemId)) return;
     visited.add(itemId);
 

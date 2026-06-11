@@ -179,6 +179,16 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
           </>
         );
     },
+    'grupos-productos': () => {
+        const count = (item.articulos || []).length;
+        return (
+          <>
+            <td className="py-3 px-4 font-mono text-sm whitespace-nowrap">{item.codigo}</td>
+            <td className="py-3 px-4 font-medium w-full">{item.nombre}</td>
+            <td className="py-3 px-4 text-center whitespace-nowrap">{count} producto{count === 1 ? '' : 's'}</td>
+          </>
+        );
+    },
     opcionales: () => {
       const grupo = allData['grupos-opcionales']?.find(g => g.codigo === item.grupo);
       return (
@@ -314,6 +324,7 @@ const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, 
     articulos: ['Foto', 'Código', 'Nombre', 'Departamento', 'Valor', 'Costo Total', 'Stock', 'Control Stock', 'Activo', 'Acciones'],
     'materia-prima': ['Código', 'Nombre', 'Unidad', 'Stock', 'Mínimo', 'Costo Unit.', 'Acciones'],
     'grupos-opcionales': ['Código', 'Nombre', 'Acciones'],
+    'grupos-productos': ['Código', 'Nombre', 'Productos', 'Acciones'],
     opcionales: ['Código', 'Nombre', 'Grupo', 'Precio', 'Activo', 'Acciones'],
     departamentos: ['Código', 'Nombre', 'Orden Web', 'Orden Local', 'Activo', 'Acciones'],
     tachos: ['Código', 'Orden', 'Nombre', 'Debería Haber', 'Stock Actual', 'Acciones'],
@@ -326,7 +337,7 @@ const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, 
           <tr className="border-b-2 border-gray-200 shadow-sm">
             {(headers[activeTab] || []).map((header, index) => {
               const isActions = header === 'Acciones';
-              const isCenter = ['Orden Web', 'Orden Local', 'Debería Haber', 'Stock Actual', 'Activo', 'Control Stock'].includes(header);
+              const isCenter = ['Orden Web', 'Orden Local', 'Debería Haber', 'Stock Actual', 'Activo', 'Control Stock', 'Productos'].includes(header);
               
               return (
                 <th 

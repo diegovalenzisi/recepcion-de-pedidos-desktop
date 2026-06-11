@@ -6,6 +6,7 @@ import RawMaterialFormFields from './forms/RawMaterialFormFields';
 import OptionalFormFields from './forms/OptionalFormFields';
 import DepartmentFormFields from './forms/DepartmentFormFields';
 import TachoFormFields from './forms/TachoFormFields';
+import ProductGroupFormFields from './forms/ProductGroupFormFields';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 
@@ -61,6 +62,9 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
             initialData.grupo = initialData.grupo || '';
             initialData.precio = initialData.precio || 0;
             initialData.descripcion = initialData.descripcion || '';
+            break;
+          case 'grupos-productos':
+            initialData.articulos = initialData.articulos || [];
             break;
           default:
             break;
@@ -235,6 +239,12 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
                     <input name="nombre" type="text" className="input-field" value={formData.nombre || ''} onChange={(e) => handleFieldChange(e.target.name, e.target.value)} />
                   </div>
                </div>;
+      case 'grupos-productos':
+        return <ProductGroupFormFields
+                  formData={formData}
+                  onFieldChange={handleFieldChange}
+                  allData={allData}
+                />;
       case 'opcionales':
         return <OptionalFormFields {...commonProps} allData={allData} />;
       case 'departamentos':

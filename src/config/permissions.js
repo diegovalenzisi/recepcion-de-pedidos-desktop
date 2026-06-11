@@ -21,6 +21,7 @@ export const permissionsList = [
             { id: 'articulos', label: 'Artículos' },
             { id: 'materiaPrima', label: 'Materia Prima' },
             { id: 'gruposOpcionales', label: 'Grupos Opcionales' },
+            { id: 'gruposProductos', label: 'Grupos de Productos' },
             { id: 'opcionales', label: 'Opcionales' },
             { id: 'departamentos', label: 'Departamentos' },
             { id: 'tachos', label: 'Tachos (Acceso)' },

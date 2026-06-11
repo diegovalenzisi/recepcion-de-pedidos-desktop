@@ -9,6 +9,7 @@ const getTabConfig = (tabId) => {
         articulos: { path: 'ARTICULOS', idPrefix: 'A' },
         'materia-prima': { path: 'MATERIA_PRIMA', idPrefix: 'M' },
         'grupos-opcionales': { path: 'GRUPOS_OPCIONALES', idPrefix: 'G' },
+        'grupos-productos': { path: 'GRUPOS_PRODUCTOS', idPrefix: 'GP' },
         opcionales: { path: 'OPCIONALES', idPrefix: 'O' },
         departamentos: { path: 'DEPARTAMENTOS', idPrefix: 'D' },
         tachos: { path: 'TACHOS', idPrefix: 'T' }
@@ -221,6 +222,10 @@ export const fetchPromotionMinimumStock = async (promotionId) => {
         const details = [];
 
         for (const pItem of promoItems) {
+            // Items que son "grupo de productos a elección" no tienen un único
+            // artículo asociado, por lo que se excluyen del cálculo de stock mínimo.
+            if (pItem.tipo === 'grupo') continue;
+
             const artId = pItem.codigo || pItem.id;
             const qtyNeeded = pItem.cantidad || 1;
             const article = articlesData[artId];

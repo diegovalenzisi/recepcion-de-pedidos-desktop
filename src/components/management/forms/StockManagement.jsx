@@ -9,8 +9,9 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
 
-const StockManagement = ({ stock, onStockChange, allArticles, allRawMaterials, allDepartments, formData }) => {
+const StockManagement = ({ stock, onStockChange, allArticles, allRawMaterials, allDepartments, formData, isPromo }) => {
   const getInitialStockType = () => {
     if (stock && stock.stockType) return stock.stockType;
     if (stock && stock.receta !== null && typeof stock.receta === 'object') {
@@ -122,10 +123,32 @@ const StockManagement = ({ stock, onStockChange, allArticles, allRawMaterials, a
   const hadDeliveryEnabled = formData?.hadDeliveryEnabled === true;
   const currentStock = stock?.propio || 0;
   const isStockDepleted = currentStock === 0;
+  const descuentaPorArticulo = stock?.descuentaPorArticulo === true;
+
+  const handleDescuentaPorArticuloChange = (checked) => {
+    onStockChange({ ...(stock || {}), descuentaPorArticulo: checked });
+  };
 
   return (
     <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 mt-4">
       <Label className="block text-sm font-bold text-gray-800 mb-2">Gestión de Stock</Label>
+
+      {isPromo && (
+        <div className="flex items-center justify-between gap-3 p-3 mb-3 bg-white border border-gray-200 rounded-lg">
+          <div>
+            <Label htmlFor="descuentaPorArticulo" className="font-medium">Descuenta stock según artículo</Label>
+            <p className="text-xs text-gray-500 mt-1">
+              Si está activado, la promoción no usa stock propio: al venderse, se descuenta el stock real
+              de cada artículo que la compone (incluyendo grupos a elección, stock heredado y recetas), y la
+              promoción solo estará disponible si esos artículos tienen stock.
+            </p>
+          </div>
+          <Switch id="descuentaPorArticulo" checked={descuentaPorArticulo} onCheckedChange={handleDescuentaPorArticuloChange} />
+        </div>
+      )}
+
+      {!descuentaPorArticulo && (
+      <>
       <Select onValueChange={handleTypeChange} value={stockType}>
         <SelectTrigger>
           <SelectValue placeholder="Seleccione tipo de stock" />
@@ -311,6 +334,8 @@ const StockManagement = ({ stock, onStockChange, allArticles, allRawMaterials, a
           )}
         </motion.div>
       </AnimatePresence>
+      </>
+      )}
     </div>
   );
 };

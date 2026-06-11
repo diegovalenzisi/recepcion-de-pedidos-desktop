@@ -151,6 +151,9 @@ const formatOrderItemsForFirebase = (items) => {
           nombre: promoItem.nombre,
           cantidad: promoItem.cantidad,
         };
+        if (promoItem.codigo) {
+          formattedPromoItem.codigo = promoItem.codigo;
+        }
         if (promoItem.selectedOptionals && Object.keys(promoItem.selectedOptionals).length > 0) {
           const formattedOptionals = {};
           for (const groupId in promoItem.selectedOptionals) {

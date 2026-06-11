@@ -7,6 +7,7 @@ const getEntityPath = (entity) => {
     'opcionales': 'OPCIONALES',
     'departamentos': 'DEPARTAMENTOS',
     'grupos-opcionales': 'GRUPOS_OPCIONALES',
+    'grupos-productos': 'GRUPOS_PRODUCTOS',
     'clientes': 'CLIENTES',
     'repartidores': 'REPARTIDORES',
     'usuarios': 'USUARIOS',

@@ -1,5 +1,12 @@
 import { getDatabase, ref, get, update, onValue, off } from 'firebase/database';
 import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { isArticleAvailable, isPromoAvailable, getGroupOptionIds } from './stockAvailability';
+
+const fetchProductGroupsArray = async (db, LOCAL_ID) => {
+    const groupsSnap = await get(ref(db, `${LOCAL_ID}/GRUPOS_PRODUCTOS`));
+    const groupsData = groupsSnap.val() || {};
+    return Object.entries(groupsData).map(([id, g]) => ({ id, ...g }));
+};
 
 /**
  * Checks all promotions and updates their active status based on stock availability
@@ -27,6 +34,18 @@ export const checkAndUpdatePromotionStockStatus = async () => {
         const articlesData = snapshot.val();
         const updates = {};
 
+        const hasDescuentaPorArticulo = Object.values(articlesData).some(
+            item => item.isPromo && item.stock?.descuentaPorArticulo === true
+        );
+
+        let materiaPrimaData = {};
+        let productGroupsArray = [];
+        if (hasDescuentaPorArticulo) {
+            const mpSnap = await get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`));
+            materiaPrimaData = mpSnap.val() || {};
+            productGroupsArray = await fetchProductGroupsArray(db, LOCAL_ID);
+        }
+
         for (const [key, item] of Object.entries(articlesData)) {
             // Check if it's a promo
             if (item.isPromo) {
@@ -34,15 +53,21 @@ export const checkAndUpdatePromotionStockStatus = async () => {
                 if (promoItems.length === 0) continue;
 
                 let hasOutOfStock = false;
-                
-                // Check stock of all articles in the promo
-                for (const pItem of promoItems) {
-                    const targetId = pItem.codigo || pItem.id;
-                    const targetArt = articlesData[targetId];
-                    
-                    if (targetArt && targetArt.stock && targetArt.stock.propio === 0) {
-                        hasOutOfStock = true;
-                        break;
+
+                if (item.stock?.descuentaPorArticulo === true) {
+                    // New mode: availability depends on the real components (fixed items
+                    // and product groups), resolving propio/heredado/receta chains.
+                    hasOutOfStock = !isPromoAvailable(item, articlesData, materiaPrimaData, productGroupsArray, 'delivery');
+                } else {
+                    // Legacy mode (unchanged): only checks each component's own stock.propio.
+                    for (const pItem of promoItems) {
+                        const targetId = pItem.codigo || pItem.id;
+                        const targetArt = articlesData[targetId];
+
+                        if (targetArt && targetArt.stock && targetArt.stock.propio === 0) {
+                            hasOutOfStock = true;
+                            break;
+                        }
                     }
                 }
 
@@ -138,22 +163,53 @@ export const getPromotionArticleStockStatus = async (promotionId) => {
         const articlesSnap = await get(articlesRef);
         const articlesData = articlesSnap.val() || {};
 
-        for (const pItem of promoItems) {
-            const targetId = pItem.codigo || pItem.id;
-            const targetArt = articlesData[targetId];
-            
-            if (targetArt) {
-                const articleInfo = {
-                    id: targetId,
-                    nombre: targetArt.nombre,
-                    stock: targetArt.stock?.propio || 0
-                };
-                
-                result.allArticles.push(articleInfo);
-                
-                if (articleInfo.stock === 0) {
-                    result.hasOutOfStock = true;
-                    result.outOfStockArticles.push(articleInfo);
+        if (promoData.stock?.descuentaPorArticulo === true) {
+            const mpSnap = await get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`));
+            const materiaPrimaData = mpSnap.val() || {};
+            const productGroupsArray = await fetchProductGroupsArray(db, LOCAL_ID);
+
+            for (const pItem of promoItems) {
+                if (pItem.tipo === 'grupo') {
+                    const optionIds = getGroupOptionIds(pItem, productGroupsArray);
+                    const available = optionIds.some(id => isArticleAvailable(id, articlesData, materiaPrimaData, 'delivery'));
+                    const groupInfo = { id: pItem.grupoId, nombre: pItem.nombre, stock: available ? 1 : 0 };
+                    result.allArticles.push(groupInfo);
+                    if (!available) {
+                        result.hasOutOfStock = true;
+                        result.outOfStockArticles.push(groupInfo);
+                    }
+                } else {
+                    const targetId = pItem.codigo || pItem.id;
+                    const targetArt = articlesData[targetId];
+                    if (!targetArt) continue;
+
+                    const available = isArticleAvailable(targetId, articlesData, materiaPrimaData, 'delivery');
+                    const articleInfo = { id: targetId, nombre: targetArt.nombre, stock: available ? 1 : 0 };
+                    result.allArticles.push(articleInfo);
+                    if (!available) {
+                        result.hasOutOfStock = true;
+                        result.outOfStockArticles.push(articleInfo);
+                    }
+                }
+            }
+        } else {
+            for (const pItem of promoItems) {
+                const targetId = pItem.codigo || pItem.id;
+                const targetArt = articlesData[targetId];
+
+                if (targetArt) {
+                    const articleInfo = {
+                        id: targetId,
+                        nombre: targetArt.nombre,
+                        stock: targetArt.stock?.propio || 0
+                    };
+
+                    result.allArticles.push(articleInfo);
+
+                    if (articleInfo.stock === 0) {
+                        result.hasOutOfStock = true;
+                        result.outOfStockArticles.push(articleInfo);
+                    }
                 }
             }
         }

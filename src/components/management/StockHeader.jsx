@@ -1,11 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { 
-  Package, 
-  Layers, 
-  Settings, 
-  ShoppingCart, 
+import {
+  Package,
+  Layers,
+  Settings,
+  ShoppingCart,
   FolderTree,
+  Boxes,
   Trash2 as Trash
 } from 'lucide-react';
 
@@ -13,6 +14,7 @@ const iconMap = {
   articulos: Package,
   'materia-prima': Layers,
   'grupos-opcionales': FolderTree,
+  'grupos-productos': Boxes,
   opcionales: ShoppingCart,
   departamentos: Settings,
   tachos: Trash,
