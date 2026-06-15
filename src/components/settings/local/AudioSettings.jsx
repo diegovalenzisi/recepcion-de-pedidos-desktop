@@ -2,13 +2,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Music, Upload, Trash2, Play } from 'lucide-react';
+import { Slider } from '@/components/ui/slider';
+import { Music, Upload, Trash2, Play, Volume2 } from 'lucide-react';
+import { getVoicePaymentVolume, setVoicePaymentVolume } from '@/hooks/useVoicePaymentAlerts';
 
-const AudioSettings = ({ onAudioChange, initialAudioName, initialAudioDataUrl }) => {
+const AudioSettings = ({ onAudioChange, initialAudioName, initialAudioDataUrl, orderSoundVolume, onOrderSoundVolumeChange }) => {
     const [fileName, setFileName] = useState(initialAudioName || 'Ningún archivo seleccionado');
     const [audio, setAudio] = useState(null);
+    const [voicePaymentVolume, setVoicePaymentVolumeState] = useState(getVoicePaymentVolume);
     const fileInputRef = useRef(null);
     const { toast } = useToast();
+
+    const handleVoicePaymentVolumeChange = (value) => {
+        const newVolume = value[0];
+        setVoicePaymentVolumeState(newVolume);
+        setVoicePaymentVolume(newVolume);
+    };
 
     useEffect(() => {
         setFileName(initialAudioName || 'Ningún archivo seleccionado');
@@ -88,6 +97,28 @@ const AudioSettings = ({ onAudioChange, initialAudioName, initialAudioDataUrl })
                     )}
                 </div>
                  <p className="text-xs text-gray-500 ml-1">Selecciona un archivo de audio (.mp3, .wav, .ogg) para las notificaciones de nuevos pedidos.</p>
+            </div>
+
+            <div className="space-y-2 pt-4">
+                <Label className="flex items-center text-gray-700 font-semibold">
+                    <Volume2 className="mr-2 h-5 w-5 text-orange-500" />
+                    Volumen sonido de pedidos
+                </Label>
+                <div className="flex items-center space-x-4">
+                    <Slider min={0} max={100} step={1} value={[orderSoundVolume ?? 100]} onValueChange={onOrderSoundVolumeChange} />
+                    <span className="font-bold w-12 text-center">{orderSoundVolume ?? 100}%</span>
+                </div>
+            </div>
+
+            <div className="space-y-2 pt-4">
+                <Label className="flex items-center text-gray-700 font-semibold">
+                    <Volume2 className="mr-2 h-5 w-5 text-orange-500" />
+                    Volumen pagos por voz
+                </Label>
+                <div className="flex items-center space-x-4">
+                    <Slider min={0} max={100} step={1} value={[voicePaymentVolume]} onValueChange={handleVoicePaymentVolumeChange} />
+                    <span className="font-bold w-12 text-center">{voicePaymentVolume}%</span>
+                </div>
             </div>
         </div>
     );

@@ -3,10 +3,23 @@ import { listenToPaymentConfirmations, markPaymentAsAnnounced, createTestPayment
 
 const ENABLED_STORAGE_KEY = 'voicePaymentAlertsEnabled';
 const VOICE_STORAGE_KEY = 'voicePaymentAlertsVoiceURI';
+const VOLUME_STORAGE_KEY = 'voicePaymentVolume';
 const SPEECH_LANG = 'es-AR';
 export const AUTO_VOICE_VALUE = 'auto';
 
 const getStoredEnabledPreference = () => true;
+
+// Volumen de los avisos por voz, guardado como porcentaje (0-100).
+export const getVoicePaymentVolume = () => {
+  const stored = Number(localStorage.getItem(VOLUME_STORAGE_KEY));
+  if (!Number.isFinite(stored)) return 100;
+  return Math.min(100, Math.max(0, stored));
+};
+
+export const setVoicePaymentVolume = (value) => {
+  const clamped = Math.min(100, Math.max(0, Number(value)));
+  localStorage.setItem(VOLUME_STORAGE_KEY, String(clamped));
+};
 
 // Valores de "cliente" que no son un nombre real (placeholders que el
 // backend ya no debería guardar, pero se filtran por las dudas).
@@ -92,6 +105,7 @@ export const useVoicePaymentAlerts = (isUserLoggedIn) => {
     }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = SPEECH_LANG;
+    utterance.volume = getVoicePaymentVolume() / 100;
 
     const voices = window.speechSynthesis.getVoices();
     const chosenVoice = (selectedVoiceURI !== AUTO_VOICE_VALUE

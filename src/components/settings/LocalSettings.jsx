@@ -89,10 +89,12 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
                 handleSliderChange={handleSliderChange}
                 handleFontChange={handleFontChange}
             />
-            <AudioSettings 
-                onAudioChange={handleAudioChange} 
+            <AudioSettings
+                onAudioChange={handleAudioChange}
                 initialAudioName={settings.newOrderSound?.name}
                 initialAudioDataUrl={settings.newOrderSound?.dataUrl}
+                orderSoundVolume={settings.orderSoundVolume}
+                onOrderSoundVolumeChange={(value) => handleDirectChange('orderSoundVolume', value[0])}
             />
             <WhatsAppSettings />
             <PaymentMethodsSettings paymentMethods={settings.formasDePago} onPaymentMethodsChange={handlePaymentMethodsChange} />

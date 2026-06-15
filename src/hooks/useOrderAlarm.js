@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { listenToOrders, updateOrder } from '@/lib/api/ordersApi';
-import { fetchAudioSetting } from '@/lib/api/settingsApi';
+import { fetchAudioSetting, fetchOrderSoundVolume } from '@/lib/api/settingsApi';
 
 export const useOrderAlarm = (isUserLoggedIn) => {
   const [alarmingOrderIds, setAlarmingOrderIds] = useState([]);
@@ -10,20 +10,27 @@ export const useOrderAlarm = (isUserLoggedIn) => {
   const { toast } = useToast();
 
   const loadAudio = useCallback(async () => {
+    let audioSrc = '/new-order-sound.mp3';
     try {
       const audioSettings = await fetchAudioSetting();
-      const audioSrc = audioSettings?.dataUrl || '/new-order-sound.mp3';
-      if (typeof Audio !== 'undefined') {
-        audioRef.current = new Audio(audioSrc);
-        // We will manage looping manually, so loop is false.
-        audioRef.current.loop = false;
-      }
+      audioSrc = audioSettings?.dataUrl || audioSrc;
     } catch (error) {
       console.error("Failed to load custom audio, using default.", error);
-      if (typeof Audio !== 'undefined') {
-        audioRef.current = new Audio('/new-order-sound.mp3');
-        audioRef.current.loop = false;
-      }
+    }
+
+    let volume = 1;
+    try {
+      const storedVolume = await fetchOrderSoundVolume();
+      volume = Math.min(1, Math.max(0, storedVolume / 100));
+    } catch (error) {
+      console.error("Failed to load order sound volume, using default.", error);
+    }
+
+    if (typeof Audio !== 'undefined') {
+      audioRef.current = new Audio(audioSrc);
+      // We will manage looping manually, so loop is false.
+      audioRef.current.loop = false;
+      audioRef.current.volume = volume;
     }
   }, []);
 

@@ -233,6 +233,26 @@ export const fetchAudioSetting = async () => {
     }
 };
 
+export const fetchOrderSoundVolume = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentLocalId();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/orderSoundVolume.json`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 404) return 100;
+      throw new Error('Network response was not ok');
+    }
+    const data = await response.json();
+    return typeof data === 'number' ? data : 100;
+  } catch (error) {
+    console.error("Error fetching order sound volume:", error);
+    return 100;
+  }
+};
+
 export const saveSalesPercentage = async (percentage) => {
   checkLocalId();
   const LOCAL_ID = getCurrentLocalId();

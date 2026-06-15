@@ -47,6 +47,7 @@ function SettingsPage({ applySettings }) {
     forceDepartmentPaymentMethod: false,
     printCounterCommand: false,
     newOrderSound: null,
+    orderSoundVolume: 100,
     themeColor: 'orange',
     deliveryViewMode: 'table',
     web: {
@@ -85,7 +86,8 @@ function SettingsPage({ applySettings }) {
             fuente: 'sans', fuenteImpresion: 'sans-serif', fontSize: 16, printTone: 5, printFontSize: 16,
             formasDePago: [], ticketHeader: '', ticketFooter: '', showOptionalsInCounter: true,
             forceDepartmentPaymentMethod: false, printCounterCommand: false, themeColor: 'orange',
-            deliveryViewMode: 'table', 
+            orderSoundVolume: 100,
+            deliveryViewMode: 'table',
             web: { destacar: '', whatsappMessage: '', assignDelivererMessage: '', horarios: {}, showOptionalsInDelivery: true, requireCrossStreets: false }
         };
 
@@ -104,6 +106,7 @@ function SettingsPage({ applySettings }) {
                 showOptionalsInCounter: fetchedSettings.showOptionalsInCounter !== false,
                 forceDepartmentPaymentMethod: fetchedSettings.forceDepartmentPaymentMethod === true,
                 printCounterCommand: fetchedSettings.printCounterCommand === true,
+                orderSoundVolume: typeof fetchedSettings.orderSoundVolume === 'number' ? fetchedSettings.orderSoundVolume : 100,
                 themeColor: fetchedSettings.themeColor || 'orange',
                 deliveryViewMode: fetchedSettings.deliveryViewMode || fetchedSettings.deliveryScreenType || 'table',
                 web: {
