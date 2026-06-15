@@ -34,6 +34,12 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
 
   const proceedWithItems = useCallback((article, settings, context, resolvedGroupItems) => {
     let groupSlotIndex = 0;
+    // Sequential counter shared across the whole flatMap so every resolved
+    // item gets a globally unique key, even when multiple promoItems share
+    // the same codigo/grupoId (e.g. "3x2 cuartos" added as 3 separate
+    // entries with cantidad: 1). Date.now()-based keys could collide here
+    // because all entries resolve within the same millisecond.
+    let resolvedItemSeq = 0;
     // Resolve every promo component (fixed items and group choices) into the
     // real article it represents. From this point on, group items are fully
     // replaced by the chosen real article and "resolved" - nothing about the
@@ -42,7 +48,7 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       const quantity = parseInt(promoItem.cantidad, 10) || 1;
 
       if (promoItem.tipo === 'grupo') {
-        return Array.from({ length: quantity }).map((_, i) => {
+        return Array.from({ length: quantity }).map(() => {
           const resolved = resolvedGroupItems[groupSlotIndex];
           groupSlotIndex++;
           if (!resolved) return null;
@@ -51,7 +57,7 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
           return {
             ...articleDetails,
             quantity: 1,
-            uniqueKey: `${resolved.articleId}-${i}-${Date.now()}`,
+            uniqueKey: `${promoItem.uniqueId || resolved.articleId}-${resolvedItemSeq++}`,
           };
         }).filter(Boolean);
       }
@@ -59,10 +65,10 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       const articleDetails = allArticles.find(art => art.id === promoItem.codigo);
       if (!articleDetails) return [];
 
-      return Array.from({ length: quantity }).map((_, i) => ({
+      return Array.from({ length: quantity }).map(() => ({
           ...articleDetails,
           quantity: 1,
-          uniqueKey: `${promoItem.codigo}-${i}-${Date.now()}`,
+          uniqueKey: `${promoItem.uniqueId || promoItem.codigo}-${resolvedItemSeq++}`,
       }));
     }).filter(Boolean);
 

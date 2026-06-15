@@ -141,6 +141,18 @@ export const listenToOrders = (callback, errorCallback) => {
   }
 };
 
+// TEMPORAL: log de diagnóstico para el bug de promos "3x2 cuartos".
+// Solo se activa en desarrollo o si se setea manualmente:
+//   localStorage.setItem('DEBUG_PROMOS', '1'); location.reload();
+// Para desactivar: localStorage.removeItem('DEBUG_PROMOS'); location.reload();
+const isDebugPromosEnabled = () => {
+  try {
+    return import.meta.env.DEV || localStorage.getItem('DEBUG_PROMOS') === '1';
+  } catch {
+    return import.meta.env.DEV;
+  }
+};
+
 const formatOrderItemsForFirebase = (items) => {
   return items.map(item => {
     const { uniqueId, ...itemToSave } = item;
@@ -170,6 +182,18 @@ const formatOrderItemsForFirebase = (items) => {
         }
         return formattedPromoItem;
       });
+
+      if (isDebugPromosEnabled()) {
+        console.log(`[DEBUG_PROMOS] Promo "${itemToSave.nombre}" -> ${promoItems.length} item(s)`, {
+          promo: itemToSave.nombre,
+          cuartos: promoItems.map((p, idx) => ({
+            cuarto: idx + 1,
+            codigo: p.codigo,
+            nombre: p.nombre,
+            sabores: p.selectedOptionals || null,
+          })),
+        });
+      }
 
       delete itemToSave.promoDetails;
       return {

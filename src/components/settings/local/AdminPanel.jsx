@@ -9,7 +9,7 @@ import ThemeSelector from '@/components/settings/local/admin/ThemeSelector.jsx';
 import LocalIdManager from '@/components/settings/local/admin/LocalIdManager.jsx';
 import { Separator } from '@/components/ui/separator';
 
-const AdminPanel = ({ localId }) => {
+const AdminPanel = ({ localId, settings, onSettingsChange }) => {
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       
@@ -20,7 +20,7 @@ const AdminPanel = ({ localId }) => {
 
       <div className="grid gap-6 md:grid-cols-2">
         <ThemeSelector />
-        <AppInfoManager />
+        <AppInfoManager settings={settings} onSettingsChange={onSettingsChange} />
       </div>
 
       <Separator />

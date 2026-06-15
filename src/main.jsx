@@ -22,6 +22,8 @@ const queryClient = new QueryClient({
 // Initialize image memory and metadata cache on startup
 initializeImageCache();
 
+console.log(`[Recepción de pedidos] Versión ${__APP_VERSION__} - build ${__BUILD_TIME__}`);
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <>
     <QueryClientProvider client={queryClient}>

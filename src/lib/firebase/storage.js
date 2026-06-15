@@ -115,3 +115,36 @@ export const deleteArticleImage = async (imageUrl) => {
 
 // Alias for web images since the logic is the same
 export const deleteWebImage = deleteArticleImage;
+
+export const uploadAppIcon = async (file, localId) => {
+  try {
+    const app = getFirebaseApp();
+    if (!app) {
+      throw new Error('Firebase no está inicializado');
+    }
+
+    const storageBucket = getLocationSpecificStorageBucket(localId);
+    const storage = getStorage(app);
+
+    const timestamp = Date.now();
+    const fileExtension = (file.name.split('.').pop() || 'png').toLowerCase();
+    const fileName = `app-icons/${localId}/icon-${timestamp}.${fileExtension}`;
+    const storageRef = ref(storage, fileName);
+
+    const metadata = {
+      contentType: file.type,
+      customMetadata: {
+        type: 'app_icon',
+        uploadedAt: new Date().toISOString(),
+        localId: localId,
+        storageBucket: storageBucket
+      }
+    };
+
+    await uploadBytes(storageRef, file, metadata);
+    return await getDownloadURL(storageRef);
+  } catch (error) {
+    console.error('Error uploading app icon:', error);
+    throw error;
+  }
+};

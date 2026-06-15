@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { createLogger, defineConfig } from 'vite';
@@ -7,6 +8,30 @@ import iframeRouteRestorationPlugin from './plugins/vite-plugin-iframe-route-res
 import selectionModePlugin from './plugins/selection-mode/vite-plugin-selection-mode.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
+
+// Versión de build: package.version + timestamp ISO. Se usa para mostrar la
+// versión en consola (__APP_VERSION__ / __BUILD_TIME__) y para "estampar"
+// public/sw.js -> dist/sw.js, de modo que el archivo cambie de bytes en cada
+// build y los navegadores detecten que hay un Service Worker nuevo.
+const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
+const buildTime = new Date().toISOString();
+const buildVersion = `${pkg.version}-${buildTime}`;
+
+// Reemplaza el placeholder __BUILD_VERSION__ en dist/sw.js (copiado desde
+// public/sw.js) por la versión de este build, una vez que Vite terminó de
+// escribir el bundle y de copiar el directorio public.
+const stampServiceWorkerPlugin = {
+	name: 'stamp-service-worker-version',
+	apply: 'build',
+	closeBundle() {
+		const outDir = path.resolve(__dirname, 'dist');
+		const swPath = path.join(outDir, 'sw.js');
+		if (!fs.existsSync(swPath)) return;
+		const content = fs.readFileSync(swPath, 'utf-8');
+		const stamped = content.replace(/__BUILD_VERSION__/g, buildVersion);
+		fs.writeFileSync(swPath, stamped, 'utf-8');
+	},
+};
 
 const configHorizonsViteErrorHandler = `
 const observer = new MutationObserver((mutations) => {
@@ -279,10 +304,15 @@ logger.error = (msg, options) => {
 
 export default defineConfig({
 	customLogger: logger,
+	define: {
+		__APP_VERSION__: JSON.stringify(pkg.version),
+		__BUILD_TIME__: JSON.stringify(buildTime),
+	},
 	plugins: [
 		...(isDev ? [inlineEditPlugin(), editModeDevPlugin(), iframeRouteRestorationPlugin(), selectionModePlugin()] : []),
 		react(),
-		addTransformIndexHtml
+		addTransformIndexHtml,
+		stampServiceWorkerPlugin,
 	],
 	server: {
 		cors: true,

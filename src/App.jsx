@@ -16,6 +16,8 @@ import ShiftSummaryUpdater from '@/components/cash/ShiftSummaryUpdater.jsx';
 import { formatDateForFirebase } from '@/lib/utils.js';
 import { useAccounts } from '@/contexts/AccountsContext.jsx';
 import { useOrderAlarm } from '@/hooks/useOrderAlarm.js';
+import { useVoicePaymentAlerts } from '@/hooks/useVoicePaymentAlerts.js';
+import VoicePaymentAlertWidget from '@/components/VoicePaymentAlertWidget.jsx';
 import { useStockStatus } from '@/hooks/useStockStatus.js';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OutOfStockModal from '@/components/management/OutOfStockModal.jsx';
@@ -128,6 +130,17 @@ function AppContent() {
   const { showUpdateNotification, reloadPage } = useServiceWorker();
   const { setAccountsLocalId } = useAccounts();
   const { alarmingOrderIds, acknowledgeOrder, AlarmAudio } = useOrderAlarm(!!user);
+  const {
+    isEnabled: isVoiceAlertsEnabled,
+    isSoundUnlocked: isVoiceSoundUnlocked,
+    lastAnnouncedPayment,
+    availableVoices,
+    selectedVoiceURI,
+    enableSound: enableVoiceSound,
+    testVoice,
+    toggleEnabled: toggleVoiceAlerts,
+    selectVoice,
+  } = useVoicePaymentAlerts(!!user);
   const [clearingCache, setClearingCache] = useState(false);
   
   const { 
@@ -335,6 +348,17 @@ function AppContent() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                    <VoicePaymentAlertWidget
+                        isEnabled={isVoiceAlertsEnabled}
+                        isSoundUnlocked={isVoiceSoundUnlocked}
+                        lastAnnouncedPayment={lastAnnouncedPayment}
+                        availableVoices={availableVoices}
+                        selectedVoiceURI={selectedVoiceURI}
+                        enableSound={enableVoiceSound}
+                        testVoice={testVoice}
+                        toggleEnabled={toggleVoiceAlerts}
+                        selectVoice={selectVoice}
+                    />
                     <button
                         onClick={handleClearCache}
                         disabled={clearingCache}

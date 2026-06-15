@@ -1,4 +1,5 @@
 import { cachedPrintSettings } from './settings';
+import { toast } from '@/components/ui/use-toast';
 
 export const printElectron = async (htmlContent, options = {}) => {
     if (window && window.electron) {
@@ -11,19 +12,36 @@ export const printElectron = async (htmlContent, options = {}) => {
             await window.electron.printDirect(htmlContent, printerName, printOptions);
         } catch (error) {
             console.error('Electron printing failed:', error);
-            alert('Error al imprimir directamente. Revise la consola para más detalles.');
+            toast({
+                variant: "destructive",
+                title: "No se pudo imprimir",
+                description: "Falló la impresión directa (conexión local/impresora). El pedido se guardó igual.",
+            });
         }
     } else {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-            alert('Por favor, permita las ventanas emergentes para imprimir.');
-            return;
+        try {
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                toast({
+                    variant: "destructive",
+                    title: "Ventana de impresión bloqueada",
+                    description: "Permita las ventanas emergentes para poder imprimir.",
+                });
+                return;
+            }
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+            printWindow.onload = () => {
+                printWindow.print();
+                setTimeout(() => printWindow.close(), 100);
+            };
+        } catch (error) {
+            console.error('Browser printing failed:', error);
+            toast({
+                variant: "destructive",
+                title: "No se pudo imprimir",
+                description: "Ocurrió un error al abrir la ventana de impresión. El pedido se guardó igual.",
+            });
         }
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        printWindow.onload = () => {
-            printWindow.print();
-            setTimeout(() => printWindow.close(), 100);
-        };
     }
 };
