@@ -6,10 +6,7 @@ const VOICE_STORAGE_KEY = 'voicePaymentAlertsVoiceURI';
 const SPEECH_LANG = 'es-AR';
 export const AUTO_VOICE_VALUE = 'auto';
 
-const getStoredEnabledPreference = () => {
-  const stored = localStorage.getItem(ENABLED_STORAGE_KEY);
-  return stored === null ? true : stored === 'true';
-};
+const getStoredEnabledPreference = () => true;
 
 // Valores de "cliente" que no son un nombre real (placeholders que el
 // backend ya no debería guardar, pero se filtran por las dudas).

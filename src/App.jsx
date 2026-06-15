@@ -336,7 +336,6 @@ function AppContent() {
                   <NavLink to="/gastos" icon={Receipt} label="Gastos" userPermissions={userPermissions} userRole={userRole} />
                   <NavLink to="/ventas" icon={FileText} label="Ventas" userPermissions={userPermissions} userRole={userRole} />
                   <NavLink to="/app-web" icon={Globe} label="App Web" userPermissions={userPermissions} userRole={userRole} />
-                  <NavLink to="/ventas-apps" icon={Smartphone} label="Ventas x Apps" userPermissions={userPermissions} userRole={userRole} />
                   <NavLink to="/reporte-excel" icon={FileSpreadsheet} label="Reporte Excel" userPermissions={userPermissions} userRole={userRole} />
                   <NavLink to="/reportes-prepago" icon={PieChart} label="Reportes Prepago" userPermissions={userPermissions} userRole={userRole} />
                   <NavLink to="/cuentas" icon={CreditCard} label="Cuentas" userPermissions={userPermissions} userRole={userRole} />
