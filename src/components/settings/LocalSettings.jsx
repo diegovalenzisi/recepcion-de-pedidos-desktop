@@ -13,7 +13,6 @@ import PrintingSettings from './local/PrintingSettings';
 import AudioSettings from './local/AudioSettings';
 import DeliveryScreenTypeSelector from './local/DeliveryScreenTypeSelector';
 import WhatsAppSettings from './local/WhatsAppSettings';
-import PromotionsTab from './local/PromotionsTab';
 import { useAuth } from '@/hooks/useAuth';
 
 function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettings }) {
@@ -77,7 +76,6 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
                 applySettings={applySettings} 
               />
             )}
-            <PromotionsTab />
             <GeneralInfo settings={settings} handleChange={handleChange} handleFontChange={handleFontChange} />
             <DeliveryScreenTypeSelector 
               value={settings.deliveryViewMode || settings.deliveryScreenType}

@@ -47,6 +47,18 @@ const OperationalToggles = ({ settings, onSettingsChange }) => {
         />
       </div>
 
+      <div className="flex items-center justify-between p-4 border rounded-lg">
+        <div>
+          <Label htmlFor="print-counter-command" className="font-bold">Imprime comandas en mostrador</Label>
+          <p className="text-sm text-gray-500">Si está activo, al confirmar una venta por mostrador se imprime automáticamente la comanda.</p>
+        </div>
+        <Switch
+          id="print-counter-command"
+          checked={settings.printCounterCommand ?? false}
+          onCheckedChange={(checked) => handleToggle('printCounterCommand', checked)}
+        />
+      </div>
+
       <div className="flex items-center justify-between p-4 border rounded-lg bg-gray-50 border-gray-200">
         <div>
           <Label htmlFor="black-text-delivery" className="font-bold text-black">Texto Negro en Pedidos</Label>
