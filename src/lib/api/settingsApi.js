@@ -256,13 +256,36 @@ export const fetchOrderSoundVolume = async () => {
 export const saveSalesPercentage = async (percentage) => {
   checkLocalId();
   const LOCAL_ID = getCurrentLocalId();
-  const db = getDatabase();
-  const percentageRef = ref(db, `${LOCAL_ID}/CONFIGURACION/porcentaje`);
-  
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/porcentaje.json`;
+
+  console.log('[porcentaje ventas] localId:', LOCAL_ID);
+  console.log('[porcentaje ventas] valor input:', percentage);
+  console.log('[porcentaje ventas] valor convertido:', Number(percentage));
+  console.log('[porcentaje ventas] ruta firebase:', url);
+  console.log('[porcentaje ventas] payload:', JSON.stringify(Number(percentage)));
+
   try {
-    await set(percentageRef, percentage);
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Number(percentage)),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[porcentaje ventas] ERROR REAL: HTTP', response.status, errorText);
+      console.error('[porcentaje ventas] ERROR CODE:', response.status);
+      console.error('[porcentaje ventas] ERROR MESSAGE:', errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log('[porcentaje ventas] guardado OK, respuesta firebase:', result);
   } catch (error) {
-    console.error("Error saving sales percentage:", error);
+    console.error('[porcentaje ventas] ERROR REAL:', error);
+    console.error('[porcentaje ventas] ERROR CODE:', error?.code);
+    console.error('[porcentaje ventas] ERROR MESSAGE:', error?.message);
     throw error;
   }
 };

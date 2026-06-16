@@ -71,7 +71,7 @@ const AttentionPage = ({
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex-grow flex flex-col min-h-0">
       <div className="flex justify-between items-end border-b border-gray-300 px-2 pt-2">
         <div className="flex space-x-1">
           <TabLink to="delivery" permission="delivery" userPermissions={userPermissions} userRole={userRole}>Delivery</TabLink>

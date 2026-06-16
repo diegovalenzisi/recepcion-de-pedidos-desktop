@@ -378,7 +378,7 @@ function AppContent() {
           </div>
         </nav>
 
-        <main className="flex-grow container mx-auto p-4 overflow-y-auto">
+        <main className={`flex-grow min-h-0 ${location.pathname.startsWith('/atencion') ? 'flex flex-col overflow-hidden p-2' : 'container mx-auto p-4 overflow-y-auto'}`}>
           <Suspense fallback={<LoadingFallback />}>
             <Routes location={backgroundLocation || location}>
               <Route path="/" element={<Navigate to="/atencion" replace />} />
