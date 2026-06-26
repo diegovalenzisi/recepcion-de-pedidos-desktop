@@ -23,12 +23,16 @@ const StockActions = ({ searchTerm, setSearchTerm, onAdd, onPriceUpdate, onSendT
     setFilters(prev => ({ ...prev, department: value }));
   };
 
+  const handleStockTypeChange = (value) => {
+    setFilters(prev => ({ ...prev, stockType: value }));
+  };
+
   const resetFilters = () => {
-    setFilters({ department: 'all' });
+    setFilters({ department: 'all', stockType: 'all' });
     setIsPopoverOpen(false);
   };
 
-  const hasActiveFilters = filters.department !== 'all';
+  const hasActiveFilters = filters.department !== 'all' || (filters.stockType && filters.stockType !== 'all');
 
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between mb-6 space-y-4 md:space-y-0">
@@ -68,20 +72,36 @@ const StockActions = ({ searchTerm, setSearchTerm, onAdd, onPriceUpdate, onSendT
               </div>
               <div className="grid gap-2">
                 {activeTab === 'articulos' && (
-                  <div className="grid grid-cols-3 items-center gap-4">
-                    <Label htmlFor="department">Departamento</Label>
-                    <Select onValueChange={handleDepartmentChange} value={filters.department}>
-                      <SelectTrigger id="department" className="col-span-2 h-8">
-                        <SelectValue placeholder="Seleccionar departamento" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Todos</SelectItem>
-                        {departments.map(dep => (
-                          <SelectItem key={dep.codigo} value={dep.codigo}>{dep.nombre}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <>
+                    <div className="grid grid-cols-3 items-center gap-4">
+                      <Label htmlFor="department">Departamento</Label>
+                      <Select onValueChange={handleDepartmentChange} value={filters.department}>
+                        <SelectTrigger id="department" className="col-span-2 h-8">
+                          <SelectValue placeholder="Seleccionar departamento" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Todos</SelectItem>
+                          {departments.map(dep => (
+                            <SelectItem key={dep.codigo} value={dep.codigo}>{dep.nombre}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-3 items-center gap-4">
+                      <Label htmlFor="stockType">Tipo de stock</Label>
+                      <Select onValueChange={handleStockTypeChange} value={filters.stockType || 'all'}>
+                        <SelectTrigger id="stockType" className="col-span-2 h-8">
+                          <SelectValue placeholder="Tipo de stock" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">Todos</SelectItem>
+                          <SelectItem value="propio">Stock propio</SelectItem>
+                          <SelectItem value="heredado">Stock heredado</SelectItem>
+                          <SelectItem value="receta">Por receta</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
                 )}
                 {activeTab !== 'articulos' && (
                   <p className="text-sm text-center text-gray-500 py-4">No hay filtros disponibles para esta sección.</p>

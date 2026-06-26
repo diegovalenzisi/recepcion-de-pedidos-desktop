@@ -38,82 +38,103 @@ export const fetchShiftsForDate = async (date) => {
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentLocalId();
     const dateString = formatDateForFirebase(date);
-    
-    const [day, month, year] = dateString.split('-');
 
-    const urls = [
-        `${API_URL}/${LOCAL_ID}/CAJAS/${dateString}/turnos.json`,
-        `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO.json?shallow=true`
-    ];
+    console.log(`[CAJA] Fecha usada: ${dateString}`);
+    console.log(`[CAJA] Ruta definitiva: ${LOCAL_ID}/CAJAS/${dateString}/turnos`);
 
+    const url = `${API_URL}/${LOCAL_ID}/CAJAS/${dateString}/turnos.json`;
+
+    let cajasShifts = [];
     try {
-        const [activeShiftsResponse, backupShiftsResponse] = await Promise.all(urls.map(url => fetch(url)));
-
-        let allShifts = [];
-
-        if (activeShiftsResponse.ok) {
-            const data = await activeShiftsResponse.json();
+        const response = await fetch(url);
+        if (response.ok) {
+            const data = await response.json();
             if (data) {
-                const activeShifts = Object.entries(data).map(([id, shiftData]) => ({
+                cajasShifts = Object.entries(data).map(([id, shiftData]) => ({
                     id: parseInt(id, 10),
                     date: dateString,
                     ...shiftData,
                 }));
-                allShifts.push(...activeShifts);
             }
         }
-        
-        if (backupShiftsResponse.ok) {
-            const data = await backupShiftsResponse.json();
-            if (data) {
-                 const backupShifts = Object.keys(data).map(id => ({
-                    id: parseInt(id, 10),
-                    date: dateString,
-                    estado: 'cerrado' 
-                }));
-                
-                backupShifts.forEach(backupShift => {
-                    if (!allShifts.some(activeShift => String(activeShift.id) === String(backupShift.id))) {
-                        allShifts.push(backupShift);
-                    }
-                });
-            }
-        }
-        
-        return allShifts.sort((a, b) => Number(b.id) - Number(a.id));
     } catch (error) {
-        console.error("Error fetching shifts for date:", error);
-        return [];
+        console.error('[CAJA] Error al listar turnos desde CAJAS:', error);
     }
+
+    // También buscar turnos cerrados que hayan sido movidos al BACKUP
+    let backupShifts = [];
+    try {
+        const [day, month, year] = dateString.split('-');
+        const backupUrl = `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO.json?shallow=true`;
+        const backupResponse = await fetch(backupUrl);
+        if (backupResponse.ok) {
+            const backupIds = await backupResponse.json();
+            if (backupIds) {
+                const cajasIds = new Set(cajasShifts.map(s => String(s.id)));
+                const fetches = Object.keys(backupIds)
+                    .filter(id => !cajasIds.has(id))
+                    .map(async (id) => {
+                        const cajaUrl = `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${id}/CAJA.json`;
+                        const r = await fetch(cajaUrl);
+                        if (!r.ok) return null;
+                        const cajaData = await r.json();
+                        return cajaData ? { id: parseInt(id, 10), date: dateString, ...cajaData } : null;
+                    });
+                backupShifts = (await Promise.all(fetches)).filter(Boolean);
+                if (backupShifts.length > 0) {
+                    console.log(`[CAJA] Turnos adicionales desde BACKUP: ${backupShifts.map(s => s.id).join(', ')}`);
+                }
+            }
+        }
+    } catch (error) {
+        console.warn('[CAJA] No se pudo leer BACKUP para esta fecha:', error);
+    }
+
+    const allShifts = [...cajasShifts, ...backupShifts];
+    console.log(`[CAJA] Turnos encontrados: ${allShifts.length} — IDs: ${allShifts.map(s => `${s.id}(${s.estado ?? '?'})`).join(', ')}`);
+    return allShifts.sort((a, b) => Number(b.id) - Number(a.id));
 };
 
 
-export const fetchCashRegisterData = async (date, shiftId, isActiveShift) => {
+export const fetchCashRegisterData = async (date, shiftId) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentLocalId();
     if (!LOCAL_ID || !shiftId) throw new Error("Faltan datos para la consulta.");
-    
-    const dateString = formatDateForFirebase(date);
-    let url;
 
-    if (isActiveShift) {
-        url = `${API_URL}/${LOCAL_ID}/CAJAS/${dateString}/turnos/${shiftId}.json`;
-    } else {
-        const [day, month, year] = dateString.split('-');
-        url = `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shiftId}/CAJA.json`;
-    }
-    
+    const dateString = formatDateForFirebase(date);
+    const url = `${API_URL}/${LOCAL_ID}/CAJAS/${dateString}/turnos/${shiftId}.json`;
+
+    console.log(`[CAJA] Fecha usada: ${dateString}`);
+    console.log(`[CAJA] Ruta definitiva: ${LOCAL_ID}/CAJAS/${dateString}/turnos/${shiftId}`);
+
     try {
         const response = await fetch(url);
-        if (!response.ok) {
-            if (response.status === 404) return { fondoInicial: 0, gastos: {}, CAJAFUERTE: {} };
-            throw new Error('Network response was not ok');
+        if (response.ok) {
+            const data = await response.json();
+            if (data) {
+                console.log(`[CAJA] Datos turno CAJAS: #${shiftId} fondoInicial=${data?.fondoInicial ?? 'N/A'} estado=${data?.estado ?? 'N/A'}`);
+                return data;
+            }
         }
-        const data = await response.json();
-        return data || { fondoInicial: 0, gastos: {}, CAJAFUERTE: {} };
+
+        // Nodo no encontrado en CAJAS — puede haber sido movido a BACKUP al cerrar el turno
+        console.log(`[CAJA] Turno #${shiftId} no encontrado en CAJAS. Buscando en BACKUP...`);
+        const [day, month, year] = dateString.split('-');
+        const backupUrl = `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shiftId}/CAJA.json`;
+        const backupResponse = await fetch(backupUrl);
+        if (backupResponse.ok) {
+            const backupData = await backupResponse.json();
+            if (backupData) {
+                console.log(`[CAJA] Turno #${shiftId} encontrado en BACKUP. fondoInicial=${backupData?.fondoInicial ?? 'N/A'}`);
+                return backupData;
+            }
+        }
+
+        console.log(`[CAJA] Turno #${shiftId} no encontrado en CAJAS ni BACKUP.`);
+        return { fondoInicial: 0, gastos: {}, CAJAFUERTE: {} };
     } catch (error) {
-        console.error("Error fetching cash register data:", error);
+        console.error('[CAJA] Error al leer datos del turno:', error);
         return { fondoInicial: 0, gastos: {}, CAJAFUERTE: {} };
     }
 };
@@ -127,6 +148,8 @@ export const fetchSalesForShift = async (shift) => {
     const shiftDateStr = shift.date;
     const shiftId = shift.id;
 
+    console.log(`[CAJA] Leyendo ventas: ${localId}/MOSTRADOR y PEDIDOS — turno=${shiftId} fecha=${shiftDateStr}`);
+
     const fetchSalesFromNode = async (nodeName) => {
         const salesRef = ref(db, `${localId}/${nodeName}`);
         const q = query(salesRef, orderByChild('fechacaja'), equalTo(shiftDateStr));
@@ -136,24 +159,19 @@ export const fetchSalesForShift = async (shift) => {
         if (snapshot.exists()) {
             snapshot.forEach(childSnapshot => {
                 const sale = childSnapshot.val();
-                
-                // Strictly filter by shift ID, coercing both to String for safety
+
                 if (String(sale.turno) !== String(shiftId)) {
                     return;
                 }
 
                 const saleId = childSnapshot.key;
-
                 let formattedSale;
+
                 if (nodeName === 'MOSTRADOR') {
                     const isSpecialDiscount = sale.specialDiscount && ['Sorteo', 'Regalo', 'Mal Armado'].includes(sale.specialDiscount.type);
-                    
-                    const displayId = (sale.type === 'Seña' && sale.referenceOrder) 
-                        ? sale.referenceOrder 
-                        : saleId;
-
+                    const displayId = (sale.type === 'Seña' && sale.referenceOrder) ? sale.referenceOrder : saleId;
                     formattedSale = {
-                        id: displayId, 
+                        id: displayId,
                         originalId: saleId,
                         hora: sale.hora,
                         payments: isSpecialDiscount ? [{ method: sale.specialDiscount.type, amount: 0 }] : sale.payments,
@@ -162,34 +180,29 @@ export const fetchSalesForShift = async (shift) => {
                         description: sale.description,
                         status: sale.status || 'COMPLETADO',
                         CostoTotal: sale.CostoTotal,
-                        items: sale.items || []
+                        items: sale.items || [],
                     };
-                } else { 
-                    if (sale.status?.main === 'ENTREGADO' && sale.payment) {
-                        let total = sale.payment.total;
-                        if (typeof total === 'undefined' || total === null || total === 0) {
-                            total = sale.payment.amount || 0;
-                        }
-                        
-                        if (sale.payment.deposit && sale.payment.deposit.amount) {
-                            total = total - sale.payment.deposit.amount;
-                        }
-
-                        formattedSale = {
-                            id: saleId,
-                            hora: sale.times?.ingress || new Date(sale.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
-                            payments: sale.payment.payments || [{ method: sale.payment.method, amount: total }], 
-                            total: total,
-                            type: 'Delivery',
-                            status: sale.status?.main || 'ENTREGADO',
-                            CostoTotal: sale.CostoTotal,
-                            items: sale.items || []
-                        };
+                } else if (sale.status?.main === 'ENTREGADO' && sale.payment != null) {
+                    let total = sale.payment.total;
+                    if (typeof total === 'undefined' || total === null || total === 0) {
+                        total = sale.payment.amount || 0;
                     }
+                    if (sale.payment.deposit?.amount) {
+                        total = total - sale.payment.deposit.amount;
+                    }
+                    formattedSale = {
+                        id: saleId,
+                        hora: sale.times?.ingress || new Date(sale.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+                        payments: sale.payment.payments || [{ method: sale.payment.method, amount: total }],
+                        total: total,
+                        type: 'Delivery',
+                        status: sale.status?.main || 'ENTREGADO',
+                        CostoTotal: sale.CostoTotal,
+                        items: sale.items || [],
+                    };
                 }
-                if (formattedSale) {
-                    sales.push(formattedSale);
-                }
+
+                if (formattedSale) sales.push(formattedSale);
             });
         }
         return sales;
@@ -198,31 +211,21 @@ export const fetchSalesForShift = async (shift) => {
     try {
         const [counterSales, deliverySales] = await Promise.all([
             fetchSalesFromNode('MOSTRADOR'),
-            fetchSalesFromNode('PEDIDOS')
+            fetchSalesFromNode('PEDIDOS'),
         ]);
 
         const allSales = [...counterSales, ...deliverySales];
+        console.log(`[CAJA] Ventas encontradas: ${counterSales.length} mostrador + ${deliverySales.length} delivery = ${allSales.length} total`);
 
         return allSales.sort((a, b) => {
-            const timeA = a.hora || '00:00:00';
-            const timeB = b.hora || '00:00:00';
-            
-            const getSortableTimeValue = (timeStr) => {
-                const [h, m, s] = (timeStr || '00:00:00').split(':').map(Number);
-                let hours = h;
-                if (h >= 0 && h <= 4) { 
-                    hours += 24;
-                }
-                return hours * 3600 + m * 60 + (s || 0);
+            const val = (t) => {
+                const [h, m, s] = (t || '00:00:00').split(':').map(Number);
+                return (h >= 0 && h <= 4 ? h + 24 : h) * 3600 + m * 60 + (s || 0);
             };
-
-            const valueA = getSortableTimeValue(timeA);
-            const valueB = getSortableTimeValue(timeB);
-
-            return valueB - valueA;
+            return val(b.hora) - val(a.hora);
         });
     } catch (error) {
-        console.error("Error fetching sales for shift:", error);
+        console.error('[CAJA] Error al leer ventas:', error);
         return [];
     }
 };
@@ -234,12 +237,15 @@ export const listenToCashData = (shift, callback) => {
     const db = getDatabase();
     const localId = getCurrentLocalId();
     
-    console.log(`[data.js] Listening to cash data for Shift: ${shift.id}, Date: ${shift.date}`);
-    const shiftRef = ref(db, `${localId}/CAJAS/${shift.date}/turnos/${shift.id}`);
-    
+    const cajaPath = `${localId}/CAJAS/${shift.date}/turnos/${shift.id}`;
+    console.log(`[CAJA] Fecha usada: ${shift.date}`);
+    console.log(`[CAJA] Leyendo ruta: ${cajaPath}`);
+    const shiftRef = ref(db, cajaPath);
+
     const listener = onValue(shiftRef, (snapshot) => {
         const data = snapshot.val();
-        console.log(`[data.js] Received real-time cash data for Shift ${shift.id}:`, data);
+        console.log('[CAJA SNAPSHOT]', JSON.stringify(data, null, 2));
+        console.log(`[CAJA] Datos del turno: fondoInicial=${data?.fondoInicial ?? 'N/A'} estado=${data?.estado ?? 'N/A'} gastos=${Object.keys(data?.gastos || {}).length}`);
         callback(data || { fondoInicial: shift.fondoInicial || 0, gastos: {}, CAJAFUERTE: {} });
     });
 
@@ -277,8 +283,13 @@ export const listenToSales = (shift, callback) => {
 
     const mostradorListener = onValue(mostradorRef, (snapshot) => {
         const salesData = snapshot.val() || {};
-        mostradorSales = Object.keys(salesData)
-            .map(id => ({ id, ...salesData[id] }))
+        const allRaw = Object.keys(salesData).map(id => ({ id, ...salesData[id] }));
+        console.log(`[listenToSales] MOSTRADOR total: ${allRaw.length} — filtrando turno=${shift.id} fecha=${shift.date}`);
+        if (allRaw.length > 0) {
+            const s = allRaw[0];
+            console.log(`[listenToSales] Muestra MOSTRADOR[0]: turno=${s.turno} fechacaja=${s.fechacaja}`);
+        }
+        mostradorSales = allRaw
             // Strictly check shift matching, coercing to strings
             .filter(sale => String(sale.turno) === String(shift.id) && sale.fechacaja === shift.date)
             .map(sale => {
@@ -301,6 +312,7 @@ export const listenToSales = (shift, callback) => {
                     items: sale.items || []
                  }
             });
+        console.log(`[listenToSales] MOSTRADOR filtradas: ${mostradorSales.length}`);
         updateCombinedSales();
     });
 
@@ -308,8 +320,8 @@ export const listenToSales = (shift, callback) => {
         const salesData = snapshot.val() || {};
         pedidosSales = Object.keys(salesData)
             .map(id => ({ id, ...salesData[id] }))
-            // Strictly check shift matching, coercing to strings
-            .filter(sale => String(sale.turno) === String(shift.id) && sale.fechacaja === shift.date && sale.status?.main === 'ENTREGADO')
+            // Strictly check shift matching, coercing to strings; guard null payment to avoid crash
+            .filter(sale => String(sale.turno) === String(shift.id) && sale.fechacaja === shift.date && sale.status?.main === 'ENTREGADO' && sale.payment != null)
             .map(sale => {
                 let total = typeof sale.payment.total !== 'undefined' ? sale.payment.total : sale.payment.amount || 0;
                 

@@ -87,7 +87,8 @@ function CounterTab({ currentShift, settings }) {
 
   const handlePaymentConfirm = async (payments, specialDiscount, emiteFactura, finalTotal) => {
     if (!orderToPay) return;
-    
+
+    const tUI = Date.now();
     try {
       const saleData = {
         items: orderToPay.items,
@@ -96,19 +97,22 @@ function CounterTab({ currentShift, settings }) {
         specialDiscount: specialDiscount,
         emiteFactura: emiteFactura
       };
-      
+
       const savedSale = await saveCounterSale(saleData, currentShift);
-      
+
       if (settings?.printCounterCommand) {
+        const tPrint = Date.now();
         printCounterTicket(savedSale);
+        console.log(`[VENTA MOSTRADOR] imprimir: ${Date.now() - tPrint} ms`);
       }
-      
+
       toast({
         title: "Venta Confirmada",
         description: "La venta y los pagos se han registrado correctamente.",
         className: "bg-green-100 text-green-800 border-green-200"
       });
-      
+
+      console.log(`[VENTA MOSTRADOR] actualizar UI: ${Date.now() - tUI} ms`);
       handlePaymentSuccess();
     } catch (error) {
       console.error("[CounterTab] Error saving sale:", error);

@@ -1,7 +1,30 @@
-import { getDatabase, ref, get, runTransaction } from "firebase/database";
+import { getDatabase, ref, get, set, runTransaction, update } from "firebase/database";
 import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
 import { fetchSalesPercentage } from '@/lib/api/settingsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
+import { registrarComision } from '@/lib/api/comisionesApi';
+
+/**
+ * Recalcula TotalComisionAPagar desde totalCommission y lo escribe en Firebase.
+ * Llamar al inicio de la app para corregir desfasajes.
+ */
+export const recalcularTotalComisionAPagar = async () => {
+  try {
+    const localId = getCurrentLocalId();
+    if (!localId) return;
+    const db = getDatabase();
+    const snap = await get(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`));
+    if (!snap.exists()) return;
+    const totals = snap.val();
+    const calc = Math.max(0, totals.totalCommission || 0);
+    if (calc !== totals.TotalComisionAPagar) {
+      await update(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`), { TotalComisionAPagar: calc });
+      console.log('[comisiones] TotalComisionAPagar recalculado:', calc);
+    }
+  } catch (e) {
+    console.error('[comisiones] Error al recalcular TotalComisionAPagar:', e.message);
+  }
+};
 
 
 export const fetchAccountSummary = async () => {
@@ -90,15 +113,80 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
 
         await runTransaction(totalsRef, (currentTotals) => {
             if (!currentTotals) {
-                return { totalSales: saleValue, totalCommission: commission };
+                return { totalSales: saleValue, totalCommission: commission, TotalComisionAPagar: commission };
             }
             currentTotals.totalSales = (currentTotals.totalSales || 0) + saleValue;
             currentTotals.totalCommission = (currentTotals.totalCommission || 0) + commission;
+            currentTotals.TotalComisionAPagar = currentTotals.totalCommission;
             return currentTotals;
         });
 
+        console.log(`[VENTA IMPACTO] id=${numeroPedido} tipo=${tipo} valor=${saleValue} impactaCaja=true impactaStock=true generaComision=true comision=${commission}`);
+
+        // Registro histórico detallado de comisión por venta
+        const tipoNorm = tipo.toLowerCase();
+        try {
+            await registrarComision({
+                idVenta: String(numeroPedido),
+                ventaTotal: saleValue,
+                modoVenta: tipoNorm === 'mostrador' ? 'mostrador' : 'delivery',
+                origen: tipoNorm === 'mostrador' ? 'MOSTRADOR' : 'PEDIDOS',
+                porcentajeComision: parseFloat(percentage),
+                comisionGenerada: commission,
+            });
+        } catch (err) {
+            console.error('[COMISIONES] Error al registrar comisión de venta:', err);
+        }
+
     } catch (error) {
         console.error("Error saving sale to account summary:", error);
+        throw error;
+    }
+};
+
+/**
+ * Revierte el impacto de una venta cancelada sobre RESUMEN_CUENTA/TOTALES.
+ * Decrementa totalSales y totalCommission, y elimina el registro diario si se conoce la fecha.
+ * Llamar solo cuando una venta COMPLETADO pasa a CANCELADO (ej: cancelCounterSale).
+ *
+ * @param {object} params
+ * @param {string|number} params.numeroPedido - ID de la venta
+ * @param {number} params.valor - Total de la venta
+ * @param {string} params.tipo - 'Mostrador' o 'Delivery'
+ * @param {string} [params.dateKey] - Clave YYYY-MM-DD del día operacional de la venta
+ */
+export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }) => {
+    checkLocalId();
+    const localId = getCurrentLocalId();
+    const db = getDatabase();
+
+    try {
+        const percentage = await fetchSalesPercentage();
+        if (percentage === null || percentage === undefined) return;
+
+        const saleValue = typeof valor === 'number' ? valor : 0;
+        let commission = (saleValue * parseFloat(percentage)) / 100;
+        if (isNaN(commission)) commission = 0;
+
+        // Decrementar TOTALES atomicamente (nunca dejar en negativo)
+        const totalsRef = ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`);
+        await runTransaction(totalsRef, (currentTotals) => {
+            if (!currentTotals) return { totalSales: 0, totalCommission: 0, TotalComisionAPagar: 0 };
+            currentTotals.totalSales = Math.max(0, (currentTotals.totalSales || 0) - saleValue);
+            currentTotals.totalCommission = Math.max(0, (currentTotals.totalCommission || 0) - commission);
+            currentTotals.TotalComisionAPagar = currentTotals.totalCommission;
+            return currentTotals;
+        });
+
+        // Eliminar el registro diario usando la fecha operacional de la venta
+        if (dateKey) {
+            const saleRef = ref(db, `${localId}/RESUMEN_CUENTA/${dateKey}/${numeroPedido}`);
+            await set(saleRef, null);
+        }
+
+        console.log(`[VENTA IMPACTO] reversar id=${numeroPedido} tipo=${tipo} valor=${saleValue} comision=${commission} → RESUMEN_CUENTA decrementado`);
+    } catch (error) {
+        console.error('[VENTA IMPACTO] Error al reversar venta de cuenta:', error);
         throw error;
     }
 };

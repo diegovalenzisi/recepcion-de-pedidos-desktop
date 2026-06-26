@@ -304,6 +304,9 @@ logger.error = (msg, options) => {
 
 export default defineConfig({
 	customLogger: logger,
+	// base: './' genera rutas relativas en el build — necesario para que
+	// Electron pueda cargar el index.html via file:// sin rutas absolutas.
+	base: './',
 	define: {
 		__APP_VERSION__: JSON.stringify(pkg.version),
 		__BUILD_TIME__: JSON.stringify(buildTime),

@@ -86,8 +86,10 @@ export const isPromoAvailable = (promoArticle, articlesData = {}, materiaPrimaDa
         if (pItem.tipo === 'grupo') {
             const optionIds = getGroupOptionIds(pItem, productGroups);
             if (optionIds.length === 0) continue;
-            const anyAvailable = optionIds.some(id => isArticleAvailable(id, articlesData, materiaPrimaData, context));
-            if (!anyAvailable) return false;
+            const availableOptions = optionIds.filter(id => isArticleAvailable(id, articlesData, materiaPrimaData, context));
+            // Si hay minSeleccion configurado, necesitamos al menos ese número de opciones disponibles
+            const minRequired = (pItem.minSeleccion > 0) ? pItem.minSeleccion : 1;
+            if (availableOptions.length < minRequired) return false;
         } else {
             const targetId = pItem.codigo || pItem.id;
             if (!targetId) continue;

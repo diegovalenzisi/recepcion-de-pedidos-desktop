@@ -77,6 +77,7 @@ export const checkAndUpdatePromotionStockStatus = async () => {
                         updates[`${LOCAL_ID}/ARTICULOS/${key}/activoDelivery`] = false;
                         summary.disabledCount++;
                         summary.disabledPromos.push(item.nombre || key);
+                        console.log(`[DELIVERY AUTO PROMO] promo=${item.nombre || key} disponibleAnterior=true motivo=stock_insuficiente_en_componente restaurado=false`);
                     }
                 } else {
                     if (item.hadDeliveryEnabled === true) {
@@ -84,6 +85,7 @@ export const checkAndUpdatePromotionStockStatus = async () => {
                         updates[`${LOCAL_ID}/ARTICULOS/${key}/activoDelivery`] = true;
                         summary.enabledCount++;
                         summary.enabledPromos.push(item.nombre || key);
+                        console.log(`[DELIVERY AUTO PROMO] promo=${item.nombre || key} disponibleAnterior=true motivo=stock_repuesto restaurado=true`);
                     }
                 }
             }

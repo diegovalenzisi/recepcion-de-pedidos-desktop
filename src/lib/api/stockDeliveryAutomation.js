@@ -123,6 +123,7 @@ export const handleStockDepletion = async (articleId, currentStock, previousStoc
       updates.lastAutoToggle = Date.now();
       updates.autoToggleReason = 'stock_depleted';
       console.log(`[Stock Automation] Disabled delivery for ${articleId} (stock depleted). Saving hadDeliveryEnabled=true.`);
+      console.log(`[DELIVERY AUTO STOCK] articulo=${articleId} stock=${currentStock} estadoAnterior=true desactivadoPorStock=true restaurado=false`);
     } else if (articleData.hadDeliveryEnabled !== false) {
       updates.hadDeliveryEnabled = false;
     }
@@ -168,6 +169,7 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
       updates.lastAutoToggle = Date.now();
       updates.autoToggleReason = 'stock_replenished';
       console.log(`[Stock Automation] Restored delivery for ${articleId} (stock replenished). Resetting hadDeliveryEnabled=false.`);
+      console.log(`[DELIVERY AUTO STOCK] articulo=${articleId} stock=${currentStock} estadoAnterior=true desactivadoPorStock=false restaurado=true`);
     } else if (articleData.hadDeliveryEnabled !== false) {
       updates.hadDeliveryEnabled = false;
     }

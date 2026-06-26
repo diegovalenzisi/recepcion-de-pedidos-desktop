@@ -1,5 +1,6 @@
 import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, set, get, runTransaction, update, onValue, off } from 'firebase/database';
+import { registrarPagoComision } from '@/lib/api/comisionesApi';
 
 export const fetchSettings = async () => {
   checkLocalId();
@@ -309,6 +310,34 @@ export const fetchSalesPercentage = async () => {
   }
 };
 
+export const fetchCommissionTotals = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentLocalId();
+  const db = getDatabase();
+
+  const [totalsSnap, pagosSnap] = await Promise.all([
+    get(ref(db, `${LOCAL_ID}/RESUMEN_CUENTA/TOTALES`)),
+    get(ref(db, `${LOCAL_ID}/PAGOS_COMISIONES`)),
+  ]);
+
+  const totalsVal = totalsSnap.exists() ? totalsSnap.val() : {};
+  // Usar TotalComisionAPagar si existe, sino caer en totalCommission (compatibilidad)
+  const aPagar = totalsVal.TotalComisionAPagar ?? totalsVal.totalCommission ?? 0;
+
+  let totalPagado = 0;
+  if (pagosSnap.exists()) {
+    pagosSnap.forEach(child => {
+      totalPagado += child.val()?.paymentAmount || 0;
+    });
+  }
+
+  return {
+    generado: aPagar + totalPagado,
+    pagado: totalPagado,
+    aPagar, // = TotalComisionAPagar
+  };
+};
+
 export const fetchAccountTotals = async () => {
   checkLocalId();
   const LOCAL_ID = getCurrentLocalId();
@@ -335,7 +364,7 @@ const getNextPaymentId = async (db, localId) => {
   return snapshot.val();
 };
 
-export const processCommissionPayment = async (paymentAmount) => {
+export const processCommissionPayment = async (paymentAmount, responsable = 'Sistema') => {
     checkLocalId();
     const LOCAL_ID = getCurrentLocalId();
     const db = getDatabase();
@@ -368,13 +397,9 @@ export const processCommissionPayment = async (paymentAmount) => {
         await runTransaction(totalsRef, (currentTotals) => {
             if (currentTotals) {
                 const currentCommission = currentTotals.totalCommission || 0;
-                
-                if (paymentAmount >= currentCommission) {
-                    currentTotals.totalCommission = 0;
-                } else {
-                    currentTotals.totalCommission = currentCommission - paymentAmount;
-                }
-                
+                const newCommission = paymentAmount >= currentCommission ? 0 : currentCommission - paymentAmount;
+                currentTotals.totalCommission    = newCommission;
+                currentTotals.TotalComisionAPagar = newCommission;
                 currentTotals.totalSales = 0;
                 currentTotals.lastPayment = {
                     amount: paymentAmount,
@@ -383,6 +408,7 @@ export const processCommissionPayment = async (paymentAmount) => {
             } else {
                 return {
                     totalCommission: 0,
+                    TotalComisionAPagar: 0,
                     totalSales: 0,
                     lastPayment: {
                         amount: paymentAmount,
@@ -403,6 +429,13 @@ export const processCommissionPayment = async (paymentAmount) => {
             await update(accountSummaryRef, updates);
         }
 
+        // Marcar registros en COMISIONES/REGISTRO como pagados
+        try {
+            await registrarPagoComision(paymentAmount, responsable);
+        } catch (err) {
+            console.error('[COMISIONES] Error al registrar pago en COMISIONES/PAGOS:', err);
+        }
+
         return { success: true };
     } catch (error) {
         console.error("Error processing commission payment:", error);
@@ -421,6 +454,54 @@ export const saveWhatsAppPreference = async (preference) => {
     console.error("Error saving WhatsApp preference:", error);
     throw error;
   }
+};
+
+export const fetchAlarmaPago = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentLocalId();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/alarmaPago.json`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 404) return 0;
+      throw new Error('Network response was not ok');
+    }
+    const data = await response.json();
+    return data !== null && data !== undefined ? Number(data) : 0;
+  } catch (error) {
+    console.error('Error fetching alarmaPago:', error);
+    return 0;
+  }
+};
+
+export const saveAlarmaPago = async (amount) => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentLocalId();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/alarmaPago.json`;
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Number(amount)),
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+};
+
+export const saveUpdateMetadata = async ({ version, url, nombreArchivo, fecha, obligatoria = true }) => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentLocalId();
+  const db = getDatabase();
+  const updateRef = ref(db, `${LOCAL_ID}/actualizaciones`);
+  await set(updateRef, {
+    version: String(version).trim(),
+    url,
+    nombreArchivo,
+    fecha: fecha || new Date().toISOString().split('T')[0],
+    obligatoria,
+  });
 };
 
 export const fetchWhatsAppPreference = async () => {

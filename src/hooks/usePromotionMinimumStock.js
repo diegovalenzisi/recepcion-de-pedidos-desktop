@@ -40,15 +40,67 @@ export const usePromotionMinimumStock = (promotion) => {
                 let limitedBy = null;
                 const details = [];
 
-                const [artSnap, mpSnap] = await Promise.all([
+                const [artSnap, mpSnap, grpSnap] = await Promise.all([
                     get(articlesRef),
-                    get(mpRef)
+                    get(mpRef),
+                    get(ref(db, `${localId}/GRUPOS_PRODUCTOS`))
                 ]);
 
                 const articlesData = artSnap.exists() ? artSnap.val() : {};
                 const mpData = mpSnap.exists() ? mpSnap.val() : {};
+                const groupsData = grpSnap.exists() ? grpSnap.val() : {};
 
                 for (const pItem of promotion.promoItems) {
+                    // Rama para items de tipo "grupo a elección"
+                    if (pItem.tipo === 'grupo') {
+                        const group = groupsData[pItem.grupoId];
+                        const rawArticulos = group?.articulos;
+                        const groupArticleIds = Array.isArray(rawArticulos)
+                            ? rawArticulos
+                            : Object.values(rawArticulos || {});
+                        const allowedIds = (pItem.permitidos && pItem.permitidos.length > 0)
+                            ? pItem.permitidos
+                            : groupArticleIds;
+
+                        if (allowedIds.length === 0) {
+                            minStock = 0;
+                            limitedBy = group?.nombre || pItem.nombre || pItem.grupoId;
+                            details.push({ id: pItem.grupoId, name: limitedBy, stock: 0, required: pItem.minSeleccion || 1, type: 'group', possible: 0 });
+                            continue;
+                        }
+
+                        // Sumar stock disponible de todos los artículos permitidos del grupo
+                        let totalGroupStock = 0;
+                        for (const artId of allowedIds) {
+                            const art = articlesData[artId];
+                            if (!art) continue;
+                            const artStock = art.stock?.propio !== undefined ? Number(art.stock.propio) : 0;
+                            totalGroupStock += Math.max(0, artStock);
+                        }
+
+                        // Cantidad requerida por venta de promo (minSeleccion o maxSeleccion o cantidad)
+                        const required = pItem.minSeleccion > 0 ? pItem.minSeleccion
+                            : pItem.maxSeleccion > 0 ? pItem.maxSeleccion
+                            : (pItem.cantidad || 1);
+                        const possiblePromos = required > 0 ? Math.floor(totalGroupStock / required) : 0;
+                        const groupName = group?.nombre || pItem.nombre || pItem.grupoId;
+
+                        details.push({
+                            id: pItem.grupoId,
+                            name: groupName,
+                            stock: totalGroupStock,
+                            required,
+                            type: 'group',
+                            possible: possiblePromos
+                        });
+
+                        if (possiblePromos < minStock) {
+                            minStock = possiblePromos;
+                            limitedBy = groupName;
+                        }
+                        continue;
+                    }
+
                     const artId = pItem.codigo || pItem.id;
                     const qtyNeeded = pItem.cantidad || 1;
                     const article = articlesData[artId];
@@ -134,15 +186,18 @@ export const usePromotionMinimumStock = (promotion) => {
             }
         };
 
-        // Attach a general listener to trigger recalculation when relevant nodes change
+        // Attach listeners to trigger recalculation when relevant nodes change
         const artRef = ref(db, `${localId}/ARTICULOS`);
         const mpRef = ref(db, `${localId}/MATERIA_PRIMA`);
-        
+        const grpRef = ref(db, `${localId}/GRUPOS_PRODUCTOS`);
+
         const artListener = onValue(artRef, () => calculateStock());
         const mpListener = onValue(mpRef, () => calculateStock());
+        const grpListener = onValue(grpRef, () => calculateStock());
 
         listeners.push({ ref: artRef, listener: artListener });
         listeners.push({ ref: mpRef, listener: mpListener });
+        listeners.push({ ref: grpRef, listener: grpListener });
 
         calculateStock();
 

@@ -6,7 +6,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Settings, HeartHandshake, Loader2, Warehouse, CreditCard, Archive, Users as UsersIcon, LogOut, Receipt, FileText, FileSpreadsheet, Smartphone, PieChart, DatabaseZap, Globe } from 'lucide-react';
 import { permissionsList } from '@/config/permissions.js';
 import { useAuth } from '@/hooks/useAuth.jsx';
-import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp } from '@/lib/firebase/core.js';
+import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp, getFirebaseUrl } from '@/lib/firebase/core.js';
 import { fetchSettings, listenToChanges } from '@/lib/api/settingsApi.js';
 import { checkOpenShift, createNewShift } from '@/lib/api/cash/index.js';
 import UpdateNotification from '@/components/UpdateNotification.jsx';
@@ -17,6 +17,8 @@ import { formatDateForFirebase } from '@/lib/utils.js';
 import { useAccounts } from '@/contexts/AccountsContext.jsx';
 import { useOrderAlarm } from '@/hooks/useOrderAlarm.js';
 import { useVoicePaymentAlerts } from '@/hooks/useVoicePaymentAlerts.js';
+import { useMpBackendStatus } from '@/hooks/useMpBackendStatus.js';
+import { useMpAccounts } from '@/hooks/useMpAccounts.js';
 import VoicePaymentAlertWidget from '@/components/VoicePaymentAlertWidget.jsx';
 import { useStockStatus } from '@/hooks/useStockStatus.js';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
@@ -25,6 +27,11 @@ import { clearCache } from '@/lib/cache/cacheManager.js';
 import ErrorBoundary from '@/components/ErrorBoundary.jsx';
 import { perfMonitor } from '@/lib/performanceMonitor';
 import InstallPrompt from '@/components/InstallPrompt.jsx';
+import { useCommissionAlarm } from '@/hooks/useCommissionAlarm.js';
+import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
+import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
+import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
+import UpdateScreen from '@/components/UpdateScreen.jsx';
 
 const AttentionPage = React.lazy(() => import('@/pages/AttentionPage.jsx'));
 const StockPage = React.lazy(() => import('@/pages/StockPage.jsx'));
@@ -130,17 +137,32 @@ function AppContent() {
   const { showUpdateNotification, reloadPage } = useServiceWorker();
   const { setAccountsLocalId } = useAccounts();
   const { alarmingOrderIds, acknowledgeOrder, AlarmAudio } = useOrderAlarm(!!user);
+  const { activeAccount: activeMpAccount } = useMpAccounts();
   const {
     isEnabled: isVoiceAlertsEnabled,
     isSoundUnlocked: isVoiceSoundUnlocked,
     lastAnnouncedPayment,
     availableVoices,
     selectedVoiceURI,
+    diagnosisResult,
+    watcherStatus: mpWatcherStatus,
+    lastPaymentDetectedAt: mpLastPaymentAt,
+    lastWatcherError: mpWatcherError,
+    lastCheckAt: mpLastCheckAt,
     enableSound: enableVoiceSound,
     testVoice,
+    testMercadoPago,
+    runDiagnosis,
     toggleEnabled: toggleVoiceAlerts,
     selectVoice,
-  } = useVoicePaymentAlerts(!!user);
+  } = useVoicePaymentAlerts(!!user, activeMpAccount?.firebasePathPagos ?? null);
+
+  const {
+    loading: mpBackendLoading,
+    refresh: refreshMpBackend,
+    ...mpBackendStatus
+  } = useMpBackendStatus();
+
   const [clearingCache, setClearingCache] = useState(false);
   
   const { 
@@ -156,6 +178,76 @@ function AppContent() {
   } = useStockStatus();
   
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
+  const { showModal: showAlarmModal, dismiss: dismissAlarm, pendingAmount: commissionAlarmAmount } = useCommissionAlarm(
+    settings?.alarmaPago,
+    !!user
+  );
+
+  // Badge de comisión pendiente (tiempo real)
+  const commissionPending = useCommissionTotal(!!user && !!localId);
+  const formatCommission = (v) =>
+    new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(v || 0);
+
+  // Sistema de actualizaciones automáticas vía Firebase
+  const [updateStatus, setUpdateStatus] = useState(() => {
+    // Solo en Electron y si hay un local configurado
+    if (!window.electronAPI || !localStorage.getItem('localId')) return 'done';
+    return 'idle';
+  });
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
+  const isNewerVersion = (remote, local) => {
+    const parse = (v) => String(v || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const r = parse(remote);
+    const l = parse(local);
+    for (let i = 0; i < 3; i++) {
+      if ((r[i] || 0) > (l[i] || 0)) return true;
+      if ((r[i] || 0) < (l[i] || 0)) return false;
+    }
+    return false;
+  };
+
+  // Listener de progreso de descarga (IPC → renderer)
+  useEffect(() => {
+    if (!window.electronAPI?.onDownloadProgress) return;
+    const cleanup = window.electronAPI.onDownloadProgress((data) => {
+      setDownloadProgress(data?.pct ?? 0);
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  useEffect(() => {
+    if (updateStatus !== 'idle') return;
+    const storedLocalId = localStorage.getItem('localId');
+    if (!storedLocalId) { setUpdateStatus('done'); return; }
+
+    (async () => {
+      setUpdateStatus('checking');
+      try {
+        const dbUrl = getFirebaseUrl();
+        const resp = await fetch(`${dbUrl}/${storedLocalId}/actualizaciones.json`);
+        if (!resp.ok) { setUpdateStatus('done'); return; }
+        const info = await resp.json();
+        if (!info?.version || !info?.url) { setUpdateStatus('done'); return; }
+        const currentVersion = await window.electronAPI.getAppVersion().catch(() => null);
+        if (!currentVersion || !isNewerVersion(info.version, currentVersion)) {
+          setUpdateStatus('done'); return;
+        }
+        setUpdateInfo(info);
+        setUpdateStatus('downloading');
+        await window.electronAPI.downloadAndInstall(
+          info.url,
+          info.nombreArchivo || `Recepcion-de-Pedidos-Setup-${info.version}.exe`
+        );
+        // main.js cerrará la app — si llegamos acá fue un error silencioso
+        setUpdateStatus('done');
+      } catch (e) {
+        console.error('[update]', e);
+        setUpdateStatus('error');
+      }
+    })();
+  }, [updateStatus]);
 
   useEffect(() => {
     perfMonitor.startTimer('app-load');
@@ -200,6 +292,8 @@ function AppContent() {
         const shiftData = await checkOpenShift();
         setCurrentShift(shiftData);
         setNeedsNewShift(!shiftData);
+        // Sincronizar TotalComisionAPagar con totalCommission al iniciar
+        recalcularTotalComisionAPagar().catch(() => {});
         perfMonitor.endTimer('initial-data-load');
     } catch (error) {
         console.error("Error loading initial data:", error);
@@ -270,6 +364,18 @@ function AppContent() {
   
   if (!localId) {
     return <Suspense fallback={<LoadingFallback />}><LocalIdSetup onSetupComplete={handleSetupComplete} /></Suspense>;
+  }
+
+  if (['checking', 'downloading', 'error'].includes(updateStatus)) {
+    return (
+      <UpdateScreen
+        status={updateStatus}
+        info={updateInfo}
+        downloadProgress={downloadProgress}
+        onSkip={() => setUpdateStatus('done')}
+        onRetry={() => { setDownloadProgress(0); setUpdateStatus('idle'); }}
+      />
+    );
   }
 
   if (!user) {
@@ -353,10 +459,20 @@ function AppContent() {
                         lastAnnouncedPayment={lastAnnouncedPayment}
                         availableVoices={availableVoices}
                         selectedVoiceURI={selectedVoiceURI}
+                        diagnosisResult={diagnosisResult}
+                        watcherStatus={mpWatcherStatus}
+                        lastPaymentDetectedAt={mpLastPaymentAt}
+                        lastWatcherError={mpWatcherError}
+                        lastCheckAt={mpLastCheckAt}
                         enableSound={enableVoiceSound}
                         testVoice={testVoice}
+                        testMercadoPago={testMercadoPago}
+                        runDiagnosis={runDiagnosis}
                         toggleEnabled={toggleVoiceAlerts}
                         selectVoice={selectVoice}
+                        backendStatus={mpBackendStatus}
+                        backendLoading={mpBackendLoading}
+                        refreshBackend={refreshMpBackend}
                     />
                     <button
                         onClick={handleClearCache}
@@ -427,14 +543,25 @@ function AppContent() {
             <div className="font-semibold text-primary-dark hidden md:block">
               DLV SISTEMAS
             </div>
-            <div>
+            {userRole === 'dueño' && (
+              <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-md bg-gray-800 border border-fuchsia-500/40 whitespace-nowrap">
+                <span className="text-gray-300 font-medium">Comisión a Pagar:</span>
+                <span className={`font-bold ${commissionPending > 0 ? 'text-green-400' : 'text-gray-400'}`}>
+                  {formatCommission(commissionPending)}
+                </span>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
               <span>{formatDateForFirebase(new Date())} {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
+              <span className="text-gray-400 select-none" title={`Build: ${typeof __BUILD_TIME__ !== 'undefined' ? new Date(__BUILD_TIME__).toLocaleString('es-AR') : 'dev'}`}>
+                v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}
+              </span>
             </div>
           </div>
         </footer>
       </div>
 
-      <OutOfStockModal 
+      <OutOfStockModal
         isOpen={isStockModalOpen}
         onClose={() => setIsStockModalOpen(false)}
         outOfStockArticles={outOfStockArticles}
@@ -443,6 +570,11 @@ function AppContent() {
         lowStockRawMaterials={lowStockRawMaterials}
         departments={[]}
         localId={stockLocalId}
+      />
+      <CommissionAlarmModal
+        isOpen={showAlarmModal}
+        alarmAmount={commissionAlarmAmount}
+        onAccept={dismissAlarm}
       />
       <Toaster />
     </>

@@ -26,6 +26,35 @@ import {
 } from '@/lib/api/managementApi.js';
 import { allTabsConfig } from '@/components/management/stockTabsConfig.js';
 
+/**
+ * Detecta el tipo de stock de un artículo con compatibilidad hacia atrás.
+ * Soporta: stockType en stock, stockType en raíz, campos legacy (receta, heredadoDe, propio).
+ */
+export const getTipoStockArticulo = (articulo) => {
+  const stock = articulo?.stock || {};
+
+  // stockType explícito (nuevo formato)
+  const raw =
+    stock.stockType ||
+    articulo?.stockType ||
+    articulo?.tipoStock ||
+    articulo?.stockConfig?.stockType ||
+    articulo?.stockConfig?.tipo;
+
+  if (raw === 'receta') return 'receta';
+  if (raw === 'heredado') return 'heredado';
+  if (raw === 'propio' || raw === 'stock_propio') return 'propio';
+
+  // Detección legacy por presencia de campos
+  if (stock.receta && typeof stock.receta === 'object' && Object.keys(stock.receta).length > 0) return 'receta';
+  if (stock.heredadoDe && typeof stock.heredadoDe === 'string' && stock.heredadoDe.length > 0) return 'heredado';
+  if (stock.propio !== undefined && stock.propio !== null) return 'propio';
+  if (articulo?.receta) return 'receta';
+  if (articulo?.heredaStock || articulo?.stockHeredadoDe) return 'heredado';
+
+  return 'desconocido';
+};
+
 const getMaxIdFromData = (data, prefix) => {
   if (!data || data.length === 0) return 0;
   return data.reduce((max, item) => {
@@ -38,7 +67,7 @@ function StockPage({ userPermissions, userRole }) {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [filters, setFilters] = useState({ department: 'all' });
+  const [filters, setFilters] = useState({ department: 'all', stockType: 'all' });
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [itemToDelete, setItemToDelete] = useState(null);
@@ -315,6 +344,10 @@ function StockPage({ userPermissions, userRole }) {
       currentData = currentData.filter(item => item.departamento === filters.department);
     }
 
+    if (activeTab === 'articulos' && filters.stockType !== 'all') {
+      currentData = currentData.filter(item => getTipoStockArticulo(item) === filters.stockType);
+    }
+
     if (searchTerm) {
       currentData = currentData.filter(item =>
         (item.nombre && item.nombre.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -356,11 +389,6 @@ function StockPage({ userPermissions, userRole }) {
       </div>
       
       <Tabs value={mainView} onValueChange={setMainView} className="flex-1 flex flex-col min-h-0">
-        <TabsList className="grid w-full max-w-md grid-cols-2 mb-4 flex-shrink-0">
-          <TabsTrigger value="stock">Gestión de Stock</TabsTrigger>
-          <TabsTrigger value="automation">Automatización Delivery</TabsTrigger>
-        </TabsList>
-
         <TabsContent value="stock" className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden">
           {hasFullAccessToCurrentTab && (
             <div className="flex flex-col gap-2 flex-shrink-0 mb-4">
@@ -420,9 +448,6 @@ function StockPage({ userPermissions, userRole }) {
           </div>
         </TabsContent>
 
-        <TabsContent value="automation" className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden overflow-y-auto">
-          <StockDeliveryAutomationStatus departments={data.departamentos || []} />
-        </TabsContent>
       </Tabs>
 
       {showForm && (

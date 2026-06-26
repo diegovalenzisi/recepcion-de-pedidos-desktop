@@ -11,8 +11,6 @@ import { fetchAccounts } from '@/lib/api/accountsApi';
 import { fetchEmployees, fetchCategories } from '@/lib/api/hrApi';
 import PaymentMethodSlider from '@/components/attention/PaymentMethodSlider';
 import ResponsibleEmployeeModal from './ResponsibleEmployeeModal';
-import { savePrepaymentForApp } from '@/lib/api/prepaymentApi';
-import { getOperationalDate, formatDateToDDMMAAAA } from '@/lib/utils';
 
 const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfirmPayment, currentShift }) => {
   const [payments, setPayments] = useState([]);
@@ -149,18 +147,8 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     setIsSubmitting(true);
     try {
         const specialDiscount = specialDiscountType ? { type: specialDiscountType, responsible: responsibleEmployee } : null;
-        
-        // Save prepayments for PEDIDOSYA and RAPPI
-        const operationalDate = formatDateToDDMMAAAA(getOperationalDate(new Date()));
-        for (const payment of payments) {
-          const methodUpper = payment.method.toUpperCase();
-          if (methodUpper.includes('PREPAGO PEDIDOSYA')) {
-            await savePrepaymentForApp('PEDIDOSYA', payment.amount, operationalDate);
-          } else if (methodUpper.includes('PREPAGO RAPPI')) {
-            await savePrepaymentForApp('RAPPI', payment.amount, operationalDate);
-          }
-        }
-
+        // Los prepagos PEDIDOSYA/RAPPI se guardan dentro de saveCounterSale (background).
+        // No duplicar aquí.
         await onConfirmPayment(payments.filter(p => p.amount > 0), specialDiscount, emiteFactura, currentTotal);
     } catch (e) {
         setIsSubmitting(false);

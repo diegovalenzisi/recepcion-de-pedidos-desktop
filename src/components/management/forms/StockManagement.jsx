@@ -160,34 +160,6 @@ const StockManagement = ({ stock, onStockChange, allArticles, allRawMaterials, a
         </SelectContent>
       </Select>
 
-      {showAutomationStatus && (
-        <Alert className={`mt-3 ${hadDeliveryEnabled ? 'bg-yellow-50 border-yellow-200' : 'bg-blue-50 border-blue-200'}`}>
-          <Info className={`h-4 w-4 ${hadDeliveryEnabled ? 'text-yellow-600' : 'text-blue-600'}`} />
-          <AlertDescription className={hadDeliveryEnabled ? 'text-yellow-800' : 'text-blue-800'}>
-            <div className="flex items-center justify-between">
-              <div>
-                <strong>Automatización de Delivery:</strong>
-                <div className="text-sm mt-1">
-                  {hadDeliveryEnabled ? (
-                    <span className="flex items-center gap-1">
-                      <XCircle className="w-3 h-3" />
-                      Delivery deshabilitado automáticamente (stock agotado)
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Se habilitará automáticamente al reponer stock
-                    </span>
-                  )}
-                </div>
-              </div>
-              <Badge variant={hadDeliveryEnabled ? 'destructive' : 'secondary'}>
-                {hadDeliveryEnabled ? 'Inactivo' : 'Normal'}
-              </Badge>
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
 
       <AnimatePresence mode="wait">
         <motion.div

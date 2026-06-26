@@ -1,7 +1,8 @@
 
 import { getDatabase, ref, runTransaction, get, update, set } from 'firebase/database';
 import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
-import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
+import { saveSaleToAccountSummary, reversarVentaCuenta } from '@/lib/api/myAccountApi';
+import { cancelarComision } from '@/lib/api/comisionesApi';
 import { restoreStockForItem, bulkUpdateStock, fetchAllStockableItems } from '@/lib/api/stockApi';
 import { processStockForCounterSale } from '@/lib/api/transactionsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
@@ -70,135 +71,150 @@ const saveCounterSaleToFacturacion = async (db, localId, saleId, saleData) => {
 };
 
 export const saveCounterSale = async (saleData, shift) => {
+  const t0 = Date.now();
+  console.log('[VENTA MOSTRADOR] inicio confirmar venta');
+
   checkLocalId();
   const LOCAL_ID = getCurrentLocalId();
   const FIREBASE_URL = getFirebaseUrl();
   const db = getDatabase();
-  
+
   try {
+    // ── FASE 1: Ruta crítica — bloquea UI hasta completar ─────────────────
+    let t = Date.now();
     const saleId = await getNextCounterSaleId(db, LOCAL_ID);
-    
+    console.log(`[VENTA MOSTRADOR] obtener ID: ${Date.now() - t} ms`);
+
     const now = new Date();
     const fechaCaja = formatDateForFirebase(getOperationalDate(now));
     const formattedDate = formatDateForFirebase(now);
 
-    const hours = String(now.getHours()).padStart(2, '0');
+    const hours   = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const formattedTime = `${hours}:${minutes}:${seconds}`;
 
     let calculatedCostoTotal = 0;
     if (saleData.items && Array.isArray(saleData.items)) {
-        calculatedCostoTotal = saleData.items.reduce((sum, item) => {
-            const qty = Number(item.cantidad) || Number(item.quantity) || 1;
-            const unitCost = Number(item.costoTotalReceta) || Number(item.costoUnitario) || 0;
-            return sum + (qty * unitCost);
-        }, 0);
+      calculatedCostoTotal = saleData.items.reduce((sum, item) => {
+        const qty      = Number(item.cantidad) || Number(item.quantity) || 1;
+        const unitCost = Number(item.costoTotalReceta) || Number(item.costoUnitario) || 0;
+        return sum + (qty * unitCost);
+      }, 0);
     }
     calculatedCostoTotal = Math.round(calculatedCostoTotal * 1000) / 1000;
 
-    const saleWithTimestamp = { 
-      items: saleData.items,
-      total: saleData.total,
-      CostoTotal: calculatedCostoTotal,
-      payment: {
-        total: saleData.total,
-        details: saleData.payments,
-        payments: saleData.payments,
-      },
-      payments: saleData.payments,
+    const saleWithTimestamp = {
+      items:           saleData.items,
+      total:           saleData.total,
+      CostoTotal:      calculatedCostoTotal,
+      payment:         { total: saleData.total, details: saleData.payments, payments: saleData.payments },
+      payments:        saleData.payments,
       specialDiscount: saleData.specialDiscount || null,
-      emiteFactura: saleData.emiteFactura || false,
-      timestamp: formattedDate,
-      date: formattedDate,
-      hora: formattedTime,
-      id: saleId,
-      turno: shift?.id || null,
-      fechacaja: fechaCaja,
-      client: { name: 'Consumidor Final' },
-      status: 'COMPLETADO'
+      emiteFactura:    saleData.emiteFactura || false,
+      timestamp:       formattedDate,
+      date:            formattedDate,
+      hora:            formattedTime,
+      id:              saleId,
+      turno:           shift?.id || null,
+      fechacaja:       fechaCaja,
+      client:          { name: 'Consumidor Final' },
+      status:          'COMPLETADO',
     };
 
+    t = Date.now();
     const url = `${FIREBASE_URL}/${LOCAL_ID}/MOSTRADOR/${saleId}.json`;
     const response = await fetch(url, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(saleWithTimestamp),
     });
+    if (!response.ok) throw new Error('Network response was not ok');
+    console.log(`[VENTA MOSTRADOR] guardar venta Firebase: ${Date.now() - t} ms`);
+    console.log(`[VENTA MOSTRADOR] ruta crítica total: ${Date.now() - t0} ms — liberando pantalla`);
 
-    if (!response.ok) {
-      throw new Error('Network response was not ok');
-    }
+    // ── FASE 2: Background — NO bloquea la UI ─────────────────────────────
+    // Stock, facturación, comisiones y estadísticas corren en segundo plano.
+    // La venta ya está guardada de forma segura en Firebase antes de llegar aquí.
+    const runBackground = async () => {
+      let tb;
 
-    // Deduct stock using the centralized transaction processing
-    try {
-      await processStockForCounterSale(saleWithTimestamp);
-    } catch (stockError) {
-      console.error("Error deducting stock for counter sale:", stockError);
-    }
-    
-    // Process App Prepayments automatically if used as payment methods
-    if (saleData.payments && saleData.payments.length > 0) {
-      for (const payment of saleData.payments) {
-        try {
-          const methodUpper = payment.method.toUpperCase();
-          if (methodUpper.includes('PREPAGO PEDIDOSYA') || methodUpper === 'PREPAGO_PEDIDOSYA') {
-            await savePrepaymentForApp('PEDIDOSYA', payment.amount);
-          } else if (methodUpper.includes('PREPAGO RAPPI') || methodUpper === 'PREPAGO_RAPPI') {
-            await savePrepaymentForApp('RAPPI', payment.amount);
+      tb = Date.now();
+      try {
+        await processStockForCounterSale(saleWithTimestamp);
+        console.log(`[VENTA MOSTRADOR] descontar stock: ${Date.now() - tb} ms`);
+      } catch (e) {
+        console.error('[VENTA MOSTRADOR] error stock:', e);
+      }
+
+      if (saleData.payments && saleData.payments.length > 0) {
+        tb = Date.now();
+        for (const payment of saleData.payments) {
+          try {
+            const methodUpper = payment.method.toUpperCase();
+            if (methodUpper.includes('PREPAGO PEDIDOSYA') || methodUpper === 'PREPAGO_PEDIDOSYA') {
+              await savePrepaymentForApp('PEDIDOSYA', payment.amount);
+            } else if (methodUpper.includes('PREPAGO RAPPI') || methodUpper === 'PREPAGO_RAPPI') {
+              await savePrepaymentForApp('RAPPI', payment.amount);
+            }
+          } catch (prepError) {
+            console.error('[VENTA MOSTRADOR] error prepago:', prepError);
           }
-        } catch (prepError) {
-          console.error("Error saving automatic app prepayment:", prepError);
         }
       }
-    }
-    
-    // Save to FACTURACION nodes based on payment methods
-    if (saleData.emiteFactura) {
-      const facturacionData = {
-        client: { name: 'Consumidor Final', address: 'Sin Datos' },
-        items: saleData.items,
-        payment: {
-          total: saleData.total,
-          payments: saleData.payments
-        },
-        emiteFactura: true,
-        date: formattedDate,
-        hora: formattedTime
-      };
-      await saveFacturacionForPayments(saleId, facturacionData, 'mostrador');
-    } else {
-      // Check if any payment is a transferencia and save to appropriate FACTURACION node
-      const hasTransferencia = saleData.payments && saleData.payments.some(p => 
-        p.method.toLowerCase().includes('transferencia')
-      );
-      
-      if (hasTransferencia) {
-        await saveCounterSaleToFacturacion(db, LOCAL_ID, saleId, saleWithTimestamp);
-      }
-    }
-    
-    try {
-      await saveSaleToAccountSummary({
-        numeroPedido: saleId,
-        valor: saleData.total,
-        tipo: 'Mostrador'
-      });
-    } catch (reportError) {
-      console.warn("Failed to update account summary after counter sale:", reportError);
-    }
-    
-    // Update statistics
-    if (saleWithTimestamp.items && saleWithTimestamp.fechacaja) {
-      await updateStatistics(saleWithTimestamp.items, saleWithTimestamp.fechacaja);
-    }
 
-    const responseData = await response.json();
-    return { ...responseData, id: saleId };
+      tb = Date.now();
+      try {
+        if (saleData.emiteFactura) {
+          const facturacionData = {
+            client: { name: 'Consumidor Final', address: 'Sin Datos' },
+            items: saleData.items,
+            payment: { total: saleData.total, payments: saleData.payments },
+            emiteFactura: true,
+            date: formattedDate,
+            hora: formattedTime,
+          };
+          await saveFacturacionForPayments(saleId, facturacionData, 'mostrador');
+          console.log(`[VENTA MOSTRADOR] guardar facturación: ${Date.now() - tb} ms`);
+        } else {
+          const hasTransferencia = saleData.payments && saleData.payments.some(
+            p => p.method.toLowerCase().includes('transferencia')
+          );
+          if (hasTransferencia) {
+            await saveCounterSaleToFacturacion(db, LOCAL_ID, saleId, saleWithTimestamp);
+            console.log(`[VENTA MOSTRADOR] guardar facturación transferencia: ${Date.now() - tb} ms`);
+          }
+        }
+      } catch (facError) {
+        console.error('[VENTA MOSTRADOR] error facturación:', facError);
+      }
+
+      tb = Date.now();
+      try {
+        await saveSaleToAccountSummary({ numeroPedido: saleId, valor: saleData.total, tipo: 'Mostrador' });
+        console.log(`[VENTA MOSTRADOR] registrar comisión: ${Date.now() - tb} ms`);
+      } catch (e) {
+        console.warn('[VENTA MOSTRADOR] error comisión:', e);
+      }
+
+      if (saleWithTimestamp.items && saleWithTimestamp.fechacaja) {
+        tb = Date.now();
+        try {
+          await updateStatistics(saleWithTimestamp.items, saleWithTimestamp.fechacaja);
+          console.log(`[VENTA MOSTRADOR] actualizar estadísticas: ${Date.now() - tb} ms`);
+        } catch (e) {
+          console.error('[VENTA MOSTRADOR] error estadísticas:', e);
+        }
+      }
+
+      console.log(`[VENTA MOSTRADOR] background completo — total desde inicio: ${Date.now() - t0} ms`);
+    };
+
+    runBackground().catch(e => console.error('[VENTA MOSTRADOR] error inesperado en background:', e));
+
+    return { ...saleWithTimestamp, id: saleId };
   } catch (error) {
-    console.error("Error saving counter sale:", error);
+    console.error('[VENTA MOSTRADOR] error crítico guardando venta:', error);
     throw error;
   }
 };
@@ -229,8 +245,8 @@ export const cancelCounterSale = async (sale, shift) => {
   try {
     const expenseConcept = `Nota de Credito N° ${sale.id}`;
     const expenseAmount = sale.total;
-    
-    let expensePaymentMethod = 'electronico'; 
+
+    let expensePaymentMethod = 'electronico';
     if (sale.payments && sale.payments.length > 0) {
       const hasEfectivo = sale.payments.some(p => p.method.toLowerCase() === 'efectivo');
       if (hasEfectivo) {
@@ -243,7 +259,7 @@ export const cancelCounterSale = async (sale, shift) => {
       monto: expenseAmount,
       paymentMethod: expensePaymentMethod,
       timestamp: new Date().toISOString(),
-      empleado: 'Sistema', 
+      empleado: 'Sistema',
     };
 
     await addExpenseToShift(shift, expenseData);
@@ -251,6 +267,35 @@ export const cancelCounterSale = async (sale, shift) => {
     console.error("Error creating expense for cancelled sale:", expenseError);
     throw new Error("Error al crear la nota de crédito.");
   }
+
+  // Revertir comisión y totales del resumen de cuenta
+  // fechacaja viene en formato dd-mm-yyyy → convertir a yyyy-mm-dd para RESUMEN_CUENTA
+  let dateKey = null;
+  if (sale.fechacaja) {
+    const parts = sale.fechacaja.split('-');
+    if (parts.length === 3) {
+      dateKey = `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+  }
+
+  try {
+    await reversarVentaCuenta({
+      numeroPedido: sale.id,
+      valor: sale.total,
+      tipo: 'Mostrador',
+      dateKey,
+    });
+  } catch (err) {
+    console.error('[VENTA IMPACTO] Error al reversar comisión por cancelación mostrador:', err);
+  }
+
+  try {
+    await cancelarComision(String(sale.id));
+  } catch (err) {
+    console.error('[COMISION] Error al cancelar registro de comisión:', err);
+  }
+
+  console.log(`[VENTA IMPACTO] id=${sale.id} estado=CANCELADO impactaCaja=false impactaStock=false generaComision=false → revertido`);
 
   return { success: true };
 };

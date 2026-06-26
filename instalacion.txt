@@ -1,0 +1,5 @@
+Para llevar a otra PC
+Copiar el instalador (release/Recepción de Pedidos Setup 1.0.0.exe) a la PC destino
+Copiar el .env de D:\heladeria\mercadopago-webhook-backend\.env a la misma ruta en la PC destino (o a cualquier ruta)
+Si la ruta del .env es la misma, ejecutar npm run desktop:setup-config desde el proyecto clonado
+Si no tenés el proyecto en la otra PC, copiar manualmente backend.env desde %APPDATA%\recepcion-de-pedidos-desktop\ de esta PC a la misma carpeta en la otra PC — es el único archivo necesario

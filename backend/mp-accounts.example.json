@@ -1,0 +1,9 @@
+[
+  {
+    "nombreCuenta": "Principal",
+    "accessTokenMercadoPago": "APP_USR-0000000000000000-000000-000000000000000000000000000000000000-00000000",
+    "localId": "00000000",
+    "firebasePathPagos": "00000000/PAGOS_CONFIRMADOS",
+    "activo": true
+  }
+]

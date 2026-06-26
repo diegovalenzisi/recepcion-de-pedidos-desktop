@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import ArticleFormFields from './forms/ArticleFormFields';
 import RawMaterialFormFields from './forms/RawMaterialFormFields';
@@ -9,10 +9,18 @@ import TachoFormFields from './forms/TachoFormFields';
 import ProductGroupFormFields from './forms/ProductGroupFormFields';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/components/ui/use-toast';
 
 const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave, allData }) => {
   const [formData, setFormData] = useState({});
   const [isEditing, setIsEditing] = useState(false);
+  const { toast } = useToast();
+
+  // [FIX] Usar ref para allData: evita que cambios en allData (updates de Firebase
+  // en tiempo real para otros tabs) recreen loadInitialData y re-disparen el
+  // useEffect, lo que estaba reseteando el formulario y borrando promoItems.
+  const allDataRef = useRef(allData);
+  useEffect(() => { allDataRef.current = allData; }, [allData]);
 
   const loadInitialData = useCallback(() => {
     const defaultData = { 
@@ -73,7 +81,8 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
          if (activeTab === 'articulos') {
             initialData.controlStock = initialData.controlStock !== false;
             if (initialData.stock?.stockType === 'heredado' && initialData.stock?.heredadoDe) {
-               const parentArticle = allData?.articulos?.find(a => a.id === initialData.stock.heredadoDe || a.codigo === initialData.stock.heredadoDe);
+               // [FIX] Usar allDataRef.current en lugar de allData (ref no causa re-renders)
+               const parentArticle = allDataRef.current?.articulos?.find(a => a.id === initialData.stock.heredadoDe || a.codigo === initialData.stock.heredadoDe);
                if (parentArticle) {
                    initialData.costoTotalReceta = parentArticle.costoTotalReceta || 0;
                }
@@ -96,9 +105,20 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
         }
       }
 
+      // [DIAG] Log para ver qué promoItems llega de Firebase al abrir el formulario
+      if (activeTab === 'articulos' && finalData.isPromo) {
+        console.log('[PROMO DIAG] loadInitialData - promoItems leído de Firebase:', {
+          isEditing: !!editingItem?.id,
+          promoItems: finalData.promoItems,
+          stock: finalData.stock,
+        });
+      }
       setFormData(finalData);
     }
-  }, [editingItem, activeTab, isEditing, allData]);
+  // [FIX] allData eliminado de las dependencias: sus cambios (updates de Firebase
+  // en otros tabs) ya no recrean loadInitialData ni re-disparan el useEffect.
+  // El valor siempre accesible via allDataRef.current (se sincroniza separado).
+  }, [editingItem, activeTab, isEditing]);
 
   useEffect(() => {
     if (showForm) {
@@ -209,6 +229,15 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
       }
     }
     
+    // [DIAG] Toast visible mostrando qué se enviará a guardar
+    if (activeTab === 'articulos' && dataToSave.isPromo) {
+      const grupos = (dataToSave.promoItems || []).filter(i => i.tipo === 'grupo');
+      const fijos = (dataToSave.promoItems || []).filter(i => i.tipo !== 'grupo');
+      toast({
+        title: `[DIAG] Guardando promo: "${dataToSave.nombre}"`,
+        description: `promoItems: ${(dataToSave.promoItems || []).length} total | ${grupos.length} grupo(s) | ${fijos.length} fijo(s) | descuentaPorArticulo=${dataToSave.stock?.descuentaPorArticulo}`,
+      });
+    }
     onSave(dataToSave);
   };
 

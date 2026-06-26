@@ -1,0 +1,15 @@
+{
+  "name": "facturador-afip-engine",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Motor de facturación AFIP — compartido por todas las cuentas",
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "firebase-admin": "^11.11.1",
+    "moment": "^2.30.1",
+    "pdfkit": "^0.13.0",
+    "qrcode": "^1.5.4",
+    "recepcion-de-pedidos-desktop": "file:../..",
+    "soap": "^1.2.1"
+  }
+}

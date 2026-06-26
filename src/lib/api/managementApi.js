@@ -3,6 +3,7 @@ import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/
 import { getDatabase, ref, get, set, remove, runTransaction, update, onValue, off } from 'firebase/database';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { validateInheritedStockStatus } from './stockDeliveryAutomation';
+import { calcularCostoPromo } from '@/lib/utils/promoCosting';
 
 const getTabConfig = (tabId) => {
     const config = {
@@ -450,7 +451,17 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
         }
         if (dataToSave.uniqueId) delete dataToSave.uniqueId;
         if (dataToSave.promoItems) {
-            dataToSave.promoItems = dataToSave.promoItems.map(({ uniqueId, ...item }) => item);
+            dataToSave.promoItems = dataToSave.promoItems.map(({ uniqueId, ...item }) => {
+                // Limpiar permitidos vacío: Firebase convierte [] a null y lo elimina,
+                // lo que genera ambigüedad. Omitir el campo si no hay restricción activa.
+                if (item.tipo === 'grupo' && Array.isArray(item.permitidos) && item.permitidos.length === 0) {
+                    const { permitidos, ...cleanItem } = item;
+                    return cleanItem;
+                }
+                return item;
+            });
+            // [DIAG] Log del objeto exacto de promoItems que se enviará a Firebase
+            console.log('[PROMO DIAG] saveData - promoItems antes de guardar en Firebase:', JSON.stringify(dataToSave.promoItems, null, 2));
         }
         if (tabId === 'articulos') {
             dataToSave.stockMinimo = Number(finalData.stockMinimo) || 0;
@@ -462,7 +473,43 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
         if (dataToSave.previousActivoDelivery !== undefined) delete dataToSave.previousActivoDelivery;
         if (dataToSave.previousActivoMostrador !== undefined) delete dataToSave.previousActivoMostrador;
     }
-    
+
+    // Para promos: calcular y persistir costo total desde sus componentes
+    if (tabId === 'articulos' && dataToSave.isPromo && Array.isArray(dataToSave.promoItems) && dataToSave.promoItems.length > 0) {
+        try {
+            const promoCostResult = calcularCostoPromo(
+                dataToSave.nombre || '',
+                dataToSave.promoItems,
+                allData?.articulos || [],
+                allData?.['materia-prima'] || [],
+                allData?.['grupos-productos'] || []
+            );
+            dataToSave.costoTotalPromo = promoCostResult.costoFijo;
+            dataToSave.costoTotalReceta = promoCostResult.costoEstimado;
+            dataToSave.costoEstimadoMinimo = promoCostResult.costoMinimo;
+            dataToSave.costoEstimadoMaximo = promoCostResult.costoMaximo;
+            dataToSave.detalleCostosPromo = promoCostResult.detalle;
+            console.log('[managementApi] Promo costo guardado:', {
+                costoTotalReceta: promoCostResult.costoEstimado,
+                costoTotalPromo: promoCostResult.costoFijo,
+                min: promoCostResult.costoMinimo,
+                max: promoCostResult.costoMaximo,
+            });
+        } catch (err) {
+            console.warn('[managementApi] No se pudo calcular costo de promo:', err);
+        }
+    }
+
+    // [DIAG] Log del objeto completo enviado a Firebase
+    if (dataToSave.isPromo) {
+        console.log('[PROMO DIAG] saveData - objeto completo enviado a Firebase:', {
+            path: finalPath,
+            isPromo: dataToSave.isPromo,
+            nombre: dataToSave.nombre,
+            promoItems: dataToSave.promoItems,
+            stock: dataToSave.stock,
+        });
+    }
     await set(ref(db, finalPath), dataToSave);
 
     if (tabId === 'opcionales') {

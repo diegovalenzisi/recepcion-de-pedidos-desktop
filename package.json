@@ -1,13 +1,88 @@
 {
-  "name": "web-app",
+  "name": "recepcion-de-pedidos-desktop",
   "type": "module",
-  "version": "0.0.0",
+  "version": "1.3.16",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite --host :: --port 3000",
-    "build": "node tools/generate-llms.js || true && vite build",
+    "build": "node tools/generate-llms.js & npx vite build",
     "preview": "vite preview --host :: --port 3000",
-    "lint": "eslint . --quiet"
+    "lint": "eslint . --quiet",
+    "electron:dev": "concurrently --kill-others \"vite --host :: --port 3000\" \"wait-on http://localhost:3000 && cross-env NODE_ENV=development electron .\"",
+    "electron:preview": "cross-env NODE_ENV=production electron .",
+    "electron:build": "npm run build && cd backend && npm install --omit=dev && cd .. && electron-builder",
+    "desktop:setup-config": "node scripts/setup-desktop-config.js",
+    "desktop:make-icon": "node scripts/png-to-ico.js",
+    "prepare:dlv": "node scripts/prepare-dlv-files.js"
+  },
+  "build": {
+    "appId": "com.heladeria.recepcion-pedidos-desktop",
+    "productName": "Recepción de Pedidos",
+    "copyright": "Copyright © 2025 Heladería",
+    "directories": {
+      "output": "release",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.env",
+          "!.env.*",
+          "!.gitignore",
+          "!.nvmrc"
+        ]
+      },
+      {
+        "from": "resources/facturacion",
+        "to": "facturacion",
+        "filter": [
+          "**/*",
+          "!node_modules/**"
+        ]
+      },
+      {
+        "from": "resources/node-afip",
+        "to": "node-afip",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "build/icon.ico"
+      }
+    ],
+    "asar": true,
+    "icon": "build/icon.ico",
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "sign": null,
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Recepción de Pedidos",
+      "runAfterFinish": true
+    },
+    "publish": null
   },
   "overrides": {
     "react": "18.2.0",
@@ -84,6 +159,10 @@
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.0.3",
     "autoprefixer": "^10.4.16",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3",
     "eslint": "^9.39.4",
     "eslint-import-resolver-alias": "^1.1.2",
     "eslint-plugin-import": "^2.32.0",
@@ -92,6 +171,7 @@
     "globals": "^15.14.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.3",
-    "vite": "^4.4.5"
+    "vite": "^4.4.5",
+    "wait-on": "^7.2.0"
   }
 }

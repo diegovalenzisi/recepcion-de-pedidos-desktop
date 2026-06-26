@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { calcularCostoProducto } from '@/lib/utils/promoCosting';
 
 const initialPromoConfig = {
   isConfiguring: false,
@@ -48,6 +49,23 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       const quantity = parseInt(promoItem.cantidad, 10) || 1;
 
       if (promoItem.tipo === 'grupo') {
+        const hasMinMax = (promoItem.minSeleccion > 0) || (promoItem.maxSeleccion > 0);
+        if (hasMinMax) {
+          // Multi-select: un slot con array de articleIds
+          const resolved = resolvedGroupItems[groupSlotIndex];
+          groupSlotIndex++;
+          if (!resolved || !resolved.articleIds) return [];
+          return resolved.articleIds.map(articleId => {
+            const articleDetails = allArticles.find(art => art.id === articleId);
+            if (!articleDetails) return null;
+            return {
+              ...articleDetails,
+              quantity: 1,
+              uniqueKey: `${promoItem.uniqueId || articleId}-${resolvedItemSeq++}`,
+            };
+          }).filter(Boolean);
+        }
+        // Single-select: quantity slots individuales (comportamiento actual)
         return Array.from({ length: quantity }).map(() => {
           const resolved = resolvedGroupItems[groupSlotIndex];
           groupSlotIndex++;
@@ -87,11 +105,19 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       }
     }
 
+    // Costo real con los artículos efectivamente elegidos (incluye grupos resueltos)
+    const costoRealTotal = allResolvedItems.reduce((sum, item) => {
+      const result = calcularCostoProducto(item.id, 1, allArticles, null);
+      return sum + result.costoUnitario;
+    }, 0);
+    const costoRealRedondeado = Math.round(costoRealTotal * 1000) / 1000;
+    console.log(`[PROMO COSTO] costoTotalPromo=${costoRealRedondeado} (venta real con items elegidos)`);
+
     if (itemsToConfigure.length > 0 && showOptionals) {
       setPromoConfig({
         ...initialPromoConfig,
         isConfiguring: true,
-        promoArticle: article,
+        promoArticle: { ...article, costoTotalReceta: costoRealRedondeado },
         itemsToConfigure,
         allResolvedItems,
         configuredItems: [],
@@ -109,6 +135,7 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       const finalPromo = {
         ...article,
         promoDetails: finalPromoDetails,
+        costoTotalReceta: costoRealRedondeado,
         uniqueId: `${article.id}-${Date.now()}`
       };
 
@@ -134,23 +161,58 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
         .map(id => allArticles.find(art => art.id === id))
         .filter(Boolean);
 
+      // [DIAG] Log para verificar qué artículos se resuelven para el grupo
+      console.log('[PROMO DIAG] startPromo - resolviendo grupo:', {
+        grupoId: promoItem.grupoId,
+        grupoNombre: promoItem.nombre,
+        grupoEncontrado: !!group,
+        articulosEnGrupo: groupArticleIds,
+        permitidos: promoItem.permitidos,
+        allowedIds,
+        optionsResueltas: options.map(o => ({ id: o.id, nombre: o.nombre })),
+        descuentaPorArticulo,
+        minSeleccion: promoItem.minSeleccion,
+        maxSeleccion: promoItem.maxSeleccion,
+      });
+
       // When the promo discounts stock from its real components, only offer
       // options that currently have stock available.
       if (descuentaPorArticulo) {
         const inStockOptions = options.filter(opt => availableIds.has(opt.id));
+        // [DIAG] Log de opciones con stock disponible
+        console.log('[PROMO DIAG] startPromo - con descuentaPorArticulo:', {
+          grupoId: promoItem.grupoId,
+          totalOpciones: options.length,
+          opcionesConStock: inStockOptions.length,
+          idsDisponibles: Array.from(availableIds),
+        });
         if (inStockOptions.length > 0) {
           options = inStockOptions;
         } else {
+          console.warn('[PROMO DIAG] startPromo - GRUPO VACÍO (sin stock o sin artículos):', promoItem.grupoId, '- promoItems guardado:', JSON.stringify(promoItem));
           hasEmptyGroup = true;
         }
       }
 
-      const quantity = parseInt(promoItem.cantidad, 10) || 1;
-      for (let i = 0; i < quantity; i++) {
+      const hasMinMax = (promoItem.minSeleccion > 0) || (promoItem.maxSeleccion > 0);
+      if (hasMinMax) {
+        // Multi-select: un único slot donde el operador elige entre min y max productos
         groupChoicesToResolve.push({
           nombre: promoItem.nombre,
           options,
+          minSeleccion: promoItem.minSeleccion > 0 ? promoItem.minSeleccion : 0,
+          maxSeleccion: promoItem.maxSeleccion > 0 ? promoItem.maxSeleccion : null,
+          isMultiSelect: true,
         });
+      } else {
+        // Comportamiento actual: quantity slots de selección individual
+        const quantity = parseInt(promoItem.cantidad, 10) || 1;
+        for (let i = 0; i < quantity; i++) {
+          groupChoicesToResolve.push({
+            nombre: promoItem.nombre,
+            options,
+          });
+        }
       }
     });
 
@@ -175,8 +237,13 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
     }
   }, [allArticles, allProductGroups, verifiedArticles, onPromoUnavailable, proceedWithItems]);
 
-  const handleGroupItemResolved = useCallback((selectedArticleId) => {
-    const newResolvedItems = [...promoConfig.resolvedGroupItems, { articleId: selectedArticleId }];
+  const handleGroupItemResolved = useCallback((selectedArticleIdOrIds) => {
+    // Single-select: string. Multi-select: string[].
+    const resolvedItem = Array.isArray(selectedArticleIdOrIds)
+      ? { articleIds: selectedArticleIdOrIds }
+      : { articleId: selectedArticleIdOrIds };
+
+    const newResolvedItems = [...promoConfig.resolvedGroupItems, resolvedItem];
     const nextIndex = promoConfig.currentGroupIndex + 1;
 
     if (nextIndex < promoConfig.groupChoicesToResolve.length) {

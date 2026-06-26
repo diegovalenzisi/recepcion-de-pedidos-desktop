@@ -70,10 +70,10 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
         <ScrollArea className="flex-grow">
           <CardContent className="p-8 space-y-8">
             {user && user.usuario === 'DiegoL' && (
-              <AdminPanel 
-                settings={settings} 
-                onSettingsChange={onSettingsChange} 
-                applySettings={applySettings} 
+              <AdminPanel
+                settings={settings}
+                onSettingsChange={onSettingsChange}
+                applySettings={applySettings}
               />
             )}
             <GeneralInfo settings={settings} handleChange={handleChange} handleFontChange={handleFontChange} />

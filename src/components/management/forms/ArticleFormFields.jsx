@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { PlusCircle, Trash2, UploadCloud, Image as ImageIcon, Loader2, X, Link2, BookText } from 'lucide-react';
 import StockManagement from './StockManagement';
 import OptionalConfig from './OptionalConfig';
+import { calcularCostoPromo } from '@/lib/utils/promoCosting';
 import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { uploadArticleImage } from '@/lib/firebase/storage';
@@ -20,6 +21,8 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
   const [selectedPromoGroup, setSelectedPromoGroup] = useState('');
   const [promoGroupName, setPromoGroupName] = useState('');
   const [promoGroupPermitidos, setPromoGroupPermitidos] = useState([]);
+  const [promoGroupMin, setPromoGroupMin] = useState('');
+  const [promoGroupMax, setPromoGroupMax] = useState('');
   const fileInputRef = useRef(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -71,6 +74,8 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
     const group = allProductGroups.find(g => g.id === groupId);
     setPromoGroupName(group ? `${group.nombre} a elección` : '');
     setPromoGroupPermitidos([]);
+    setPromoGroupMin('');
+    setPromoGroupMax('');
   };
 
   const togglePermitido = (groupArticleIds, currentPermitidos, articleId) => {
@@ -96,19 +101,35 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
     const group = allProductGroups.find(g => g.id === selectedPromoGroup);
     if (!group) return;
 
+    const groupArticleIds = group?.articulos || [];
+
     const newItem = {
       tipo: 'grupo',
       grupoId: group.id,
       nombre: promoGroupName || `${group.nombre} a elección`,
       cantidad: 1,
-      permitidos: promoGroupPermitidos,
+      // Solo incluir permitidos si hay una restricción activa (no vacío)
+      ...(promoGroupPermitidos.length > 0 && { permitidos: promoGroupPermitidos }),
       uniqueId: `grupo-${group.id}-${Date.now()}`
     };
+    const minVal = parseInt(promoGroupMin, 10);
+    const maxVal = parseInt(promoGroupMax, 10);
+    if (promoGroupMin !== '' && minVal > 0) newItem.minSeleccion = minVal;
+    if (promoGroupMax !== '' && maxVal > 0) newItem.maxSeleccion = maxVal;
+
+    // [DIAG] Toast visible de confirmación (sin necesidad de consola/F12)
+    toast({
+      title: `[DIAG] Grupo "${group.nombre}" agregado`,
+      description: `${groupArticleIds.length} artículos en el grupo | min=${newItem.minSeleccion ?? '—'} max=${newItem.maxSeleccion ?? '—'} | grupoId=${group.id}`,
+    });
+
     const currentItems = formData.promoItems || [];
     onPromoItemsChange([...currentItems, newItem]);
     setSelectedPromoGroup('');
     setPromoGroupName('');
     setPromoGroupPermitidos([]);
+    setPromoGroupMin('');
+    setPromoGroupMax('');
   };
 
   const handlePromoGroupItemNameChange = (uniqueId, newName) => {
@@ -124,6 +145,36 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
       const group = allProductGroups.find(g => g.id === item.grupoId);
       const groupArticleIds = group?.articulos || [];
       return { ...item, permitidos: togglePermitido(groupArticleIds, item.permitidos, articleId) };
+    });
+    onPromoItemsChange(updatedItems);
+  };
+
+  const handlePromoGroupItemMinChange = (uniqueId, value) => {
+    const updatedItems = (formData.promoItems || []).map(item => {
+      if (item.uniqueId !== uniqueId) return item;
+      const updated = { ...item };
+      const num = parseInt(value, 10);
+      if (value === '' || isNaN(num) || num <= 0) {
+        delete updated.minSeleccion;
+      } else {
+        updated.minSeleccion = num;
+      }
+      return updated;
+    });
+    onPromoItemsChange(updatedItems);
+  };
+
+  const handlePromoGroupItemMaxChange = (uniqueId, value) => {
+    const updatedItems = (formData.promoItems || []).map(item => {
+      if (item.uniqueId !== uniqueId) return item;
+      const updated = { ...item };
+      const num = parseInt(value, 10);
+      if (value === '' || isNaN(num) || num <= 0) {
+        delete updated.maxSeleccion;
+      } else {
+        updated.maxSeleccion = num;
+      }
+      return updated;
     });
     onPromoItemsChange(updatedItems);
   };
@@ -223,6 +274,17 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
     }, 0);
   }
 
+  // Costo estimado de la promo (calculado en tiempo real para mostrar en UI)
+  const promoCost = (formData.isPromo && (formData.promoItems || []).length > 0)
+    ? calcularCostoPromo(
+        formData.nombre || '',
+        formData.promoItems,
+        allArticles,
+        allRawMaterials,
+        allProductGroups
+      )
+    : null;
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -260,28 +322,39 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
           <div className="space-y-2">
             <Label htmlFor="costoTotalReceta" className="flex items-center gap-2">
               Precio Costo
-              {isHeredadoStock && (
+              {formData.isPromo && promoCost && (
+                <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium" title="Calculado automáticamente desde los componentes de la promo">
+                  <BookText size={10}/> Promo (auto)
+                </span>
+              )}
+              {!formData.isPromo && isHeredadoStock && (
                 <span className="text-[10px] text-blue-500 bg-blue-50 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium">
                   <Link2 size={10}/> Heredado
                 </span>
               )}
-              {isRecetaStock && (
+              {!formData.isPromo && isRecetaStock && (
                 <span className="text-[10px] text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium" title="Calculado automáticamente">
                   <BookText size={10}/> Receta
                 </span>
               )}
             </Label>
-            <Input 
-              id="costoTotalReceta" 
-              type="number" 
-              step="0.001" 
-              value={isRecetaStock ? calculatedRecetaCost.toFixed(3) : (formData.costoTotalReceta || '')} 
-              onChange={e => onFieldChange('costoTotalReceta', e.target.value)} 
+            <Input
+              id="costoTotalReceta"
+              type="number"
+              step="0.001"
+              value={
+                formData.isPromo && promoCost
+                  ? promoCost.costoEstimado.toFixed(3)
+                  : isRecetaStock
+                    ? calculatedRecetaCost.toFixed(3)
+                    : (formData.costoTotalReceta || '')
+              }
+              onChange={e => onFieldChange('costoTotalReceta', e.target.value)}
               placeholder="0.000"
-              required={isPropioStock}
-              disabled={isHeredadoStock || isRecetaStock}
-              className={(isHeredadoStock || isRecetaStock) ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}
-              readOnly={isRecetaStock}
+              required={isPropioStock && !formData.isPromo}
+              disabled={isHeredadoStock || isRecetaStock || (formData.isPromo && !!promoCost)}
+              className={(isHeredadoStock || isRecetaStock || (formData.isPromo && !!promoCost)) ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}
+              readOnly={isRecetaStock || (formData.isPromo && !!promoCost)}
             />
           </div>
         )}
@@ -412,6 +485,18 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
       {formData.isPromo && (
         <div className="p-4 border rounded-lg bg-gray-50 space-y-4">
           <h3 className="font-semibold text-lg">Contenido de la Promo</h3>
+
+          {/* [DIAG] Panel de diagnóstico temporal — remover cuando se confirme el fix */}
+          <div className="p-2 bg-yellow-50 border border-yellow-400 rounded text-xs font-mono space-y-1">
+            <p className="font-bold text-yellow-800">⚙ DIAGNÓSTICO (temporal)</p>
+            <p>promoItems en formulario: <span className="font-bold text-blue-700">{(formData.promoItems || []).length}</span></p>
+            {(formData.promoItems || []).map((item, i) => (
+              <p key={i} className="ml-2 text-gray-700">
+                [{i}] tipo={item.tipo || 'fijo'} | {item.tipo === 'grupo' ? `grupoId=${item.grupoId} min=${item.minSeleccion ?? '—'} max=${item.maxSeleccion ?? '—'}` : `codigo=${item.codigo} nombre=${item.nombre}`}
+              </p>
+            ))}
+            <p className="mt-1">grupos-productos cargados: <span className="font-bold text-blue-700">{allProductGroups.length}</span></p>
+          </div>
           <div className="space-y-2">
             {formData.promoItems && formData.promoItems.map((item) => {
               if (item.tipo === 'grupo') {
@@ -447,8 +532,35 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
                         </Button>
                       </div>
                     </div>
-                    <div className="pl-2">
-                      <p className="text-xs text-gray-500 mb-1">Productos que se podrán elegir:</p>
+                    <div className="pl-2 space-y-2">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <Label className="text-xs text-gray-600 whitespace-nowrap">Mín. a elegir:</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            value={item.minSeleccion ?? ''}
+                            onChange={(e) => handlePromoGroupItemMinChange(item.uniqueId, e.target.value)}
+                            className="w-16 h-7 text-xs"
+                            placeholder="—"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Label className="text-xs text-gray-600 whitespace-nowrap">Máx. a elegir:</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            value={item.maxSeleccion ?? ''}
+                            onChange={(e) => handlePromoGroupItemMaxChange(item.uniqueId, e.target.value)}
+                            className="w-16 h-7 text-xs"
+                            placeholder="—"
+                          />
+                        </div>
+                        {item.minSeleccion > 0 && item.maxSeleccion > 0 && item.minSeleccion > item.maxSeleccion && (
+                          <p className="text-xs text-red-600">El mínimo no puede ser mayor al máximo.</p>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500">Productos que se podrán elegir:</p>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
                         {groupArticles.map(article => (
                           <label key={article.id} className="flex items-center space-x-2 text-sm cursor-pointer">
@@ -509,6 +621,20 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
             </Button>
           </div>
 
+          {promoCost?.tieneGrupos && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <p className="text-sm font-semibold text-emerald-800 mb-1">Desglose de costo (grupos a elección)</p>
+              <div className="space-y-0.5 text-sm text-emerald-700">
+                <p>Costo fijo: <span className="font-medium">${promoCost.costoFijo.toFixed(2)}</span></p>
+                <p>Costo mínimo posible: <span className="font-medium">${promoCost.costoMinimo.toFixed(2)}</span></p>
+                <p>Costo máximo posible: <span className="font-medium">${promoCost.costoMaximo.toFixed(2)}</span></p>
+                <p className="text-xs text-emerald-600 pt-0.5">
+                  Precio costo guardado (promedio): <span className="font-semibold">${promoCost.costoEstimado.toFixed(2)}</span>
+                </p>
+              </div>
+            </div>
+          )}
+
           {allProductGroups.length > 0 && (
             <div className="border-t pt-3 space-y-2">
               <Label className="text-sm font-semibold">Agregar grupo de productos a elección</Label>
@@ -541,6 +667,37 @@ const ArticleFormFields = ({ formData, onFieldChange, onPromoItemsChange, onStoc
                         onChange={(e) => setPromoGroupName(e.target.value)}
                         className="h-8"
                       />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="promoGroupMin" className="text-xs text-gray-600 whitespace-nowrap">Mín. a elegir:</Label>
+                        <Input
+                          id="promoGroupMin"
+                          type="number"
+                          min="0"
+                          value={promoGroupMin}
+                          onChange={(e) => setPromoGroupMin(e.target.value)}
+                          className="w-16 h-7 text-xs"
+                          placeholder="—"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="promoGroupMax" className="text-xs text-gray-600 whitespace-nowrap">Máx. a elegir:</Label>
+                        <Input
+                          id="promoGroupMax"
+                          type="number"
+                          min="0"
+                          value={promoGroupMax}
+                          onChange={(e) => setPromoGroupMax(e.target.value)}
+                          className="w-16 h-7 text-xs"
+                          placeholder="—"
+                        />
+                      </div>
+                      {promoGroupMin !== '' && promoGroupMax !== '' &&
+                        parseInt(promoGroupMin) > 0 && parseInt(promoGroupMax) > 0 &&
+                        parseInt(promoGroupMin) > parseInt(promoGroupMax) && (
+                        <p className="text-xs text-red-600">El mínimo no puede ser mayor al máximo.</p>
+                      )}
                     </div>
                     <div>
                       <p className="text-xs text-gray-500 mb-1">Productos que se podrán elegir (vacío = todos):</p>

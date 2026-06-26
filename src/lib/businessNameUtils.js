@@ -6,11 +6,7 @@ import { getLocalId, getCurrentLocalId } from '@/lib/firebase/core';
  */
 export const getBusinessName = () => {
   const localId = getCurrentLocalId() || getLocalId();
-  
-  if (localId === '31915636') {
-    return 'IL CAPO GELATO';
-  }
-  
+  if (localId === '31915636') return 'IL CAPO GELATO';
   return 'LANYULINA';
 };
 

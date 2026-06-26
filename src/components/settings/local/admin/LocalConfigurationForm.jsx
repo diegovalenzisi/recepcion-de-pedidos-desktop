@@ -5,130 +5,109 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/use-toast';
-import { saveLocalConfiguration, fetchLocalConfiguration } from '@/lib/api/localConfigApi';
-import { Database, Save, Loader2, Server } from 'lucide-react';
+import { Database, Save, Loader2, RefreshCw } from 'lucide-react';
 
+// Configuración de Firebase y del local guardada en AppData/config/local-config.json.
+// NO va a Firebase. Se opera solo desde esta PC.
 const LocalConfigurationForm = () => {
   const [formData, setFormData] = useState({
-    numeroLocal: '',
-    firebaseDatabase: '',
-    firebaseStorage: '',
+    localId:       '',
+    businessName:  '',
+    adminUser:     '',
+    databaseURL:   '',
+    storageBucket: '',
+    apiKey:        '',
+    projectId:     '',
   });
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFetching, setIsFetching] = useState(false);
-  const [errors, setErrors] = useState({});
+  const [loading,  setLoading]  = useState(false);
+  const [fetching, setFetching] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
-    loadExistingConfiguration();
+    loadConfig();
   }, []);
 
-  const loadExistingConfiguration = async () => {
-    const storedLocalId = localStorage.getItem('localId');
-    if (!storedLocalId) {
-      return;
-    }
-
-    setIsFetching(true);
+  const loadConfig = async () => {
+    setFetching(true);
     try {
-      const result = await fetchLocalConfiguration(storedLocalId);
-      if (result.success && result.data) {
+      // Intenta leer desde disco (async, para obtener la versión más reciente)
+      const config = await window.electronAPI?.localConfig?.read?.();
+      if (config) {
         setFormData({
-          numeroLocal: result.data.numeroLocal || '',
-          firebaseDatabase: result.data.firebaseDatabase || '',
-          firebaseStorage: result.data.firebaseStorage || '',
+          localId:       config.localId       || localStorage.getItem('localId') || '',
+          businessName:  config.businessName  || '',
+          adminUser:     config.adminUser     || '',
+          databaseURL:   config.firebase?.databaseURL   || '',
+          storageBucket: config.firebase?.storageBucket || '',
+          apiKey:        config.firebase?.apiKey        || '',
+          projectId:     config.firebase?.projectId     || '',
         });
+      } else {
+        // Sin config guardada: precarga el localId desde localStorage
+        setFormData(prev => ({ ...prev, localId: localStorage.getItem('localId') || '' }));
       }
-    } catch (error) {
-      console.error('Error loading configuration:', error);
+    } catch (e) {
+      console.error('[LocalConfig] Error cargando:', e);
     } finally {
-      setIsFetching(false);
+      setFetching(false);
     }
   };
 
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    if (errors[field]) {
-      setErrors(prev => ({
-        ...prev,
-        [field]: ''
-      }));
-    }
-  };
-
-  const validateForm = () => {
-    const newErrors = {};
-
-    if (!formData.numeroLocal.trim()) {
-      newErrors.numeroLocal = 'El número de local es obligatorio';
-    }
-
-    if (!formData.firebaseDatabase.trim()) {
-      newErrors.firebaseDatabase = 'La dirección de base de datos es obligatoria';
-    } else if (!isValidUrl(formData.firebaseDatabase)) {
-      newErrors.firebaseDatabase = 'Ingrese una URL válida';
-    }
-
-    if (!formData.firebaseStorage.trim()) {
-      newErrors.firebaseStorage = 'La dirección de storage es obligatoria';
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const isValidUrl = (urlString) => {
-    try {
-      const url = new URL(urlString);
-      return url.protocol === 'http:' || url.protocol === 'https:';
-    } catch {
-      return false;
-    }
+  const handleChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const handleSave = async () => {
-    if (!validateForm()) {
-      toast({
-        variant: "destructive",
-        title: "Error de validación",
-        description: "Por favor, corrija los errores en el formulario.",
-      });
+    if (!formData.localId.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'El ID de local es obligatorio.' });
+      return;
+    }
+    if (!formData.databaseURL.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'La URL de la base de datos es obligatoria.' });
+      return;
+    }
+    if (!formData.apiKey.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'La API Key de Firebase es obligatoria.' });
+      return;
+    }
+    if (!formData.projectId.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'El Project ID de Firebase es obligatorio.' });
       return;
     }
 
-    setIsLoading(true);
+    setLoading(true);
     try {
-      const result = await saveLocalConfiguration(
-        formData.numeroLocal.trim(),
-        formData.firebaseDatabase.trim(),
-        formData.firebaseStorage.trim()
-      );
+      const config = {
+        version:      1,
+        localId:      formData.localId.trim(),
+        businessName: formData.businessName.trim() || undefined,
+        adminUser:    formData.adminUser.trim()    || undefined,
+        firebase: {
+          databaseURL:   formData.databaseURL.trim(),
+          storageBucket: formData.storageBucket.trim() || undefined,
+          apiKey:        formData.apiKey.trim(),
+          projectId:     formData.projectId.trim(),
+        },
+      };
 
-      if (result.success) {
+      const result = await window.electronAPI?.localConfig?.write?.(config);
+      if (result?.ok) {
         toast({
-          title: "Configuración guardada",
-          description: "La configuración del local se guardó correctamente.",
-          variant: "default",
+          title: 'Configuración guardada',
+          description: 'Se guardó en esta PC. Reiniciá la aplicación para aplicar los cambios.',
         });
       } else {
-        throw new Error(result.error || 'Error al guardar');
+        throw new Error(result?.error || 'Error desconocido');
       }
-    } catch (error) {
-      console.error('Error saving configuration:', error);
-      toast({
-        variant: "destructive",
-        title: "Error al guardar",
-        description: error.message || "No se pudo guardar la configuración del local.",
-      });
+    } catch (e) {
+      console.error('[LocalConfig] Error guardando:', e);
+      toast({ variant: 'destructive', title: 'Error al guardar', description: e.message });
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  if (isFetching) {
+  if (fetching) {
     return (
       <Card className="border-primary/20 bg-primary/5">
         <CardContent className="pt-6">
@@ -145,100 +124,117 @@ const LocalConfigurationForm = () => {
     <Card className="border-primary/20 bg-primary/5">
       <CardHeader>
         <CardTitle className="flex items-center text-primary">
-          <Server className="mr-2 h-5 w-5" />
-          Configuración de Base de Datos Local
+          <Database className="mr-2 h-5 w-5" />
+          Configuración Firebase de esta PC
         </CardTitle>
         <CardDescription>
-          Configure las URLs de Firebase para este local. Esta información se guardará en la base de datos central.
+          Se guarda solo en esta computadora ({'%'}APPDATA%\Recepción de Pedidos\config\local-config.json).
+          Permite usar un local diferente a los preconfigurados. Reiniciá la app después de guardar.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="numeroLocal" className="text-sm font-medium">
-            Número de Local
-          </Label>
-          <Input
-            id="numeroLocal"
-            type="text"
-            placeholder="Ej: 31915636"
-            value={formData.numeroLocal}
-            onChange={(e) => handleInputChange('numeroLocal', e.target.value)}
-            className={errors.numeroLocal ? 'border-red-500' : ''}
-            disabled={isLoading}
-          />
-          {errors.numeroLocal && (
-            <p className="text-xs text-red-500">{errors.numeroLocal}</p>
-          )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="lc-localId">ID de local *</Label>
+            <Input
+              id="lc-localId"
+              placeholder="Ej: 12345678"
+              value={formData.localId}
+              onChange={(e) => handleChange('localId', e.target.value)}
+              disabled={loading}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="lc-businessName">Nombre del negocio</Label>
+            <Input
+              id="lc-businessName"
+              placeholder="Ej: HELADERÍA EL SOL"
+              value={formData.businessName}
+              onChange={(e) => handleChange('businessName', e.target.value)}
+              disabled={loading}
+            />
+          </div>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="firebaseDatabase" className="text-sm font-medium">
-            Dirección de Base de Datos Firebase
-          </Label>
+          <Label htmlFor="lc-databaseURL">Firebase Database URL *</Label>
           <Input
-            id="firebaseDatabase"
-            type="url"
-            placeholder="https://tu-base-de-datos.firebaseio.com"
-            value={formData.firebaseDatabase}
-            onChange={(e) => handleInputChange('firebaseDatabase', e.target.value)}
-            className={errors.firebaseDatabase ? 'border-red-500' : ''}
-            disabled={isLoading}
+            id="lc-databaseURL"
+            placeholder="https://mi-proyecto-default-rtdb.firebaseio.com"
+            value={formData.databaseURL}
+            onChange={(e) => handleChange('databaseURL', e.target.value)}
+            disabled={loading}
           />
-          {errors.firebaseDatabase && (
-            <p className="text-xs text-red-500">{errors.firebaseDatabase}</p>
-          )}
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="firebaseStorage" className="text-sm font-medium">
-            Dirección de Storage Firebase
-          </Label>
-          <Input
-            id="firebaseStorage"
-            type="text"
-            placeholder="tu-bucket.firebasestorage.app"
-            value={formData.firebaseStorage}
-            onChange={(e) => handleInputChange('firebaseStorage', e.target.value)}
-            className={errors.firebaseStorage ? 'border-red-500' : ''}
-            disabled={isLoading}
-          />
-          {errors.firebaseStorage && (
-            <p className="text-xs text-red-500">{errors.firebaseStorage}</p>
-          )}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="lc-apiKey">Firebase API Key *</Label>
+            <Input
+              id="lc-apiKey"
+              placeholder="AIzaSy..."
+              value={formData.apiKey}
+              onChange={(e) => handleChange('apiKey', e.target.value)}
+              disabled={loading}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="lc-projectId">Firebase Project ID *</Label>
+            <Input
+              id="lc-projectId"
+              placeholder="mi-proyecto"
+              value={formData.projectId}
+              onChange={(e) => handleChange('projectId', e.target.value)}
+              disabled={loading}
+            />
+          </div>
         </div>
 
-        <div className="pt-4">
-          <Button
-            onClick={handleSave}
-            disabled={isLoading}
-            className="w-full sm:w-auto"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Guardando...
-              </>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="lc-storageBucket">Storage Bucket</Label>
+            <Input
+              id="lc-storageBucket"
+              placeholder="mi-proyecto.firebasestorage.app"
+              value={formData.storageBucket}
+              onChange={(e) => handleChange('storageBucket', e.target.value)}
+              disabled={loading}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="lc-adminUser">Usuario admin (opcional)</Label>
+            <Input
+              id="lc-adminUser"
+              placeholder="Ej: MiUsuario"
+              value={formData.adminUser}
+              onChange={(e) => handleChange('adminUser', e.target.value)}
+              disabled={loading}
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <Button onClick={handleSave} disabled={loading} className="flex-1 sm:flex-none">
+            {loading ? (
+              <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Guardando...</>
             ) : (
-              <>
-                <Save className="mr-2 h-4 w-4" />
-                Guardar Configuración
-              </>
+              <><Save className="mr-2 h-4 w-4" />Guardar en esta PC</>
             )}
+          </Button>
+          <Button variant="outline" onClick={loadConfig} disabled={loading || fetching}>
+            <RefreshCw className="mr-2 h-4 w-4" />Recargar
           </Button>
         </div>
 
-        <div className="rounded-md bg-blue-50 border border-blue-200 p-3 mt-4">
-          <div className="flex items-start">
-            <Database className="h-5 w-5 text-blue-600 mt-0.5 mr-2 flex-shrink-0" />
-            <div className="text-xs text-blue-800">
-              <p className="font-medium mb-1">Información importante:</p>
-              <ul className="list-disc list-inside space-y-1 ml-2">
-                <li>Esta configuración se guardará en la base de datos central</li>
-                <li>El número de local debe ser único para cada sucursal</li>
-                <li>Las URLs de Firebase deben corresponder al proyecto correcto</li>
-              </ul>
-            </div>
-          </div>
+        <div className="rounded-md bg-blue-50 border border-blue-200 p-3 mt-2">
+          <p className="text-xs text-blue-800 font-medium mb-1">Importante:</p>
+          <ul className="text-xs text-blue-800 list-disc list-inside space-y-0.5 ml-2">
+            <li>Esta configuración es solo para esta PC. No se sube a Firebase.</li>
+            <li>Tiene prioridad sobre los valores preconfigurados de la app.</li>
+            <li>Se borra al usar "Local nuevo" para cambiar de local.</li>
+            <li>Campos con * son obligatorios para nuevos locales.</li>
+          </ul>
         </div>
       </CardContent>
     </Card>

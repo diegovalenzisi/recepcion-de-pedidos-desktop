@@ -1,0 +1,58 @@
+appId: com.heladeria.recepcion-pedidos-desktop
+productName: "Recepción de Pedidos"
+copyright: "Copyright © 2025 Heladería"
+
+directories:
+  output: release
+  buildResources: build-resources
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+extraResources:
+  - from: backend
+    to: backend
+    filter:
+      - "**/*"
+      - "!.env"
+      - "!.env.*"
+      - "!.gitignore"
+      - "!.nvmrc"
+  - from: resources/facturacion
+    to: facturacion
+    filter:
+      - "**/*"
+  - from: resources/node-afip
+    to: node-afip
+    filter:
+      - "**/*"
+  - from: build/icon.ico
+    to: build/icon.ico
+
+asar: true
+compression: store
+icon: build/icon.ico
+
+win:
+  icon: build/icon.ico
+  artifactName: "DLVSistema-Recepcion-de-pedidos-desktop-BASE-FULL-1.0.0.${ext}"
+  target:
+    - target: nsis
+      arch:
+        - x64
+  sign: null
+  forceCodeSigning: false
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "Recepción de Pedidos"
+  runAfterFinish: true
+
+publish: null

@@ -101,7 +101,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
 
     if (selectedShift.estado === 'cerrado') {
         Promise.all([
-            fetchCashRegisterData(parseDateString(selectedShift.date), selectedShift.id, false),
+            fetchCashRegisterData(parseDateString(selectedShift.date), selectedShift.id),
             fetchSalesForShift(selectedShift)
         ]).then(([fetchedCashData, fetchedSales]) => {
             if (isMounted) {
