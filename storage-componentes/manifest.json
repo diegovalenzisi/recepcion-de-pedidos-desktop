@@ -1,0 +1,33 @@
+{
+  "version": "1",
+  "updatedAt": "2026-06-26",
+  "components": {
+    "nodeAfip": {
+      "label": "Node AFIP v16",
+      "version": "16.20.2",
+      "file": "node-afip-v16.zip",
+      "sha256": "1fc661093284b85a9368c87535a6138cd24ee9835b374010937ad7392103c189",
+      "sizeMB": 22.6,
+      "required": true,
+      "destDir": "node-afip"
+    },
+    "openssl": {
+      "label": "OpenSSL Win64",
+      "version": "3.5.1",
+      "file": "openssl-win64.zip",
+      "sha256": "552d77006aa5b2b2c43ae69a0d7c39c9912031521fe85a0c5b24be83edf4f9dd",
+      "sizeMB": 2.9,
+      "required": true,
+      "destDir": "tools/openssl"
+    },
+    "facturacionRuntime": {
+      "label": "Runtime Facturación AFIP",
+      "version": "1",
+      "file": "facturacion-runtime-v1.zip",
+      "sha256": "8a7655d4b5b2485bfd92c221e081a4653e300380b1b0975c2bb22f91871c3a0d",
+      "sizeMB": 20.9,
+      "required": true,
+      "destDir": "facturacion-runtime"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  Header set X-Powered-By "Hostinger Horizons"
+
+  # Por defecto no cachear: index.html, sw.js, manifest.json y demás archivos
+  # de la raíz deben revalidarse siempre para que los locales no se queden
+  # con una versión vieja de la app o del Service Worker.
+  Header set Cache-Control "no-cache, no-store, must-revalidate"
+  Header set Pragma "no-cache"
+  Header set Expires "0"
+
+  # Los assets de Vite llevan hash en el nombre (ej: index-abc123.js), por lo
+  # que pueden cachearse de forma agresiva por mucho tiempo.
+  <If "%{REQUEST_URI} =~ m#^/assets/.*$#">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+    Header unset Pragma
+    Header unset Expires
+  </If>
+</IfModule>

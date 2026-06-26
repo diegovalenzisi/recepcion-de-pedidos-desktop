@@ -1,0 +1,61 @@
+# Dependencias
+node_modules/
+resources/facturacion/node_modules/
+backend/node_modules/
+
+# Builds / instaladores
+dist/
+build/
+release/
+out/
+*.exe
+*.msi
+*.zip
+*.7z
+*.nsis.7z
+
+# Logs
+*.log
+logs/
+
+# Variables de entorno
+.env
+.env.*
+backend.env
+!.env.example
+!*.env.example
+
+# Facturación / AFIP / ARCA - NO SUBIR
+*.key
+*.crt
+*.pem
+*.pfx
+TA.xml
+serviceAccount.json
+serviceAccountKey.json
+*serviceAccount*.json
+facturacion-config.json
+
+# Mercado Pago - NO SUBIR
+mp-accounts.json
+mercadopago-config.json
+
+# Configuración local
+local-config.json
+config/local-config.json
+
+# Carpetas locales sensibles
+facturacion/ri/cert/
+facturacion/mono/
+mercadopago/
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Claude Code (configuración local, no subir)
+.claude/

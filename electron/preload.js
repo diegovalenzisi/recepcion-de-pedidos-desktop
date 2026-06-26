@@ -1,0 +1,99 @@
+'use strict';
+
+const { contextBridge, ipcRenderer } = require('electron');
+
+// window.electronAPI — API de gestión de la app (autostart, versión, etc.)
+contextBridge.exposeInMainWorld('electronAPI', {
+  getAppVersion: () => ipcRenderer.invoke('app-version'),
+  getBackendStatus: () => ipcRenderer.invoke('backend-status'),
+  getBackendPort: () => ipcRenderer.invoke('backend-port'),
+  getAutostart: () => ipcRenderer.invoke('autostart-get'),
+  setAutostart: (enable) => ipcRenderer.invoke('autostart-set', enable),
+  openUserDataFolder: () => ipcRenderer.invoke('open-userData-folder'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  downloadAndInstall: (url, fileName) => ipcRenderer.invoke('download-and-install', url, fileName),
+  onDownloadProgress: (callback) => {
+    const handler = (_e, data) => callback(data);
+    ipcRenderer.on('download-progress', handler);
+    return () => ipcRenderer.removeListener('download-progress', handler);
+  },
+  mpAccounts: {
+    read: () => ipcRenderer.invoke('mp-accounts:read'),
+    write: (accounts) => ipcRenderer.invoke('mp-accounts:write', accounts),
+  },
+  backendRestart: () => ipcRenderer.invoke('backend:restart'),
+  localResetForNew: () => ipcRenderer.invoke('local:reset-for-new'),
+  getMachineId: () => ipcRenderer.invoke('machine-id:get'),
+  systemCheck:  () => ipcRenderer.invoke('app:system-check'),
+  mpBackendHealth:    ()       => ipcRenderer.invoke('mp:backend-health'),
+  mpRecentPayments:   (horas)  => ipcRenderer.invoke('mp:recent-payments', horas),
+  mpBackendDiag:      ()       => ipcRenderer.invoke('mp:backend-diag'),
+  mpRepair:           ()       => ipcRenderer.invoke('mp:repair'),
+  backend: {
+    genEnvFromSA: (mpToken) => ipcRenderer.invoke('backend:gen-env-from-sa', mpToken),
+    setMpToken:   (token)   => ipcRenderer.invoke('backend:set-mp-token', token),
+  },
+  facturacion: {
+    // Configuración de cuentas
+    pickFile:      (filters) => ipcRenderer.invoke('facturacion:pick-file', filters),
+    initAccount:   (tipo, cuentaId) => ipcRenderer.invoke('facturacion:init-account', tipo, cuentaId),
+    writeEnv:      (accountDir, envData) => ipcRenderer.invoke('facturacion:write-env', accountDir, envData),
+    copyFile:      (srcPath, accountDir, destRelative) => ipcRenderer.invoke('facturacion:copy-file', srcPath, accountDir, destRelative),
+    getAccountDir: (tipo, cuentaId) => ipcRenderer.invoke('facturacion:account-dir', tipo, cuentaId),
+    // Archivos binarios (para sync de certs via Firebase Storage)
+    readFileBase64:  (filePath) => ipcRenderer.invoke('facturacion:read-file-base64', filePath),
+    writeBinaryFile: (destPath, base64Data) => ipcRenderer.invoke('facturacion:write-binary-file', destPath, base64Data),
+    downloadFile:    (url, destPath) => ipcRenderer.invoke('facturacion:download-file', url, destPath),
+    diagnose:        (tipo, cuentaId) => ipcRenderer.invoke('facturacion:diagnose', tipo, cuentaId),
+    openLog:         () => ipcRenderer.invoke('facturacion:open-log'),
+    // Dependencias
+    installDeps:  () => ipcRenderer.invoke('facturacion:install-deps'),
+    depsOk:       () => ipcRenderer.invoke('facturacion:deps-ok'),
+    filesOk:      (tipo, cuentaId) => ipcRenderer.invoke('facturacion:files-ok', tipo, cuentaId),
+    nodeVersion:  () => ipcRenderer.invoke('facturacion:node-version'),
+    // Proceso
+    start:     (key, accountDir) => ipcRenderer.invoke('facturacion:start', key, accountDir),
+    stop:      (key) => ipcRenderer.invoke('facturacion:stop', key),
+    restart:   (key, accountDir) => ipcRenderer.invoke('facturacion:restart', key, accountDir),
+    getStatus: (key) => ipcRenderer.invoke('facturacion:status', key),
+    getLogs:   (key) => ipcRenderer.invoke('facturacion:logs', key),
+    // Config persistente
+    readConfig:  () => ipcRenderer.invoke('facturacion:config:read'),
+    writeConfig: (config) => ipcRenderer.invoke('facturacion:config:write', config),
+    // Eventos en tiempo real
+    onLog: (callback) => {
+      const handler = (_e, data) => callback(data);
+      ipcRenderer.on('facturacion:log', handler);
+      return () => ipcRenderer.removeListener('facturacion:log', handler);
+    },
+    onStatus: (callback) => {
+      const handler = (_e, data) => callback(data);
+      ipcRenderer.on('facturacion:status', handler);
+      return () => ipcRenderer.removeListener('facturacion:status', handler);
+    },
+    onInstallLog: (callback) => {
+      const handler = (_e, data) => callback(data);
+      ipcRenderer.on('facturacion:install-log', handler);
+      return () => ipcRenderer.removeListener('facturacion:install-log', handler);
+    },
+  },
+  components: {
+    check:   ()           => ipcRenderer.invoke('components:check'),
+    install: (keys)       => ipcRenderer.invoke('components:install', keys),
+    onProgress: (callback) => {
+      const handler = (_e, data) => callback(data);
+      ipcRenderer.on('components:progress', handler);
+      return () => ipcRenderer.removeListener('components:progress', handler);
+    },
+  },
+  isElectron: true,
+});
+
+// window.electron — compatibilidad con el código existente de impresión
+// electronPrint.js usa: window.electron.printDirect(htmlContent, printerName, options)
+contextBridge.exposeInMainWorld('electron', {
+  printDirect: (htmlContent, printerName, options = {}) =>
+    ipcRenderer.invoke('print-direct', htmlContent, printerName, options),
+
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+});
