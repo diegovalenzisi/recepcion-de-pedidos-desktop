@@ -1385,8 +1385,10 @@ function setupIPC() {
 
   // Verificar dependencias: node accesible + node_modules en userData
   ipcMain.handle('facturacion:deps-ok', () => {
-    const nodeOk    = isDev || getNodeBin() !== null;
-    const modulesOk = existsSync(path.join(FACTURACION_USER_DIR(), 'node_modules', 'firebase-admin'));
+    const nodeOk    = isDev || getNodeAfipBin() !== null;
+    const ud        = app.getPath('userData');
+    const modulesOk = existsSync(path.join(FACTURACION_USER_DIR(), 'node_modules', 'firebase-admin')) ||
+                      existsSync(path.join(ud, 'facturacion-runtime', 'node_modules', 'firebase-admin'));
     return nodeOk && modulesOk;
   });
 
@@ -1403,13 +1405,13 @@ function setupIPC() {
 
   // Versión del Node (bundleado o manual)
   ipcMain.handle('facturacion:node-version', () => {
-    const bin = getNodeBin();
+    const bin = getNodeAfipBin();
     if (!bin) {
       const userData = app.getPath('userData');
       return {
         ok: false, version: null, bin: null,
-        missingPath: path.join(userData, 'node', 'node.exe'),
-        hint: `Copiá node.exe al deps pack: ${path.join(userData, 'node', 'node.exe')}`,
+        missingPath: path.join(userData, 'node-afip', 'node.exe'),
+        hint: `Instalá los componentes desde Configuración → Sistema`,
       };
     }
     try {
@@ -1485,15 +1487,18 @@ function setupIPC() {
     // SA del RI (para poder derivar backend.env)
     const riSaPath = path.join(riDir, 'serviceAccount.json');
 
-    const nodeBin      = getNodeBin();
+    const nodeBin      = getNodeAfipBin();
     const nodeOk       = isDev || nodeBin !== null;
-    const nodePath     = nodeBin ?? path.join(userData, 'node', 'node.exe');
-    const modulesOk    = existsSync(path.join(facturDir, 'node_modules', 'firebase-admin'));
-    const depPackPath  = path.join(userData, 'facturacion', 'node_modules');
+    const nodePath     = nodeBin ?? path.join(userData, 'node-afip', 'node.exe');
+    const runtimeMods  = path.join(userData, 'facturacion-runtime', 'node_modules');
+    const legacyMods   = path.join(facturDir, 'node_modules');
+    const modulesOk    = existsSync(path.join(legacyMods, 'firebase-admin')) ||
+                         existsSync(path.join(runtimeMods, 'firebase-admin'));
+    const depPackPath  = existsSync(path.join(legacyMods, 'firebase-admin')) ? legacyMods : runtimeMods;
 
     const result = {
       nodeBundled:   chk(nodeOk,    'Node.js (deps pack)', isDev ? '(dev: sistema)' : nodePath),
-      afipModules:   chk(modulesOk, 'Módulos AFIP',        modulesOk ? depPackPath : `FALTA → copiar a: ${depPackPath}`),
+      afipModules:   chk(modulesOk, 'Módulos AFIP',        modulesOk ? depPackPath : `FALTA → instalar desde Configuración → Sistema`),
       afipRI: chk(
         riInitialized &&
           existsSync(path.join(riDir, '.env')) &&
@@ -1515,8 +1520,8 @@ function setupIPC() {
         riNotInitialized: !riInitialized,
         userData,
         depsPackPaths: {
-          nodeExe:     path.join(userData, 'node', 'node.exe'),
-          nodeModules: path.join(userData, 'facturacion', 'node_modules'),
+          nodeExe:     path.join(userData, 'node-afip', 'node.exe'),
+          nodeModules: path.join(userData, 'facturacion-runtime', 'node_modules'),
         },
       }
     };
