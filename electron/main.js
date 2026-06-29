@@ -754,45 +754,52 @@ async function handlePrint(_event, htmlContent, printerName, options = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Chequeo de actualizaciones (GitHub API)
+// Chequeo de actualizaciones (Firebase Storage / latest.json)
 // ---------------------------------------------------------------------------
+const LATEST_JSON_URL = 'https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2Flatest.json?alt=media';
+
+function newerVersion(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return true;
+    if ((pa[i] || 0) < (pb[i] || 0)) return false;
+  }
+  return false;
+}
+
 function checkForUpdates() {
   if (isDev) return;
-  const OWNER = 'tu-usuario-github';
-  const REPO = 'recepcion-de-pedidos-desktop';
   const currentVersion = app.getVersion();
 
-  https
-    .get(
-      {
-        hostname: 'api.github.com',
-        path: `/repos/${OWNER}/${REPO}/releases/latest`,
-        headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' },
-        timeout: 10000,
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk) => { data += chunk; });
-        res.on('end', () => {
-          try {
-            const release = JSON.parse(data);
-            const latest = (release.tag_name || '').replace(/^v/, '');
-            if (latest && latest !== currentVersion) {
-              const choice = dialog.showMessageBoxSync(mainWindow, {
-                type: 'info',
-                title: 'Actualización disponible',
-                message: `Nueva versión: v${latest}`,
-                detail: `Instalada: v${currentVersion}. ¿Querés descargarla?`,
-                buttons: ['Descargar', 'Ahora no'],
-                defaultId: 0,
-              });
-              if (choice === 0 && release.html_url) shell.openExternal(release.html_url);
-            }
-          } catch { /* silencioso */ }
-        });
+  const doGet = (url, redirects = 0) => {
+    if (redirects > 5) return;
+    const mod = url.startsWith('https') ? https : http;
+    mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 10000 }, (res) => {
+      if ([301, 302, 307].includes(res.statusCode) && res.headers.location) {
+        doGet(res.headers.location, redirects + 1);
+        return;
       }
-    )
-    .on('error', () => { /* sin red — silencioso */ });
+      if (res.statusCode !== 200) return;
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const info = JSON.parse(data);
+          if (!info.latest || !info.installerUrl) return;
+          if (!newerVersion(info.latest, currentVersion)) return;
+          mainWindow?.webContents?.send('update:available', {
+            version:      info.latest,
+            installerUrl: info.installerUrl,
+            sha256:       info.sha256 || null,
+            fileName:     `Recepcion-de-Pedidos-Setup-${info.latest}.exe`,
+          });
+        } catch { /* silencioso */ }
+      });
+    }).on('error', () => { /* sin red — silencioso */ });
+  };
+
+  doGet(LATEST_JSON_URL);
 }
 
 // ---------------------------------------------------------------------------
@@ -861,8 +868,8 @@ function setupIPC() {
     } catch { /* URL inválida */ }
   });
 
-  // Descarga el instalador con progreso real y lo ejecuta en modo silencioso (/S)
-  ipcMain.handle('download-and-install', (_e, downloadUrl, fileName) => {
+  // Descarga el instalador con progreso real, verifica SHA256 opcional y lo ejecuta
+  ipcMain.handle('download-and-install', (_e, downloadUrl, fileName, sha256) => {
     const tmpDir = app.getPath('temp');
     const dest = path.join(tmpDir, fileName || 'update-setup.exe');
 
@@ -901,8 +908,22 @@ function setupIPC() {
           });
 
           res.on('end', () => {
-            file.close(() => {
+            file.close(async () => {
               sendProgress(100);
+              if (sha256) {
+                try {
+                  const fileHash = await computeSha256File(dest);
+                  if (fileHash.toLowerCase() !== sha256.toLowerCase()) {
+                    unlink(dest, () => {});
+                    reject(new Error('El instalador descargado no pasó la verificación de integridad (SHA256). El archivo puede estar corrupto. Intentá de nuevo.'));
+                    return;
+                  }
+                } catch (hashErr) {
+                  unlink(dest, () => {});
+                  reject(hashErr);
+                  return;
+                }
+              }
               // Sin /S: el installer oneClick muestra una barra de progreso breve
               // y relanza la app automáticamente (runAfterFinish: true en nsis).
               // Con /S la pantalla de finalización se saltea y runAfterFinish nunca dispara.

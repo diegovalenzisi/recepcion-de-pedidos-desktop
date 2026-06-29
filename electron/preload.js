@@ -11,11 +11,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAutostart: (enable) => ipcRenderer.invoke('autostart-set', enable),
   openUserDataFolder: () => ipcRenderer.invoke('open-userData-folder'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  downloadAndInstall: (url, fileName) => ipcRenderer.invoke('download-and-install', url, fileName),
+  downloadAndInstall: (url, fileName, sha256) => ipcRenderer.invoke('download-and-install', url, fileName, sha256),
   onDownloadProgress: (callback) => {
     const handler = (_e, data) => callback(data);
     ipcRenderer.on('download-progress', handler);
     return () => ipcRenderer.removeListener('download-progress', handler);
+  },
+  onUpdateAvailable: (callback) => {
+    const handler = (_e, data) => callback(data);
+    ipcRenderer.on('update:available', handler);
+    return () => ipcRenderer.removeListener('update:available', handler);
   },
   mpAccounts: {
     read: () => ipcRenderer.invoke('mp-accounts:read'),

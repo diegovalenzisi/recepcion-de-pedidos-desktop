@@ -1,0 +1,7 @@
+{
+  "latest": "1.3.23",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.23%2FRecepcion-de-Pedidos-Setup-1.3.23.exe?alt=media",
+  "sha256": "b153cf0cff6478b6af82f84323b48eb99801109246075801df20487acd272b0a",
+  "mandatory": false,
+  "notes": "Versión 1.3.23 — actualizador cambiado para consultar latest.json desde Firebase Storage"
+}

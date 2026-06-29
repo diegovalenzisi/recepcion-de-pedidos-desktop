@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
 import { Toaster } from '@/components/ui/toaster';
@@ -213,6 +213,30 @@ function AppContent() {
     if (!window.electronAPI?.onDownloadProgress) return;
     const cleanup = window.electronAPI.onDownloadProgress((data) => {
       setDownloadProgress(data?.pct ?? 0);
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  // Ref para leer updateStatus sin capturar valor viejo en el closure
+  const updateStatusRef = useRef(updateStatus);
+  useEffect(() => { updateStatusRef.current = updateStatus; }, [updateStatus]);
+
+  // Listener para actualizaciones desde main process vía latest.json (Firebase Storage)
+  useEffect(() => {
+    if (!window.electronAPI?.onUpdateAvailable) return;
+    const cleanup = window.electronAPI.onUpdateAvailable(async (data) => {
+      if (updateStatusRef.current !== 'idle' && updateStatusRef.current !== 'done') return;
+      const { version, installerUrl, sha256, fileName } = data;
+      setUpdateInfo({ version, url: installerUrl, nombreArchivo: fileName });
+      setUpdateStatus('downloading');
+      setDownloadProgress(0);
+      try {
+        await window.electronAPI.downloadAndInstall(installerUrl, fileName, sha256);
+        setUpdateStatus('done');
+      } catch (e) {
+        console.error('[update:available]', e);
+        setUpdateStatus('error');
+      }
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
