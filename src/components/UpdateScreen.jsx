@@ -1,10 +1,11 @@
 import React from 'react';
-import { Loader2, Download, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Loader2, Download, RefreshCw, AlertTriangle, ArrowDownCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 
-const UpdateScreen = ({ status, info, downloadProgress = 0, onSkip, onRetry }) => {
+const UpdateScreen = ({ status, info, mandatory = false, downloadProgress = 0, onUpdate, onSkip, onRetry }) => {
   const isChecking = status === 'checking';
+  const isAvailable = status === 'available';
   const isDownloading = status === 'downloading';
   const isError = status === 'error';
 
@@ -16,6 +17,10 @@ const UpdateScreen = ({ status, info, downloadProgress = 0, onSkip, onRetry }) =
         <div className="flex justify-center">
           {isError ? (
             <AlertTriangle className="h-16 w-16 text-red-500" />
+          ) : isAvailable ? (
+            <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
+              <ArrowDownCircle className="h-9 w-9 text-primary" />
+            </div>
           ) : (
             <div className="relative h-16 w-16">
               <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center">
@@ -32,18 +37,30 @@ const UpdateScreen = ({ status, info, downloadProgress = 0, onSkip, onRetry }) =
         {/* Título y descripción */}
         <div>
           <h2 className="text-2xl font-bold text-gray-800 mb-2">
-            {isChecking && 'Verificando actualizaciones...'}
+            {isChecking && 'Buscando actualizaciones...'}
+            {isAvailable && (mandatory ? 'Actualización obligatoria' : 'Actualización disponible')}
             {isDownloading && 'Descargando actualización'}
             {isError && 'Error al actualizar'}
           </h2>
+
+          {isChecking && (
+            <p className="text-gray-400 text-sm">Un momento...</p>
+          )}
+
+          {isAvailable && (
+            <p className="text-gray-500 text-sm">
+              {mandatory
+                ? 'Hay una actualización obligatoria disponible. Debés actualizar para continuar.'
+                : `Hay una nueva versión disponible${info?.version ? ` (${info.version})` : ''}. Podés actualizar ahora o continuar sin actualizar.`}
+            </p>
+          )}
+
           {isDownloading && info?.version && (
             <p className="text-gray-500 text-sm">
               Versión {info.version} disponible. La aplicación se cerrará y se instalará automáticamente.
             </p>
           )}
-          {isChecking && (
-            <p className="text-gray-400 text-sm">Un momento...</p>
-          )}
+
           {isError && (
             <p className="text-gray-500 text-sm">
               No se pudo descargar la actualización. Verificá la conexión a internet.
@@ -59,6 +76,22 @@ const UpdateScreen = ({ status, info, downloadProgress = 0, onSkip, onRetry }) =
           </div>
         )}
 
+        {/* Botones cuando hay una actualización disponible (antes del login) */}
+        {isAvailable && (
+          <div className="flex gap-3 justify-center">
+            {onUpdate && (
+              <Button onClick={onUpdate} className="bg-primary text-white">
+                <Download className="h-4 w-4 mr-2" /> Actualizar ahora
+              </Button>
+            )}
+            {!mandatory && onSkip && (
+              <Button variant="outline" onClick={onSkip}>
+                Continuar sin actualizar
+              </Button>
+            )}
+          </div>
+        )}
+
         {/* Botones en caso de error */}
         {isError && (
           <div className="flex gap-3 justify-center">
@@ -67,7 +100,7 @@ const UpdateScreen = ({ status, info, downloadProgress = 0, onSkip, onRetry }) =
                 <RefreshCw className="h-4 w-4 mr-2" /> Reintentar
               </Button>
             )}
-            {onSkip && (
+            {!mandatory && onSkip && (
               <Button variant="outline" onClick={onSkip}>
                 Continuar sin actualizar
               </Button>

@@ -140,6 +140,14 @@ const OrderDetailModal = ({
     }
   }, [orderData, isOpen]);
 
+  // RETIRO orders can be delivered without going through EN DELIVERY (no deliverer required).
+  // ENVIO orders still require EN DELIVERY (i.e. an assigned deliverer) before ENTREGADO.
+  const canMarkDelivered = () => orderData?.status?.main === 'EN DELIVERY' || formData.type === 'RETIRO';
+
+  const handleDeliveryModeChange = (newType) => {
+    setFormData(prev => ({ ...prev, type: newType }));
+  };
+
   const handleChange = (section, field, value) => {
     setFormData(prev => {
         const updatedSection = { ...prev[section], [field]: value };
@@ -160,8 +168,8 @@ const OrderDetailModal = ({
   };
 
   const handleStatusChange = (newStatus) => {
-      if (newStatus === 'ENTREGADO' && orderData.status?.main !== 'EN DELIVERY') {
-          return; // Pre-flight validation
+      if (newStatus === 'ENTREGADO' && !canMarkDelivered()) {
+          return; // Pre-flight validation (RETIRO bypasses EN DELIVERY requirement)
       }
       
       setFormData(prev => {
@@ -234,7 +242,7 @@ const OrderDetailModal = ({
         return;
     }
     
-    if (formData.status === 'ENTREGADO' && orderData.status?.main !== 'EN DELIVERY') {
+    if (formData.status === 'ENTREGADO' && !canMarkDelivered()) {
         toast({
             variant: "destructive",
             title: "Error de estado",
@@ -339,10 +347,10 @@ const OrderDetailModal = ({
                                 <SelectItem value="ACEPTADO">ACEPTADO</SelectItem>
                                 <SelectItem value="COMANDADO">COMANDADO</SelectItem>
                                 <SelectItem value="EN DELIVERY">EN DELIVERY</SelectItem>
-                                <SelectItem 
-                                  value="ENTREGADO" 
-                                  disabled={orderData.status?.main !== 'EN DELIVERY'}
-                                  className={orderData.status?.main !== 'EN DELIVERY' ? 'opacity-50 cursor-not-allowed' : ''}
+                                <SelectItem
+                                  value="ENTREGADO"
+                                  disabled={!canMarkDelivered()}
+                                  className={!canMarkDelivered() ? 'opacity-50 cursor-not-allowed' : ''}
                                 >
                                   ENTREGADO
                                 </SelectItem>
@@ -354,7 +362,7 @@ const OrderDetailModal = ({
                                 Esperando confirmación
                             </span>
                         )}
-                        {orderData.status?.main !== 'EN DELIVERY' && formData.status !== 'COMANDADO' && (
+                        {!canMarkDelivered() && formData.status !== 'COMANDADO' && (
                             <span className="text-[10px] text-gray-400 normal-case mt-0.5 flex items-center gap-1">
                                 <AlertCircle className="w-3 h-3" /> Solo EN DELIVERY a ENTREGADO
                             </span>
@@ -376,14 +384,50 @@ const OrderDetailModal = ({
                         <div className="space-y-4">
                             <div className="space-y-1.5">
                                 <Label htmlFor="clientName" className="text-xs font-bold text-gray-700">Nombre del Cliente</Label>
-                                <Input 
-                                    id="clientName" 
-                                    value={formData.client.name} 
+                                <Input
+                                    id="clientName"
+                                    value={formData.client.name}
                                     onChange={(e) => handleChange('client', 'name', e.target.value)}
                                     className="h-9 text-sm bg-gray-50 border-gray-200 focus:bg-white transition-colors"
                                 />
                             </div>
-                            
+
+                            {/* Modo de entrega: permite cambiar entre Envío (delivery) y Retiro en local */}
+                            <div className="space-y-1.5">
+                                <Label className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
+                                    <Package className="w-3.5 h-3.5 text-blue-500" /> Modo de entrega
+                                </Label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeliveryModeChange('ENVIO')}
+                                        className={`h-9 rounded-md border-2 text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                            formData.type !== 'RETIRO'
+                                                ? 'bg-blue-50 border-blue-400 text-blue-700 shadow-sm'
+                                                : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                                        }`}
+                                    >
+                                        <MapPin className="w-4 h-4" /> Envío
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleDeliveryModeChange('RETIRO')}
+                                        className={`h-9 rounded-md border-2 text-sm font-bold transition-all flex items-center justify-center gap-1.5 ${
+                                            formData.type === 'RETIRO'
+                                                ? 'bg-green-50 border-green-400 text-green-700 shadow-sm'
+                                                : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+                                        }`}
+                                    >
+                                        <Package className="w-4 h-4" /> Retiro en local
+                                    </button>
+                                </div>
+                                {formData.type === 'RETIRO' && (
+                                    <p className="text-[10px] text-green-600 flex items-center gap-1">
+                                        <Info className="w-3 h-3" /> Retiro en local: no requiere repartidor para marcar ENTREGADO.
+                                    </p>
+                                )}
+                            </div>
+
                             <div className="space-y-1.5">
                                 <Label htmlFor="clientAddress" className="text-xs font-bold text-gray-700">Dirección de Entrega</Label>
                                 <div className="relative">
@@ -635,7 +679,7 @@ const OrderDetailModal = ({
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isSaving} className="h-9 text-sm font-medium text-gray-500 hover:text-gray-700">
                 <X className="w-4 h-4 mr-2" /> Cancelar
             </Button>
-            <Button onClick={handleSave} disabled={isSaving || (formData.status === 'ENTREGADO' && orderData.status?.main !== 'EN DELIVERY')} className="h-9 text-sm bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm px-6">
+            <Button onClick={handleSave} disabled={isSaving || (formData.status === 'ENTREGADO' && !canMarkDelivered())} className="h-9 text-sm bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm px-6">
                 {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                 {isSaving ? "Guardando..." : "Guardar Cambios"}
             </Button>

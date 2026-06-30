@@ -50,6 +50,7 @@ function SettingsPage({ applySettings }) {
     orderSoundVolume: 100,
     themeColor: 'orange',
     deliveryViewMode: 'table',
+    printHorizontalOffset: 0,
     web: {
         destacar: '',
         whatsappMessage: '',
@@ -88,6 +89,7 @@ function SettingsPage({ applySettings }) {
             forceDepartmentPaymentMethod: false, printCounterCommand: false, themeColor: 'orange',
             orderSoundVolume: 100,
             deliveryViewMode: 'table',
+            printHorizontalOffset: 0,
             web: { destacar: '', whatsappMessage: '', assignDelivererMessage: '', horarios: {}, showOptionalsInDelivery: true, requireCrossStreets: false }
         };
 
@@ -109,6 +111,7 @@ function SettingsPage({ applySettings }) {
                 orderSoundVolume: typeof fetchedSettings.orderSoundVolume === 'number' ? fetchedSettings.orderSoundVolume : 100,
                 themeColor: fetchedSettings.themeColor || 'orange',
                 deliveryViewMode: fetchedSettings.deliveryViewMode || fetchedSettings.deliveryScreenType || 'table',
+                printHorizontalOffset: typeof fetchedSettings.printHorizontalOffset === 'number' ? fetchedSettings.printHorizontalOffset : 0,
                 web: {
                     ...defaults.web,
                     ...(fetchedSettings.web || {}),

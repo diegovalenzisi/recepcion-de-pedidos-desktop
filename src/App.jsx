@@ -188,25 +188,15 @@ function AppContent() {
   const formatCommission = (v) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(v || 0);
 
-  // Sistema de actualizaciones automáticas vía Firebase
+  // Sistema de actualizaciones automáticas vía Firebase (chequeo antes del login)
   const [updateStatus, setUpdateStatus] = useState(() => {
-    // Solo en Electron y si hay un local configurado
+    // Solo en Electron y si hay un local configurado. Arranca en 'checking' para que
+    // la pantalla "Buscando actualizaciones..." aparezca antes del login sin parpadeos.
     if (!window.electronAPI || !localStorage.getItem('localId')) return 'done';
-    return 'idle';
+    return 'checking';
   });
   const [updateInfo, setUpdateInfo] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
-
-  const isNewerVersion = (remote, local) => {
-    const parse = (v) => String(v || '0').split('.').map((n) => parseInt(n, 10) || 0);
-    const r = parse(remote);
-    const l = parse(local);
-    for (let i = 0; i < 3; i++) {
-      if ((r[i] || 0) > (l[i] || 0)) return true;
-      if ((r[i] || 0) < (l[i] || 0)) return false;
-    }
-    return false;
-  };
 
   // Listener de progreso de descarga (IPC → renderer)
   useEffect(() => {
@@ -217,61 +207,76 @@ function AppContent() {
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
 
-  // Ref para leer updateStatus sin capturar valor viejo en el closure
-  const updateStatusRef = useRef(updateStatus);
-  useEffect(() => { updateStatusRef.current = updateStatus; }, [updateStatus]);
-
-  // Listener para actualizaciones desde main process vía latest.json (Firebase Storage)
+  // ── PreLoginUpdateCheck ───────────────────────────────────────────────────
+  // Chequeo de actualizaciones UNA sola vez al arrancar, ANTES del login.
+  // Consulta latest.json (Firebase Storage) vía IPC 'check-updates-now' y respeta
+  // el flag `mandatory`. Nunca bloquea: si no hay internet o Firebase no responde
+  // (o tarda demasiado), continúa al login tras un timeout de seguridad.
+  const didStartupCheck = useRef(false);
   useEffect(() => {
-    if (!window.electronAPI?.onUpdateAvailable) return;
-    const cleanup = window.electronAPI.onUpdateAvailable(async (data) => {
-      if (updateStatusRef.current !== 'idle' && updateStatusRef.current !== 'done') return;
-      const { version, installerUrl, sha256, fileName } = data;
-      setUpdateInfo({ version, url: installerUrl, nombreArchivo: fileName });
-      setUpdateStatus('downloading');
-      setDownloadProgress(0);
-      try {
-        await window.electronAPI.downloadAndInstall(installerUrl, fileName, sha256);
-        setUpdateStatus('done');
-      } catch (e) {
-        console.error('[update:available]', e);
-        setUpdateStatus('error');
-      }
-    });
-    return () => { if (typeof cleanup === 'function') cleanup(); };
-  }, []);
+    if (didStartupCheck.current) return;
+    didStartupCheck.current = true;
 
-  useEffect(() => {
-    if (updateStatus !== 'idle') return;
     const storedLocalId = localStorage.getItem('localId');
-    if (!storedLocalId) { setUpdateStatus('done'); return; }
+    // Solo en Electron y con un local ya configurado (si no, el estado inicial ya es 'done')
+    if (!window.electronAPI?.checkUpdatesNow || !storedLocalId) { setUpdateStatus('done'); return; }
+
+    let settled = false;
+    // Red de seguridad: si el chequeo tarda demasiado, ir al login igual.
+    const timeoutId = setTimeout(() => {
+      if (!settled) { settled = true; setUpdateStatus('done'); }
+    }, 9000);
 
     (async () => {
-      setUpdateStatus('checking');
       try {
-        const dbUrl = getFirebaseUrl();
-        const resp = await fetch(`${dbUrl}/${storedLocalId}/actualizaciones.json`);
-        if (!resp.ok) { setUpdateStatus('done'); return; }
-        const info = await resp.json();
-        if (!info?.version || !info?.url) { setUpdateStatus('done'); return; }
-        const currentVersion = await window.electronAPI.getAppVersion().catch(() => null);
-        if (!currentVersion || !isNewerVersion(info.version, currentVersion)) {
-          setUpdateStatus('done'); return;
+        const res = await window.electronAPI.checkUpdatesNow();
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        if (res?.hasUpdate && res.installerUrl) {
+          setUpdateInfo({
+            version: res.version,
+            url: res.installerUrl,
+            sha256: res.sha256 || null,
+            nombreArchivo: res.fileName || `Recepcion-de-Pedidos-Setup-${res.version}.exe`,
+            mandatory: res.mandatory === true,
+          });
+          setUpdateStatus('available');
+        } else {
+          setUpdateStatus('done');
         }
-        setUpdateInfo(info);
-        setUpdateStatus('downloading');
-        await window.electronAPI.downloadAndInstall(
-          info.url,
-          info.nombreArchivo || `Recepcion-de-Pedidos-Setup-${info.version}.exe`
-        );
-        // main.js cerrará la app — si llegamos acá fue un error silencioso
-        setUpdateStatus('done');
       } catch (e) {
-        console.error('[update]', e);
-        setUpdateStatus('error');
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        console.error('[PreLoginUpdateCheck]', e);
+        setUpdateStatus('done'); // No bloquear: continuar al login
       }
     })();
-  }, [updateStatus]);
+
+    return () => { clearTimeout(timeoutId); };
+  }, []);
+
+  // Descarga + instala cuando el usuario elige actualizar (o si es obligatoria).
+  // La verificación SHA256 la hace main.js antes de ejecutar el instalador.
+  const startUpdateDownload = useCallback(async () => {
+    if (!updateInfo?.url) return;
+    setDownloadProgress(0);
+    setUpdateStatus('downloading');
+    try {
+      await window.electronAPI.downloadAndInstall(
+        updateInfo.url,
+        updateInfo.nombreArchivo,
+        updateInfo.sha256 || null
+      );
+      // main.js cierra la app para que el instalador reemplace el ejecutable;
+      // si llegamos acá sin haberse cerrado, lo damos por terminado.
+      setUpdateStatus('done');
+    } catch (e) {
+      console.error('[update:download]', e);
+      setUpdateStatus('error');
+    }
+  }, [updateInfo]);
 
   useEffect(() => {
     perfMonitor.startTimer('app-load');
@@ -390,14 +395,17 @@ function AppContent() {
     return <Suspense fallback={<LoadingFallback />}><LocalIdSetup onSetupComplete={handleSetupComplete} /></Suspense>;
   }
 
-  if (['checking', 'downloading', 'error'].includes(updateStatus)) {
+  if (['checking', 'available', 'downloading', 'error'].includes(updateStatus)) {
+    const isMandatory = updateInfo?.mandatory === true;
     return (
       <UpdateScreen
         status={updateStatus}
         info={updateInfo}
+        mandatory={isMandatory}
         downloadProgress={downloadProgress}
-        onSkip={() => setUpdateStatus('done')}
-        onRetry={() => { setDownloadProgress(0); setUpdateStatus('idle'); }}
+        onUpdate={startUpdateDownload}
+        onSkip={isMandatory ? undefined : () => setUpdateStatus('done')}
+        onRetry={() => { setDownloadProgress(0); setUpdateStatus(updateInfo ? 'available' : 'done'); }}
       />
     );
   }
@@ -567,14 +575,13 @@ function AppContent() {
             <div className="font-semibold text-primary-dark hidden md:block">
               DLV SISTEMAS
             </div>
-            {userRole === 'dueño' && (
-              <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-md bg-gray-800 border border-fuchsia-500/40 whitespace-nowrap">
-                <span className="text-gray-300 font-medium">Comisión a Pagar:</span>
-                <span className={`font-bold ${commissionPending > 0 ? 'text-green-400' : 'text-gray-400'}`}>
-                  {formatCommission(commissionPending)}
-                </span>
-              </div>
-            )}
+            {/* Comisión a pagar: visible para TODOS los usuarios logueados (no solo dueño). */}
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-md bg-gray-800 border border-fuchsia-500/40 whitespace-nowrap">
+              <span className="text-gray-300 font-medium">Comisión a Pagar:</span>
+              <span className={`font-bold ${commissionPending > 0 ? 'text-green-400' : 'text-gray-400'}`}>
+                {formatCommission(commissionPending)}
+              </span>
+            </div>
             <div className="flex items-center gap-3">
               <span>{formatDateForFirebase(new Date())} {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
               <span className="text-gray-400 select-none" title={`Build: ${typeof __BUILD_TIME__ !== 'undefined' ? new Date(__BUILD_TIME__).toLocaleString('es-AR') : 'dev'}`}>

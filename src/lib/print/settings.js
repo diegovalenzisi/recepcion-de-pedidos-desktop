@@ -10,6 +10,7 @@ export let cachedPrintSettings = {
     localidad: '',
     printerName: '',
     printTone: 5,
+    printHorizontalOffset: 0,
 };
 
 export const reloadPrintSettings = async () => {
@@ -23,6 +24,7 @@ export const reloadPrintSettings = async () => {
                 printFontFamily: settings.fuenteImpresion || 'sans-serif',
                 printerName: settings.printerName || '',
                 printTone: settings.printTone || 5,
+                printHorizontalOffset: Math.max(-20, Math.min(settings.printHorizontalOffset ?? 0, 20)),
             };
         }
     } catch (error) {

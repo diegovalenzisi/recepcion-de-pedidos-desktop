@@ -7,11 +7,15 @@ import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { processStockForDeliveredOrder } from './transactionsApi'; 
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
-export const validateStatusChange = (currentStatus, newStatus) => {
+export const validateStatusChange = (currentStatus, newStatus, orderType) => {
   if (newStatus === 'ENTREGADO' && currentStatus !== 'EN DELIVERY') {
-    return { 
-      isValid: false, 
-      message: "Solo pedidos EN DELIVERY pueden marcarse como ENTREGADO" 
+    // Pedidos de retiro no necesitan pasar por EN DELIVERY ni tener repartidor asignado
+    if (orderType === 'RETIRO') {
+      return { isValid: true, message: "" };
+    }
+    return {
+      isValid: false,
+      message: "Solo pedidos EN DELIVERY pueden marcarse como ENTREGADO"
     };
   }
   return { isValid: true, message: "" };
@@ -446,7 +450,7 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
     const newStatus = dataToUpdate['status/main'] || dataToUpdate.status?.main;
     
     if (newStatus === 'ENTREGADO' && currentStatus !== 'ENTREGADO') {
-      const validation = validateStatusChange(currentStatus, newStatus);
+      const validation = validateStatusChange(currentStatus, newStatus, dataBefore.type);
       if (!validation.isValid) {
         console.error(`[Audit] Invalid status change attempt for order ${orderId}: ${currentStatus} -> ${newStatus}`);
         throw new Error(validation.message);

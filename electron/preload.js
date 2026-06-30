@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openUserDataFolder: () => ipcRenderer.invoke('open-userData-folder'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   downloadAndInstall: (url, fileName, sha256) => ipcRenderer.invoke('download-and-install', url, fileName, sha256),
+  checkUpdatesNow: () => ipcRenderer.invoke('check-updates-now'),
   onDownloadProgress: (callback) => {
     const handler = (_e, data) => callback(data);
     ipcRenderer.on('download-progress', handler);

@@ -2,7 +2,7 @@ import React from 'react';
 import { SettingsField, FontSelector } from './common';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { ScrollText, Type, Palette, Printer, ScrollText as FontSize } from 'lucide-react';
+import { ScrollText, Type, Palette, Printer, ScrollText as FontSize, MoveHorizontal } from 'lucide-react';
 
 const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFontChange }) => {
     const printFontOptions = [
@@ -48,6 +48,26 @@ const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFo
                     </div>
                 </div>
                 <FontSelector id="fuenteImpresion" label="Fuente de Impresión" value={settings.fuenteImpresion} onChange={(v) => handleFontChange('fuenteImpresion', v)} icon={Printer} options={printFontOptions} />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-8 pt-4 border-t">
+                <div className="space-y-2">
+                    <Label htmlFor="printHorizontalOffset" className="flex items-center text-gray-700 font-semibold"><MoveHorizontal className="mr-2 h-5 w-5 text-orange-500" /> Ajuste Horizontal de Impresión</Label>
+                    <div className="flex items-center space-x-4">
+                        <span className="text-sm text-gray-500 w-12 text-right">← Izq</span>
+                        <Slider
+                            id="printHorizontalOffset"
+                            min={-10}
+                            max={10}
+                            step={1}
+                            value={[settings.printHorizontalOffset ?? 0]}
+                            onValueChange={(value) => handleSliderChange('printHorizontalOffset', value)}
+                        />
+                        <span className="text-sm text-gray-500 w-12">Der →</span>
+                        <span className="font-bold w-10 text-center">{(settings.printHorizontalOffset ?? 0) > 0 ? '+' : ''}{settings.printHorizontalOffset ?? 0}mm</span>
+                    </div>
+                    <p className="text-xs text-gray-400">Valor 0 = posición normal. Negativo mueve hacia la izquierda, positivo hacia la derecha.</p>
+                </div>
             </div>
         </>
     );

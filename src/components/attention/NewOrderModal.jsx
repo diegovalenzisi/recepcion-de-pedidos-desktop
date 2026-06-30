@@ -36,6 +36,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   const [isOptionalModalOpen, setIsOptionalModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [articleForSelection, setArticleForSelection] = useState(null);
+  const [editOrderType, setEditOrderType] = useState('ENVIO');
 
   // Hook to handle real-time stock verification
   const { verifiedArticles, isVerifying } = useStockVerification(
@@ -183,12 +184,14 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
           uniqueId: item.uniqueId || `${item.id}-${index}-${Date.now()}`
         }));
         setOrderItems(hydratedItems);
+        setEditOrderType(orderToEdit.type || 'ENVIO');
       } else {
         setOrderItems([]);
       }
     } else if (!isOpen) {
         setOrderItems([]);
         setIsConfirmModalOpen(false);
+        setEditOrderType('ENVIO');
         resetPromoConfig();
     }
   }, [isOpen, isConfirmModalOpen, isEditing, orderToEdit, allArticles.length, resetPromoConfig]);
@@ -327,6 +330,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     } else if (isEditing) {
       handleFinalizeOrder({
         items: orderItems,
+        type: editOrderType,
         payment: {
             ...orderToEdit.payment,
             amount: total,
@@ -437,6 +441,33 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
           </div>
 
           <DialogFooter className="p-4 border-t bg-white">
+            {isEditing && (
+              <div className="flex items-center gap-4 mr-auto">
+                <span className="text-sm font-semibold text-gray-700">Modo de entrega:</span>
+                <label className="flex items-center gap-1.5 cursor-pointer text-sm font-medium">
+                  <input
+                    type="radio"
+                    name="editOrderType"
+                    value="ENVIO"
+                    checked={editOrderType === 'ENVIO'}
+                    onChange={e => setEditOrderType(e.target.value)}
+                    className="form-radio h-4 w-4 text-primary"
+                  />
+                  Envío
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-sm font-medium">
+                  <input
+                    type="radio"
+                    name="editOrderType"
+                    value="RETIRO"
+                    checked={editOrderType === 'RETIRO'}
+                    onChange={e => setEditOrderType(e.target.value)}
+                    className="form-radio h-4 w-4 text-primary"
+                  />
+                  Retiro en local
+                </label>
+              </div>
+            )}
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700" onClick={handleConfirmOrder} disabled={isLoadingData}>
               {isEditing ? 'Guardar Cambios' : (isCounterMode ? 'Proceder al Pago' : 'Confirmar Pedido')}

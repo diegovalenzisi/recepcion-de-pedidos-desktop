@@ -808,8 +808,8 @@ function checkForUpdates() {
 function createWindow() {
   // Ruta al ícono: en producción está en resources/, en dev en build/
   const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'build', 'icon.ico')
-    : path.join(__dirname, '..', 'build', 'icon.ico');
+    ? path.join(process.resourcesPath, 'build', 'icono-dlv.ico')
+    : path.join(__dirname, '..', 'build', 'icono-dlv.ico');
   const iconExists = existsSync(iconPath);
 
   mainWindow = new BrowserWindow({
@@ -866,6 +866,54 @@ function setupIPC() {
         shell.openExternal(url);
       }
     } catch { /* URL inválida */ }
+  });
+
+  // Chequeo de actualización bajo demanda (pre-login). Lee latest.json de Firebase
+  // Storage y devuelve la info SIN descargar nada — el renderer decide según mandatory.
+  // Siempre resuelve (nunca rechaza) para no bloquear el arranque si no hay internet.
+  ipcMain.handle('check-updates-now', () => {
+    if (isDev) return { hasUpdate: false, reason: 'dev' };
+    const currentVersion = app.getVersion();
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+
+      const doGet = (url, redirects = 0) => {
+        if (redirects > 5) { done({ hasUpdate: false, error: 'too-many-redirects', currentVersion }); return; }
+        const mod = url.startsWith('https') ? https : http;
+        const req = mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 8000 }, (res) => {
+          if ([301, 302, 307].includes(res.statusCode) && res.headers.location) {
+            doGet(res.headers.location, redirects + 1);
+            return;
+          }
+          if (res.statusCode !== 200) { done({ hasUpdate: false, error: `http-${res.statusCode}`, currentVersion }); return; }
+          let data = '';
+          res.on('data', (chunk) => { data += chunk; });
+          res.on('end', () => {
+            try {
+              const info = JSON.parse(data);
+              if (!info.latest || !info.installerUrl) { done({ hasUpdate: false, error: 'bad-latest-json', currentVersion }); return; }
+              done({
+                hasUpdate:    newerVersion(info.latest, currentVersion),
+                version:      info.latest,
+                installerUrl: info.installerUrl,
+                sha256:       info.sha256 || null,
+                fileName:     `Recepcion-de-Pedidos-Setup-${info.latest}.exe`,
+                mandatory:    info.mandatory === true,
+                currentVersion,
+              });
+            } catch {
+              done({ hasUpdate: false, error: 'parse-error', currentVersion });
+            }
+          });
+        });
+        req.on('timeout', () => { req.destroy(); done({ hasUpdate: false, error: 'timeout', currentVersion }); });
+        req.on('error', () => { done({ hasUpdate: false, error: 'network', currentVersion }); });
+      };
+
+      doGet(LATEST_JSON_URL);
+    });
   });
 
   // Descarga el instalador con progreso real, verifica SHA256 opcional y lo ejecuta
@@ -2060,7 +2108,9 @@ app.whenReady().then(() => {
   repairBackendEnvIfNeeded(_envPath, _riSaPath);
   startBackend();
   createWindow();
-  setTimeout(checkForUpdates, 15000);
+  // El chequeo de actualizaciones ahora ocurre UNA sola vez antes del login,
+  // a pedido del renderer vía IPC 'check-updates-now' (ver PreLoginUpdateCheck en App.jsx).
+  // Se eliminó el setTimeout(checkForUpdates, 15000) para evitar un segundo aviso duplicado.
   setTimeout(autoStartFacturacion, 8000);
 
   // Retry de arranque del backend MP + creación de mp-accounts.json si falta

@@ -1,0 +1,6 @@
+{
+  "version": "1.3.29",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.29.exe",
+  "releaseDate": "2026-06-30",
+  "notes": "Corrige guardado de porcentaje de comisión y límite de aviso. La comisión y el aviso de pago son visibles para todos los usuarios."
+}

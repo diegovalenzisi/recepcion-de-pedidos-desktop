@@ -39,6 +39,7 @@ export const printSafeTicket = async (ticketData) => {
                         width: 80mm;
                         box-sizing: border-box;
                         margin: 0;
+                        margin-left: ${settings.printHorizontalOffset || 0}mm;
                         padding: 5mm;
                         color: black !important;
                         -webkit-print-color-adjust: exact;

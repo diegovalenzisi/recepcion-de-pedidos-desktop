@@ -112,7 +112,15 @@ export const saveSettings = async (settingsData) => {
   
   const updates = {};
 
+  // La configuración de comisión (porcentaje y límite de aviso) se guarda EXCLUSIVAMENTE
+  // desde SalesPercentageManager con sus propios botones (saveSalesPercentage / saveAlarmaPago),
+  // que escriben directo a CONFIGURACION/porcentaje y CONFIGURACION/alarmaPago.
+  // El guardado general recibía estos valores desde un estado viejo (cargado al montar la
+  // pantalla) y los pisaba. Los excluimos para no sobreescribir lo recién guardado.
+  const COMMISSION_KEYS = new Set(['porcentaje', 'alarmaPago', 'salesPercentage']);
+
   for (const key in settingsData) {
+    if (COMMISSION_KEYS.has(key)) continue;
     const value = settingsData[key];
     if (key === 'web') {
       if (value && value.horarios !== undefined) {

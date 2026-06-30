@@ -281,9 +281,11 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
   const handleConfirmClientUpdate = async (updatedData) => {
     if (!orderToEditClient) return false;
     try {
-      if (updatedData.status && updatedData.status === 'ENTREGADO') {
+      const newStatusMain = typeof updatedData.status === 'object' ? updatedData.status?.main : updatedData.status;
+      if (newStatusMain === 'ENTREGADO') {
         const currentStatus = orderToEditClient.status?.main;
-        const validation = validateStatusChange(currentStatus, 'ENTREGADO');
+        // Validate against the NEW delivery type being saved (RETIRO bypasses the EN DELIVERY requirement)
+        const validation = validateStatusChange(currentStatus, 'ENTREGADO', updatedData.type ?? orderToEditClient.type);
         if (!validation.isValid) {
           console.warn(`[Audit] Attempted to deliver order ${orderToEditClient.id} with status ${currentStatus}`);
           toast({ variant: "destructive", title: "Acción no permitida", description: validation.message });
@@ -410,7 +412,7 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
   const handleQRScanSuccess = async (orderToProcess) => {
     if (!orderToProcess) return;
 
-    if (orderToProcess.status?.main !== 'EN DELIVERY') {
+    if (orderToProcess.status?.main !== 'EN DELIVERY' && orderToProcess.type !== 'RETIRO') {
       console.warn(`[Audit] Attempted to deliver order ${orderToProcess.id} with status ${orderToProcess.status?.main}`);
       toast({ variant: "destructive", title: "Acción no permitida", description: "Solo pedidos EN DELIVERY pueden marcarse como ENTREGADO" });
       return;

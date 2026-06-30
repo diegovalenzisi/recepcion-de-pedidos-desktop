@@ -10,6 +10,8 @@ import { updateOrder, extractOrderDataForWhatsApp } from '@/lib/api/ordersApi';
 import { useToast } from '@/components/ui/use-toast';
 import { generateEnDeliveryWhatsAppMessage } from '@/lib/whatsapp/deliveryMessageFormatter';
 import { openWhatsAppWithMessage } from '@/lib/whatsapp/whatsappHandler';
+import { useWhatsAppPreference } from '@/hooks/useWhatsAppPreference';
+import { markWaSent } from '@/lib/whatsapp/waTracker';
 
 function AssignDelivererModal({ isOpen, onOpenChange, deliverers, onAssign, order, currentShift }) {
   const [selectedDelivererId, setSelectedDelivererId] = useState(null);
@@ -17,6 +19,7 @@ function AssignDelivererModal({ isOpen, onOpenChange, deliverers, onAssign, orde
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [isAssigning, setIsAssigning] = useState(false);
   const { toast } = useToast();
+  const { preference: waPreference } = useWhatsAppPreference();
 
   const handleAssign = async () => {
     if (!selectedDelivererId) return;
@@ -46,7 +49,8 @@ function AssignDelivererModal({ isOpen, onOpenChange, deliverers, onAssign, orde
           
           // Pass deliverer explicitly as second parameter to ensure name is included
           const msg = await generateEnDeliveryWhatsAppMessage(waData, deliverer);
-          openWhatsAppWithMessage(waData.clientPhone, msg);
+          markWaSent(order.id);
+          openWhatsAppWithMessage(waData.clientPhone, msg, waPreference);
         } else {
           toast({ variant: "destructive", title: "Sin teléfono", description: "El pedido no tiene teléfono registrado para WhatsApp." });
         }

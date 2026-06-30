@@ -128,12 +128,13 @@ export const printCommand = async (order, optionalGroups = []) => {
               margin: 0;
             }
           }
-          body { 
-            font-family: ${settings.printFontFamily}, sans-serif; 
-            width: 80mm; 
+          body {
+            font-family: ${settings.printFontFamily}, sans-serif;
+            width: 80mm;
             box-sizing: border-box;
             font-size: ${settings.printFontSize}px;
             margin: 0;
+            margin-left: ${settings.printHorizontalOffset || 0}mm;
             padding: 3mm;
             color: black !important;
             -webkit-print-color-adjust: exact;

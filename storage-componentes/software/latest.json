@@ -1,7 +1,7 @@
 {
-  "latest": "1.3.23",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.23%2FRecepcion-de-Pedidos-Setup-1.3.23.exe?alt=media",
-  "sha256": "b153cf0cff6478b6af82f84323b48eb99801109246075801df20487acd272b0a",
+  "latest": "1.3.29",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.29%2FRecepcion-de-Pedidos-Setup-1.3.29.exe?alt=media",
+  "sha256": "f5c1d0df41c7bf6d6bb639c6fb593425b4d40750e4ce6c5d0a080cabd6589769",
   "mandatory": false,
-  "notes": "Versión 1.3.23 — actualizador cambiado para consultar latest.json desde Firebase Storage"
+  "notes": "Versión 1.3.29: corrige guardado de comisión y visibilidad del aviso de pago para todos los usuarios."
 }
