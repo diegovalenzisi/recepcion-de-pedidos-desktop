@@ -1,0 +1,6 @@
+{
+  "version": "1.3.30",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.30.exe",
+  "releaseDate": "2026-06-30",
+  "notes": "Corrige saldo real de comisión con pagos parciales y asegura que las actualizaciones no toquen configuraciones locales de facturación, Mercado Pago, node, OpenSSL, voz ni certificados."
+}
