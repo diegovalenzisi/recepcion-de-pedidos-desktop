@@ -1,0 +1,6 @@
+{
+  "version": "1.3.31",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.31.exe",
+  "releaseDate": "2026-07-02",
+  "notes": "QR ARCA/AFIP corregido (Factura B y C, base64 estándar, URL arca.gob.ar, codAut con CAE real, fecha YYYY-MM-DD, importe real). Botón compacto de Facturación con control de PC autorizada (activo local, sin propagarse por Firebase). Corrección React #31 (render de objeto en stock). Cálculo y guardado de VentaTotal, CostoTotal y Ganancia en cada venta."
+}

@@ -6,6 +6,7 @@ import { cancelarComision } from '@/lib/api/comisionesApi';
 import { restoreStockForItem, bulkUpdateStock, fetchAllStockableItems } from '@/lib/api/stockApi';
 import { processStockForCounterSale } from '@/lib/api/transactionsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
+import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { saveFacturacionForPayments } from './ordersApi';
 import { updateStatistics } from './salesApi';
 import { addExpenseToShift } from './expensesApi';
@@ -94,20 +95,15 @@ export const saveCounterSale = async (saleData, shift) => {
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const formattedTime = `${hours}:${minutes}:${seconds}`;
 
-    let calculatedCostoTotal = 0;
-    if (saleData.items && Array.isArray(saleData.items)) {
-      calculatedCostoTotal = saleData.items.reduce((sum, item) => {
-        const qty      = Number(item.cantidad) || Number(item.quantity) || 1;
-        const unitCost = Number(item.costoTotalReceta) || Number(item.costoUnitario) || 0;
-        return sum + (qty * unitCost);
-      }, 0);
-    }
-    calculatedCostoTotal = Math.round(calculatedCostoTotal * 1000) / 1000;
+    // Venta, costo y ganancia de la venta (gestión — no afecta facturación/CAE/PDF)
+    const { totalVenta, totalCosto, ganancia } = calcularVentaCostoGanancia(saleData.items);
 
     const saleWithTimestamp = {
       items:           saleData.items,
       total:           saleData.total,
-      CostoTotal:      calculatedCostoTotal,
+      CostoTotal:      totalCosto,
+      VentaTotal:      totalVenta,
+      Ganancia:        ganancia,
       payment:         { total: saleData.total, details: saleData.payments, payments: saleData.payments },
       payments:        saleData.payments,
       specialDiscount: saleData.specialDiscount || null,

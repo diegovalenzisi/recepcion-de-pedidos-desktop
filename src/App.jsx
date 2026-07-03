@@ -32,6 +32,7 @@ import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
 import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
+import FacturacionAutoStartWidget from '@/components/FacturacionAutoStartWidget.jsx';
 
 const AttentionPage = React.lazy(() => import('@/pages/AttentionPage.jsx'));
 const StockPage = React.lazy(() => import('@/pages/StockPage.jsx'));
@@ -582,6 +583,7 @@ function AppContent() {
                 {formatCommission(commissionPending)}
               </span>
             </div>
+            <FacturacionAutoStartWidget />
             <div className="flex items-center gap-3">
               <span>{formatDateForFirebase(new Date())} {new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</span>
               <span className="text-gray-400 select-none" title={`Build: ${typeof __BUILD_TIME__ !== 'undefined' ? new Date(__BUILD_TIME__).toLocaleString('es-AR') : 'dev'}`}>

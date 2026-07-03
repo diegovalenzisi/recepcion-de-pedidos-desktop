@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Package, Edit, Trash2, ImageOff, Link2, BookText, Copy, PlusCircle, MinusCircle } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useParentArticleStock } from '@/hooks/useParentArticleStock.js';
+import { normalizarStock, normalizarCosto } from '@/lib/api/ventaUtils';
 import StockStatusBadge from './StockStatusBadge';
 
 const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess }) => {
@@ -120,7 +121,7 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
           <td className="py-3 px-4 font-mono text-sm whitespace-nowrap">{item.codigo}</td>
           <td className="py-3 px-4 font-medium min-w-[200px]">{item.nombre}</td>
           <td className="py-3 px-4 whitespace-nowrap">{departamento ? departamento.nombre : 'N/A'}</td>
-          <td className="py-3 px-4 font-semibold text-green-600 whitespace-nowrap">${item.valor}</td>
+          <td className="py-3 px-4 font-semibold text-green-600 whitespace-nowrap">${normalizarCosto(item.valor)}</td>
           <td className="py-3 px-4 font-semibold text-blue-600 whitespace-nowrap">
             {isCostDisplayable ? (
               <div className="flex items-center gap-1" title={effectiveStockType === 'heredado' ? 'Costo heredado del artículo padre' : (effectiveStockType === 'receta' ? 'Calculado automáticamente de la receta' : '')}>
@@ -152,7 +153,11 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
     },
     'materia-prima': () => {
       const minVal = item.minimo || 0;
-      const status = item.stock <= 0 ? 'red' : item.stock <= minVal ? 'amber' : 'green';
+      // stock puede venir como número o (por datos migrados/erróneos) como objeto de
+      // configuración { stockType, propio, receta... }; normalizarStock evita renderizar
+      // el objeto (React error #31) y devuelve siempre un número seguro.
+      const stockNum = normalizarStock(item.stock);
+      const status = stockNum <= 0 ? 'red' : stockNum <= minVal ? 'amber' : 'green';
       const unidadLabel = item.unidadMedida || item.unidad || 'u.';
       return (
         <>
@@ -161,7 +166,7 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
           <td className="py-3 px-4 whitespace-nowrap capitalize">{unidadLabel}</td>
           <td className="py-3 px-4 whitespace-nowrap">
              <span className={`px-2 py-1 rounded-full text-xs font-medium bg-${status}-100 text-${status}-800`}>
-              {item.stock} {unidadLabel}
+              {stockNum} {unidadLabel}
              </span>
           </td>
           <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{item.minimo} {unidadLabel}</td>

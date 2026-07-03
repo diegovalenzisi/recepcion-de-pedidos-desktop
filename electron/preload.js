@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   backendRestart: () => ipcRenderer.invoke('backend:restart'),
   localResetForNew: () => ipcRenderer.invoke('local:reset-for-new'),
   getMachineId: () => ipcRenderer.invoke('machine-id:get'),
+  getMachineInfo: () => ipcRenderer.invoke('machine-id:get-info'),
   systemCheck:  () => ipcRenderer.invoke('app:system-check'),
   mpBackendHealth:    ()       => ipcRenderer.invoke('mp:backend-health'),
   mpRecentPayments:   (horas)  => ipcRenderer.invoke('mp:recent-payments', horas),

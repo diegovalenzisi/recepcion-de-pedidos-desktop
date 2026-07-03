@@ -14,6 +14,11 @@ import { useToast } from '@/hooks/use-toast';
 import { getCurrentLocalId } from '@/lib/firebase/core';
 import { uploadAfipFile } from '@/lib/firebase/storage';
 import { saveAfipConfigToFirebase, fetchAfipConfigFromFirebase } from '@/lib/api/afipConfigApi';
+import { useFacturacionOwnership } from '@/hooks/useFacturacionOwnership';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -557,7 +562,10 @@ function AccountForm({ tipo, fields, onChange, onSave, saving, accountDir, machi
 function AccountCard({
   tipo, fields, onChange, onSave, onRemove, saving,
   processKey, accountDir, status, onStatusChange, machineId, cuentaId,
+  ownershipAccount, onToggleAutoStart, ownershipBusy,
 }) {
+  const isOwner = !!ownershipAccount?.isOwner;
+  const otherOwner = !ownershipAccount?.isOwner ? ownershipAccount?.owner : null;
   const [expanded, setExpanded] = useState(!fields.initialized);
   const isRI = tipo === 'responsable_inscripto';
 
@@ -572,10 +580,25 @@ function AccountCard({
           <span className="text-sm font-medium">
             {fields.nombre || (isRI ? 'Responsable Inscripto' : 'Sin nombre')}
           </span>
-          {fields.initialized && <span className="text-xs text-gray-400 font-mono">{fields.cuit}</span>}
+          {fields.initialized && (
+            <span className="text-xs text-gray-400 font-mono">
+              CUIT {fields.cuit}{fields.ptoVta ? ` · Pto. Vta. ${fields.ptoVta}` : ''}
+            </span>
+          )}
           {fields.certStoragePath && (
             <span className="text-xs text-green-600 flex items-center gap-1">
               <Cloud className="h-3 w-3" /> certs en Storage
+            </span>
+          )}
+          {fields.initialized && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              isOwner ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'
+            }`}>
+              {isOwner
+                ? '● Auto-inicio ON (esta PC)'
+                : otherOwner
+                  ? `○ Autorizada: ${otherOwner.nombrePc || 'otra PC'}`
+                  : '○ Auto-inicio OFF (ninguna PC)'}
             </span>
           )}
         </div>
@@ -605,13 +628,21 @@ function AccountCard({
               <div className="flex items-center gap-2">
                 <Switch
                   id={`activo-${processKey}`}
-                  checked={fields.activo}
-                  onCheckedChange={(v) => onChange('activo', v)}
+                  checked={isOwner}
+                  disabled={ownershipBusy}
+                  onCheckedChange={(v) => onToggleAutoStart?.(v)}
                 />
                 <Label htmlFor={`activo-${processKey}`} className="text-xs cursor-pointer">
-                  Auto-iniciar con la app
+                  Inicio automático de facturación (solo esta PC)
                 </Label>
+                {ownershipBusy && <RefreshCw className="h-3 w-3 text-gray-400 animate-spin" />}
               </div>
+              <p className="text-[11px] text-gray-400 -mt-2">
+                Solo una PC puede tener esto activado por cuenta — se arbitra vía Firebase
+                (dueño de facturación), no se copia igual a todas las PCs. Si otra PC ya está
+                autorizada, tomar el control la desactiva automáticamente allá para evitar
+                facturar el mismo pedido dos veces.
+              </p>
               <ProcessControls
                 processKey={processKey} accountDir={accountDir}
                 status={status} onStatusChange={onStatusChange}
@@ -645,6 +676,26 @@ async function applyAccount(f, fields, tipo, cuentaId, mid) {
   return { ...fields, initialized: true };
 }
 
+// SEGURIDAD ANTI-DOBLE-FACTURACIÓN: fuerza que `activo` (Inicio automático de
+// facturación) provenga SIEMPRE del archivo local de esta PC, nunca de Firebase.
+// Cualquier `activo` que haya llegado mezclado desde `fbCfg` (config remota) se
+// descarta y se reemplaza por el valor local (o `false` si esta PC nunca lo activó).
+function enforceLocalActivo(candidateCfg, localSaved) {
+  const localRiActivo = localSaved?.ri?.activo ?? false;
+  const localCuentaActivo = (id) =>
+    localSaved?.monotributo?.cuentas?.find(c => c.id === id)?.activo ?? false;
+
+  const out = { ...candidateCfg };
+  if (out.ri) out.ri = { ...out.ri, activo: localRiActivo };
+  if (out.monotributo?.cuentas) {
+    out.monotributo = {
+      ...out.monotributo,
+      cuentas: out.monotributo.cuentas.map(c => ({ ...c, activo: localCuentaActivo(c.id) })),
+    };
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // FacturacionManager — componente principal
 // ---------------------------------------------------------------------------
@@ -663,6 +714,44 @@ const FacturacionManager = () => {
   const autoStartFiredRef = useRef(false);
 
   const isElectron = !!window.electronAPI?.facturacion;
+
+  // Dueño de facturación (arbitraje anti-doble-facturación) — mismo hook que usa
+  // el botón del footer visible para todos los usuarios.
+  const ownership = useFacturacionOwnership();
+  const [ownerConfirmOpen, setOwnerConfirmOpen] = useState(false);
+  const [ownerConfirmData, setOwnerConfirmData] = useState(null);
+  const ownerConfirmResolveRef = useRef(null);
+
+  const askOwnerConfirm = (owner) => new Promise((resolve) => {
+    setOwnerConfirmData(owner);
+    ownerConfirmResolveRef.current = resolve;
+    setOwnerConfirmOpen(true);
+  });
+  const resolveOwnerConfirm = (value) => {
+    setOwnerConfirmOpen(false);
+    ownerConfirmResolveRef.current?.(value);
+    ownerConfirmResolveRef.current = null;
+  };
+
+  const handleToggleAutoStart = async (accountKey, wantOn) => {
+    const result = await ownership.toggleAutoStart(accountKey, wantOn, { onNeedConfirm: askOwnerConfirm });
+    if (!result.ok) {
+      if (result.reason === 'firebase-unavailable') {
+        toast({
+          variant: 'destructive',
+          title: 'Sin conexión con Firebase',
+          description: 'No se pudo confirmar el estado de facturación. Por seguridad, no se activó.',
+        });
+      } else if (result.reason !== 'cancelled') {
+        toast({ variant: 'destructive', title: 'No se pudo cambiar el estado de facturación automática' });
+      }
+      return;
+    }
+    toast({
+      title: wantOn ? 'Inicio automático activado para esta PC' : 'Inicio automático desactivado para esta PC',
+      className: wantOn ? 'bg-green-500 text-white' : undefined,
+    });
+  };
 
   // ---------------------------------------------------------------------------
   // Init
@@ -741,6 +830,13 @@ const FacturacionManager = () => {
           toast({ variant: 'destructive', title: 'Configuración AFIP incompleta', description: e.message });
         }
       }
+
+      // SEGURIDAD ANTI-DOBLE-FACTURACIÓN: `activo` (Inicio automático de facturación)
+      // es una decisión exclusiva de ESTA PC y NUNCA debe adoptarse desde Firebase
+      // (aunque Firebase tenga config vieja con `activo:true` de antes de este fix).
+      // Solo se respeta el valor que ya existía en el archivo local de esta PC;
+      // si esta PC nunca lo configuró, arranca en `false`.
+      cfg = enforceLocalActivo(cfg, saved);
 
       setConfig(cfg);
 
@@ -868,8 +964,25 @@ const FacturacionManager = () => {
     if (!f) return;
     setGlobalSaving(true);
     try {
-      await f.writeConfig(config);
-      await saveAfipConfigToFirebase(config);
+      // `activo` (Inicio automático) se administra en tiempo real por el sistema de
+      // ownership (ver useFacturacionOwnership), no por este formulario. Se toma el
+      // valor actual en disco para no pisarlo con el valor stale que quedó en el
+      // estado de React desde que se cargó la pantalla.
+      const onDisk = await f.readConfig();
+      const configToSave = {
+        ...config,
+        ri: config.ri ? { ...config.ri, activo: onDisk?.ri?.activo ?? config.ri.activo } : config.ri,
+        monotributo: config.monotributo
+          ? {
+              cuentas: (config.monotributo.cuentas || []).map((c) => ({
+                ...c,
+                activo: onDisk?.monotributo?.cuentas?.find((oc) => oc.id === c.id)?.activo ?? c.activo,
+              })),
+            }
+          : config.monotributo,
+      };
+      await f.writeConfig(configToSave);
+      await saveAfipConfigToFirebase(configToSave);
       toast({ title: 'Configuración guardada', className: 'bg-green-500 text-white' });
     } catch (e) {
       toast({ variant: 'destructive', title: 'Error', description: e.message });
@@ -955,6 +1068,15 @@ const FacturacionManager = () => {
         serviceAccountStoragePath: saStoragePath, serviceAccountDownloadUrl: saDLUrl,
         certFile: null, keyFile: null, serviceAccountFile: null,
       };
+
+      // `activo` (Inicio automático) lo administra el sistema de ownership en tiempo
+      // real — se preserva el valor actual en disco para no pisarlo con el stale de
+      // React al guardar campos de esta cuenta (CUIT, certs, etc.).
+      const onDisk = await f.readConfig();
+      const onDiskActivo = tipo === 'responsable_inscripto'
+        ? onDisk?.ri?.activo
+        : onDisk?.monotributo?.cuentas?.find(c => c.id === cuentaId)?.activo;
+      updatedFields.activo = onDiskActivo ?? updatedFields.activo;
 
       let newConfig;
       if (tipo === 'responsable_inscripto') {
@@ -1101,6 +1223,9 @@ const FacturacionManager = () => {
           status={statuses['ri']}
           onStatusChange={handleStatusChange}
           machineId={machineId}
+          ownershipAccount={ownership.accounts.find(a => a.key === 'ri')}
+          onToggleAutoStart={(v) => handleToggleAutoStart('ri', v)}
+          ownershipBusy={ownership.busyKey === 'ri'}
         />
       )}
 
@@ -1124,6 +1249,9 @@ const FacturacionManager = () => {
                 status={statuses[key]}
                 onStatusChange={handleStatusChange}
                 machineId={machineId}
+                ownershipAccount={ownership.accounts.find(a => a.key === key)}
+                onToggleAutoStart={(v) => handleToggleAutoStart(key, v)}
+                ownershipBusy={ownership.busyKey === key}
               />
             );
           })}
@@ -1134,6 +1262,26 @@ const FacturacionManager = () => {
           )}
         </div>
       )}
+
+      <AlertDialog open={ownerConfirmOpen} onOpenChange={(v) => !v && resolveOwnerConfirm(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Tomar el control de la facturación automática?</AlertDialogTitle>
+            <AlertDialogDescription>
+              La PC <strong>{ownerConfirmData?.nombrePc || 'otra PC'}</strong> ya está autorizada para
+              facturar esta cuenta{ownerConfirmData?.cuentaNombre ? ` (${ownerConfirmData.cuentaNombre})` : ''}.
+              Si continuás, esa PC se desactivará automáticamente y esta PC pasará a ser la única que
+              emite comprobantes para esta cuenta.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => resolveOwnerConfirm(false)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => resolveOwnerConfirm(true)} className="bg-cyan-600 hover:bg-cyan-700">
+              Tomar el control
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

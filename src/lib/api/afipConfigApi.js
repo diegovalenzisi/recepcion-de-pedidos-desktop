@@ -3,8 +3,14 @@ import { getCurrentLocalId } from '@/lib/firebase/core';
 
 const AFIP_PATH = (localId) => `${localId}/CONFIGURACION/FACTURACION_AFIP`;
 
-// Campos que NO se guardan en Firebase (paths locales o archivos seleccionados)
-const LOCAL_ONLY_FIELDS = ['certFile', 'keyFile', 'serviceAccountFile'];
+// Campos que NO se guardan en Firebase (paths locales, archivos seleccionados,
+// o decisiones que deben ser exclusivas de ESTA PC).
+//
+// IMPORTANTE — `activo` ("Inicio automático de facturación") es intencionalmente
+// PC-local: si se sincronizara vía Firebase, cualquier otra PC que abra el mismo
+// local heredaría automáticamente el inicio automático y podría facturar el mismo
+// pedido dos veces. Nunca debe viajar a Firebase ni adoptarse desde Firebase.
+const LOCAL_ONLY_FIELDS = ['certFile', 'keyFile', 'serviceAccountFile', 'activo'];
 
 function sanitize(fields) {
   const out = { ...fields };

@@ -141,14 +141,28 @@ async function solicitarCAE(auth, client, pedido, cbteNro) {
   return detalle;
 }
 
-async function generarQR({ cae, nroCbte, fecha, cuit }) {
-  const data = {
-    ver: 1, fecha, cuit, ptoVta: PTO_VTA, tipoCmp: 6, nroCmp: nroCbte,
-    importe: 0, moneda: 'PES', ctz: 1, tipoDocRec: 99, nroDocRec: 0,
-    tipoCodAut: 'E', codAut: cae,
+async function generarQR({ cae, nroCbte, fecha, cuit, importe }) {
+  // JSON del QR según especificación oficial ARCA/AFIP (RG 4291).
+  const qrData = {
+    ver: 1,
+    fecha,                              // YYYY-MM-DD
+    cuit,                              // CUIT emisor (número)
+    ptoVta: PTO_VTA,                   // solo punto de venta
+    tipoCmp: 6,                        // Factura B
+    nroCmp: nroCbte,                   // solo número de comprobante (sin pto vta)
+    importe: Number(importe) || 0,     // importe total real (número, sin $ ni separadores)
+    moneda: 'PES',
+    ctz: 1,
+    tipoDocRec: 99,                    // Consumidor Final
+    nroDocRec: 0,
+    tipoCodAut: 'E',                   // E = CAE
+    codAut: Number(cae),               // CAE real como número
   };
-  const base64 = Buffer.from(JSON.stringify(data)).toString('base64');
-  return await QRCode.toDataURL(`https://www.afip.gob.ar/fe/qr/?p=${base64}`);
+  const base64 = Buffer.from(JSON.stringify(qrData)).toString('base64'); // base64 estándar
+  const qrUrl = `https://www.arca.gob.ar/fe/qr/?p=${base64}`;
+  console.log("QR ARCA JSON:", qrData);
+  console.log("QR ARCA URL:", qrUrl);
+  return await QRCode.toDataURL(qrUrl);
 }
 
 /* =======================
@@ -222,8 +236,9 @@ async function procesarSnapshot(snapshot) {
     const qrData = await generarQR({
       cae: caeData.CAE,
       nroCbte,
-      fecha: moment().format('YYYYMMDD'),
+      fecha: moment().format('YYYY-MM-DD'),
       cuit: parseInt(CUIT),
+      importe: Number(total),
     });
 
     const buffers = [];

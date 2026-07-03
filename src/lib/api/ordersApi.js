@@ -4,7 +4,8 @@ import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
-import { processStockForDeliveredOrder } from './transactionsApi'; 
+import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
+import { processStockForDeliveredOrder } from './transactionsApi';
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
 export const validateStatusChange = (currentStatus, newStatus, orderType) => {
@@ -274,23 +275,18 @@ export const saveOrder = async (orderData, shift) => {
     const mainStatus = orderData.status?.main || 'ACEPTADO';
     const subStatus = mainStatus === 'COMANDADO' ? 'Esperando confirmación' : (orderData.status?.sub || 'Esperando confirmación');
 
-    let calculatedCostoTotal = 0;
-    if (formattedItems && Array.isArray(formattedItems)) {
-        calculatedCostoTotal = formattedItems.reduce((sum, item) => {
-            const qty = Number(item.cantidad) || Number(item.quantity) || 1;
-            const unitCost = Number(item.costoTotalReceta) || Number(item.costoUnitario) || 0;
-            return sum + (qty * unitCost);
-        }, 0);
-    }
-    calculatedCostoTotal = Math.round(calculatedCostoTotal * 1000) / 1000;
+    // Venta, costo y ganancia de la venta (gestión — no afecta facturación/CAE/PDF)
+    const { totalVenta, totalCosto, ganancia } = calcularVentaCostoGanancia(formattedItems);
 
     const finalOrderData = {
       ...orderData,
       date: formatDateForFirebase(now),
       fechacaja: fechaCaja,
-      hora: orderData.hora || null, 
+      hora: orderData.hora || null,
       items: formattedItems,
-      CostoTotal: calculatedCostoTotal,
+      CostoTotal: totalCosto,
+      VentaTotal: totalVenta,
+      Ganancia: ganancia,
       payment: finalPayment,
       status: {
         main: mainStatus,
@@ -467,13 +463,10 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
 
     if (updatePayload.items) {
       updatePayload.items = formatOrderItemsForFirebase(updatePayload.items);
-      let calculatedCostoTotal = 0;
-      updatePayload.items.forEach(item => {
-          const qty = Number(item.cantidad) || Number(item.quantity) || 1;
-          const unitCost = Number(item.costoTotalReceta) || Number(item.costoUnitario) || 0;
-          calculatedCostoTotal += (qty * unitCost);
-      });
-      updatePayload.CostoTotal = Math.round(calculatedCostoTotal * 1000) / 1000;
+      const { totalVenta, totalCosto, ganancia } = calcularVentaCostoGanancia(updatePayload.items);
+      updatePayload.CostoTotal = totalCosto;
+      updatePayload.VentaTotal = totalVenta;
+      updatePayload.Ganancia   = ganancia;
     }
     
     if (updatePayload['status/main'] === 'COMANDADO') {

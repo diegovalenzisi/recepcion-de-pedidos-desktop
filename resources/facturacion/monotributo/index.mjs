@@ -237,11 +237,6 @@ const EMISOR_CUIT_FORMAT  = process.env.EMISOR_CUIT_FORMAT  || '';
 const EMISOR_DOMICILIO    = process.env.EMISOR_DOMICILIO    || '';
 const EMISOR_COND_IVA     = process.env.EMISOR_COND_IVA    || 'Monotributista';
 
-function toBase64Url(obj) {
-  return Buffer.from(JSON.stringify(obj)).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
 async function generarPDFyGuardar(pedido, caeData, nroCbte, facturaKey) {
   const filename = `factura-${facturaKey}.pdf`;
   const doc = new PDFDocument({ size: [230, 800], margin: 10 });
@@ -274,13 +269,27 @@ async function generarPDFyGuardar(pedido, caeData, nroCbte, facturaKey) {
   doc.text(`CAE: ${caeData.CAE}`);
   doc.text(`Vto CAE: ${caeData.CAEFchVto}`);
 
-  const qrPayload = {
-    ver: 1, fecha: fechaISO, cuit: CUIT, ptoVta: PTO_VTA, tipoCmp: 11,
-    nroCmp: nroCbte, importe: Number(Number(pedido.TOTAL).toFixed(2)),
-    moneda: 'PES', ctz: 1, tipoDocRec: 99, nroDocRec: 0,
-    tipoCodAut: 'E', codAut: caeData.CAE,
+  // JSON del QR según especificación oficial ARCA/AFIP (RG 4291).
+  const qrData = {
+    ver: 1,
+    fecha: fechaISO,                                   // YYYY-MM-DD
+    cuit: CUIT,                                        // CUIT emisor (número)
+    ptoVta: PTO_VTA,                                   // solo punto de venta
+    tipoCmp: 11,                                       // Factura C
+    nroCmp: nroCbte,                                   // solo número de comprobante (sin pto vta)
+    importe: Number(Number(pedido.TOTAL).toFixed(2)),  // importe total real (número)
+    moneda: 'PES',
+    ctz: 1,
+    tipoDocRec: 99,                                    // Consumidor Final
+    nroDocRec: 0,
+    tipoCodAut: 'E',                                   // E = CAE
+    codAut: Number(caeData.CAE),                       // CAE real como número
   };
-  const qrUrl    = `https://www.afip.gob.ar/fe/qr/?p=${toBase64Url(qrPayload)}`;
+  // base64 ESTÁNDAR (ARCA no decodifica base64 url-safe con - _ )
+  const base64   = Buffer.from(JSON.stringify(qrData)).toString('base64');
+  const qrUrl    = `https://www.arca.gob.ar/fe/qr/?p=${base64}`;
+  console.log("QR ARCA JSON:", qrData);
+  console.log("QR ARCA URL:", qrUrl);
   const qrImage  = await QRCode.toDataURL(qrUrl);
   const qrBuffer = Buffer.from(qrImage.split(',')[1], 'base64');
   doc.image(qrBuffer, { fit: [120, 120], align: 'center' });

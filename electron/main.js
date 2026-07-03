@@ -102,6 +102,27 @@ function getMonoDir(cuentaId) {
   return path.join(FACTURACION_USER_DIR(), 'mono', cuentaId);
 }
 
+// Refresca SOLO el motor de facturación (index.mjs) de una cuenta ya configurada
+// desde el template empaquetado en la app. NUNCA toca .env, certificados,
+// serviceAccount ni configuración del local. Sirve para que las correcciones del
+// motor (p. ej. el armado del QR ARCA) lleguen a instalaciones existentes al actualizar.
+function syncFacturacionEngine(accountDir, tipo) {
+  try {
+    if (!existsSync(accountDir)) return;
+    const templateDir = path.join(
+      getTemplatesDir(),
+      tipo === 'responsable_inscripto' ? 'responsable-inscripto' : 'monotributo'
+    );
+    const srcIndex = path.join(templateDir, 'index.mjs');
+    if (existsSync(srcIndex)) {
+      copyFileSync(srcIndex, path.join(accountDir, 'index.mjs'));
+      console.log(`[AFIP ENGINE SYNC] index.mjs actualizado desde template en ${accountDir}`);
+    }
+  } catch (e) {
+    console.error('[AFIP ENGINE SYNC] error:', e.message);
+  }
+}
+
 // Ensure shared package.json for node_modules in the parent dir
 function ensureSharedPkg() {
   const dir = FACTURACION_USER_DIR();
@@ -208,7 +229,110 @@ function stopAllFacturacion() {
   Object.keys(facturacionProcs).forEach(stopFacturacionProc);
 }
 
-function autoStartFacturacion() {
+// Lee el "dueño de facturación" desde el RTDB propio de la cuenta (mismo Firebase
+// que usa el motor, path FACTURACION_OWNERS/{cuit}_{ptoVta}). NUNCA asume ownership
+// en caso de error/timeout — devuelve { ok:false } y el caller debe tratarlo como
+// "no confirmado" (no arrancar). Esto evita que dos PCs se crean dueñas por estar
+// sin conexión (regla de seguridad explícita del usuario).
+function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta) {
+  return new Promise((resolve) => {
+    if (!firebaseDb || !cuit || !ptoVta) { resolve({ ok: false, owner: null }); return; }
+    const sanitize = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
+    const key = `${sanitize(cuit)}_${sanitize(ptoVta)}`;
+    const url = `${String(firebaseDb).replace(/\/+$/, '')}/FACTURACION_OWNERS/${key}.json`;
+    let settled = false;
+    const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+    try {
+      const mod = url.startsWith('https') ? https : http;
+      const req = mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 6000 }, (res) => {
+        if (res.statusCode !== 200) { done({ ok: false, owner: null }); return; }
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => {
+          try {
+            const parsed = data ? JSON.parse(data) : null;
+            done({ ok: true, owner: parsed || null });
+          } catch { done({ ok: false, owner: null }); }
+        });
+      });
+      req.on('timeout', () => { req.destroy(); done({ ok: false, owner: null }); });
+      req.on('error', () => done({ ok: false, owner: null }));
+    } catch {
+      done({ ok: false, owner: null });
+    }
+  });
+}
+
+// Valida TODO lo necesario antes de decidir si esta PC debe arrancar el motor de
+// facturación para una cuenta:
+//   1. `activo` local (Inicio automático de facturación) — decisión de esta PC,
+//      nunca sincronizada vía Firebase (ver afipConfigApi.js / enforceLocalActivo).
+//   2. Cuenta inicializada, .env / certs / serviceAccount / motor presentes.
+//   3. Ownership REAL confirmado contra Firebase (FACTURACION_OWNERS) — cierra el
+//      caso borde de una PC que perdió la posesión mientras estaba apagada/offline
+//      y todavía tiene `activo:true` en su archivo local desactualizado.
+// Si algo falla, no se escucha Firebase, no se pide CAE, no se emite nada, no se
+// mueve nada a historial.
+async function evaluateAutoStart(key, dir, fields, label) {
+  const initialized = !!fields.initialized;
+  const activo = !!fields.activo;
+
+  if (!activo) {
+    console.log(`Facturación automática desactivada para esta PC/cuenta. No se inicia el motor. (${label})`);
+    return { start: false };
+  }
+  if (!initialized) {
+    console.log(`[AFIP AUTOSTART] ${label}: activo=true pero cuenta no inicializada — no se inicia el motor.`);
+    return { start: false };
+  }
+
+  const envPath  = path.join(dir, '.env');
+  const certPath = path.join(dir, 'cert', 'certificado.crt');
+  const keyPath  = path.join(dir, 'cert', 'clave.key');
+  const saPath   = path.join(dir, 'serviceAccount.json');
+  const enginePath = path.join(dir, 'index.mjs');
+
+  const checks = {
+    env:            existsSync(envPath),
+    cert:           existsSync(certPath),
+    key:            existsSync(keyPath),
+    serviceAccount: existsSync(saPath),
+    engine:         existsSync(enginePath),
+  };
+
+  let envVars = {};
+  if (checks.env) {
+    try { envVars = parseEnvFile(envPath); } catch { /* se reporta abajo como faltante */ }
+  }
+  checks.firebaseUrl  = !!envVars.FIREBASE_DB;
+  checks.firebasePath = !!envVars.FIREBASE_PATH;
+
+  const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
+  if (missing.length > 0) {
+    console.log(`[AFIP AUTOSTART] ${label}: activo=true pero faltan requisitos [${missing.join(', ')}] — no se inicia el motor. El renderer intentará reconstruir automáticamente.`);
+    return { start: false };
+  }
+
+  if (facturacionProcs[key]?.status === 'running') {
+    console.log(`[AFIP AUTOSTART] ${label}: ya hay un proceso corriendo para esta cuenta (key=${key}) — no se inicia otro.`);
+    return { start: false };
+  }
+
+  // Verificación remota de ownership — la autoridad final.
+  const { ok: ownerCheckOk, owner } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA);
+  if (!ownerCheckOk) {
+    console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (sin conexión o error) — por seguridad, no se inicia el motor.`);
+    return { start: false };
+  }
+  if (!owner || owner.machineId !== MACHINE_ID) {
+    console.log('Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.');
+    return { start: false, ownershipMismatch: true };
+  }
+
+  return { start: true };
+}
+
+async function autoStartFacturacion() {
   try {
     const cfgPath = path.join(app.getPath('userData'), 'facturacion-config.json');
     if (!existsSync(cfgPath)) {
@@ -216,38 +340,50 @@ function autoStartFacturacion() {
       return;
     }
     const config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
-    // El autostart se controla por ri.activo / cuenta.activo (switch por cuenta).
-    // El flag global config.autoStart ya NO es requerido para no confundir al usuario.
-    console.log(`[AFIP AUTOSTART] config loaded tipo=${config.tipo} autoStart=${config.autoStart}`);
-
-    const certFilesOk = (dir) =>
-      existsSync(path.join(dir, 'serviceAccount.json')) &&
-      existsSync(path.join(dir, 'cert', 'certificado.crt')) &&
-      existsSync(path.join(dir, 'cert', 'clave.key'));
+    console.log(`[AFIP AUTOSTART] config loaded tipo=${config.tipo}`);
+    let dirty = false;
 
     if (config.tipo === 'responsable_inscripto') {
       const ri = config.ri || {};
       const riDir = getRIDir();
-      const filesOk = certFilesOk(riDir);
-      console.log(`[AFIP AUTOSTART] RI: initialized=${ri.initialized} activo=${ri.activo} filesOk=${filesOk}`);
-      if (ri.initialized && ri.activo && filesOk) {
-        console.log('[AFIP AUTOSTART] calling spawnFacturacionProc(ri)');
+      const label = `${ri.nombre || 'Responsable Inscripto'} / CUIT ${ri.cuit || '?'} / Pto. Vta. ${ri.ptoVta || '?'}`;
+      const { start, ownershipMismatch } = await evaluateAutoStart('ri', riDir, ri, label);
+      if (start) {
+        console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
+        syncFacturacionEngine(riDir, 'responsable_inscripto');
         const ok = spawnFacturacionProc('ri', riDir);
         console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
-      } else if (ri.activo && !filesOk) {
-        console.log('[AFIP AUTOSTART] archivos faltantes — renderer hará rebuild automático antes de iniciar');
+      } else if (ownershipMismatch) {
+        config.ri = { ...ri, activo: false };
+        dirty = true;
+        stopFacturacionProc('ri');
       }
     } else if (config.tipo === 'monotributo') {
-      (config.monotributo?.cuentas || []).forEach(c => {
+      const cuentas = config.monotributo?.cuentas || [];
+      for (const c of cuentas) {
+        const key = `mono_${c.id}`;
         const dir = getMonoDir(c.id);
-        const filesOk = certFilesOk(dir);
-        console.log(`[AFIP AUTOSTART] Mono ${c.id}: initialized=${c.initialized} activo=${c.activo} filesOk=${filesOk}`);
-        if (c.initialized && c.activo && filesOk) {
-          console.log(`[AFIP AUTOSTART] calling spawnFacturacionProc(mono_${c.id})`);
-          const ok = spawnFacturacionProc(`mono_${c.id}`, dir);
+        const label = `${c.nombre || 'Monotributo'} / CUIT ${c.cuit || '?'} / Pto. Vta. ${c.ptoVta || '?'}`;
+        const { start, ownershipMismatch } = await evaluateAutoStart(key, dir, c, label);
+        if (start) {
+          console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
+          syncFacturacionEngine(dir, 'monotributo');
+          const ok = spawnFacturacionProc(key, dir);
           console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
+        } else if (ownershipMismatch) {
+          c.activo = false;
+          dirty = true;
+          stopFacturacionProc(key);
         }
-      });
+      }
+    }
+
+    // Persistir la corrección local si esta PC perdió ownership — evita repetir
+    // el chequeo remoto en cada reinicio con el mismo resultado "ya no soy dueña".
+    if (dirty) {
+      try { writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8'); } catch (e) {
+        console.error('[AFIP AUTOSTART] no se pudo persistir activo:false tras perder ownership:', e.message);
+      }
     }
   } catch (e) {
     console.error('[AFIP AUTOSTART] process failed:', e.message);
@@ -1226,6 +1362,7 @@ function setupIPC() {
 
   // Machine ID
   ipcMain.handle('machine-id:get', () => MACHINE_ID);
+  ipcMain.handle('machine-id:get-info', () => ({ machineId: MACHINE_ID, hostname: os.hostname() }));
 
   // Leer un archivo como base64 (para subir certs a Firebase Storage desde el renderer)
   ipcMain.handle('facturacion:read-file-base64', (_e, filePath) => {

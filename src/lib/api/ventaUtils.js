@@ -39,3 +39,75 @@ export const safeCost = (value) => {
   const n = Number(value);
   return isNaN(n) ? 0 : n;
 };
+
+/**
+ * Convierte cualquier valor de costo a un número seguro. NUNCA devuelve un objeto,
+ * así que es seguro para renderizar. Si viene un objeto (p. ej. { receta, stockType }
+ * o { costoTotal, ... }) intenta extraer un número conocido; si no, devuelve 0.
+ */
+export const normalizarCosto = (valor) => {
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor : 0;
+  if (typeof valor === 'string') {
+    const n = Number(valor.replace(/\$/g, '').replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (valor && typeof valor === 'object') {
+    const posible =
+      valor.costoTotalReceta ??
+      valor.costoTotal ??
+      valor.totalCosto ??
+      valor.costoUnitario ??
+      valor.costo ??
+      valor.valor ??
+      valor.propio ??
+      0;
+    // Evitar recursión infinita si el campo elegido vuelve a ser un objeto
+    return typeof posible === 'object' ? 0 : normalizarCosto(posible);
+  }
+  return 0;
+};
+
+/**
+ * Convierte un valor de stock/cantidad a número seguro para render y comparación.
+ * Si el stock viene como objeto de configuración de artículo ({ stockType, propio,
+ * receta, heredadoDe }), toma `propio`; si no, 0. Nunca devuelve un objeto.
+ */
+export const normalizarStock = (valor) => {
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor : 0;
+  if (typeof valor === 'string') {
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : 0;
+  }
+  if (valor && typeof valor === 'object') {
+    const n = Number(valor.propio);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+};
+
+/**
+ * Calcula venta, costo y ganancia de una lista de ítems de una venta.
+ *   totalVenta = Σ cantidad × valor (precio de venta unitario)
+ *   totalCosto = Σ cantidad × (costoTotalReceta ?? costoUnitario)   [costo real del artículo]
+ *   ganancia   = totalVenta − totalCosto
+ * Redondea a 3 decimales, igual que el campo CostoTotal ya existente.
+ * NO afecta facturación/CAE/PDF: solo agrega datos de gestión a la venta.
+ */
+export const calcularVentaCostoGanancia = (items = []) => {
+  let totalVenta = 0;
+  let totalCosto = 0;
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      const qty       = Number(item.cantidad) || Number(item.quantity) || 1;
+      // normalizarCosto garantiza número aunque el campo venga como objeto (nunca NaN/objeto)
+      const unitPrice = normalizarCosto(item.valor ?? item.precio ?? item.price);
+      const unitCost  = normalizarCosto(item.costoTotalReceta ?? item.costoUnitario);
+      totalVenta += qty * unitPrice;
+      totalCosto += qty * unitCost;
+    }
+  }
+  const r3 = (n) => Math.round(n * 1000) / 1000;
+  const venta = r3(totalVenta);
+  const costo = r3(totalCosto);
+  return { totalVenta: venta, totalCosto: costo, ganancia: r3(venta - costo) };
+};
