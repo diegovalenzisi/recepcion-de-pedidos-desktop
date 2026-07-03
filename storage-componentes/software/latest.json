@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.31",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.31%2FRecepcion-de-Pedidos-Setup-1.3.31.exe?alt=media",
-  "sha256": "c03419de5be08b1f518e0af6fae5379525c0faf8fd306e82d8b51fcf63d73bda",
-  "size": 120417758,
+  "latest": "1.3.32",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.32%2FRecepcion-de-Pedidos-Setup-1.3.32.exe?alt=media",
+  "sha256": "b3843a73f78c3a3f4842ff47fb8857bfe6bfbbad4c84c2e5c222c1b94ad23773",
+  "size": 120416548,
   "mandatory": false,
-  "releaseDate": "2026-07-02",
-  "notes": "Versión 1.3.31: QR ARCA/AFIP corregido, facturación segura por PC autorizada y cálculo de ganancia en ventas."
+  "releaseDate": "2026-07-03",
+  "notes": "Versión 1.3.32: solo una PC factura por local/cuenta; al activar otra PC, la anterior se desactiva y detiene el motor en tiempo real."
 }

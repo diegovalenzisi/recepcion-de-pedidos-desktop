@@ -1,0 +1,6 @@
+{
+  "version": "1.3.32",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.32.exe",
+  "releaseDate": "2026-07-03",
+  "notes": "Control en tiempo real de PC autorizada para facturar: cuando otra PC toma la facturación, la anterior se desactiva y detiene el motor al instante (listener SSE de Firebase). Una sola PC factura por local/cuenta."
+}
