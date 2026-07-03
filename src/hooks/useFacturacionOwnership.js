@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchOwner, claimOwner, releaseOwner } from '@/lib/api/facturacionOwnerApi';
+import { fetchOwner, claimOwner, releaseOwner, subscribeOwner } from '@/lib/api/facturacionOwnerApi';
 
-const POLL_MS = 12000;
+// Respaldo lento: el arbitraje real ocurre por el listener SSE en tiempo real.
+// El polling solo cubre el caso de que el stream SSE se caiga.
+const POLL_MS = 20000;
 
 const fAPI = () => window.electronAPI?.facturacion;
 
@@ -36,6 +38,44 @@ export function useFacturacionOwnership() {
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState(null);
   const lastLostOwnershipRef = useRef({});
+  // Refs para leer estado fresco desde los callbacks del listener SSE
+  const machineRef = useRef(null);
+  const accountsRef = useRef([]);
+  useEffect(() => { machineRef.current = machine; }, [machine]);
+  useEffect(() => { accountsRef.current = accounts; }, [accounts]);
+
+  // Aplica un cambio de dueño recibido en tiempo real (SSE) para UNA cuenta:
+  // actualiza el estado y, si esta PC perdió la posesión, apaga el motor y baja
+  // el `activo` local INMEDIATAMENTE (sin esperar al polling).
+  const enforceOwner = useCallback(async (accountKey, ownerVal) => {
+    const f = fAPI();
+    const mid = machineRef.current;
+    const acc = accountsRef.current.find((a) => a.key === accountKey);
+    if (!f || !mid || !acc) return;
+
+    const owner = ownerVal || null;
+    const isOwner = !!owner && owner.machineId === mid.machineId;
+    const wasLocalActivo = !!acc.fields.activo;
+
+    // Otra PC tomó la posesión y esta PC estaba activa → apagar ya.
+    if (owner && !isOwner && wasLocalActivo && !lastLostOwnershipRef.current[accountKey]) {
+      lastLostOwnershipRef.current[accountKey] = true;
+      console.log('Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.');
+      try { await f.stop(accountKey); } catch { /* noop */ }
+      try { await persistActivo(f, acc.tipo, accountKey, acc.cuentaId, false); } catch { /* noop */ }
+      setAccounts((prev) => prev.map((a) =>
+        a.key === accountKey
+          ? { ...a, owner, ownerOk: true, isOwner: false, fields: { ...a.fields, activo: false } }
+          : a
+      ));
+      return;
+    }
+
+    if (isOwner) lastLostOwnershipRef.current[accountKey] = false;
+    setAccounts((prev) => prev.map((a) =>
+      a.key === accountKey ? { ...a, owner, ownerOk: true, isOwner } : a
+    ));
+  }, []);
 
   const loadAndPoll = useCallback(async () => {
     const f = fAPI();
@@ -92,6 +132,26 @@ export function useFacturacionOwnership() {
     const id = setInterval(loadAndPoll, POLL_MS);
     return () => clearInterval(id);
   }, [loadAndPoll]);
+
+  // Listener en TIEMPO REAL por cuenta. Se re-suscribe solo cuando cambian las
+  // cuentas o sus claves (cuit/ptoVta/firebaseDb) — la firma evita re-suscribir
+  // en cada actualización de estado del dueño.
+  const subSignature = accounts
+    .map((a) => `${a.key}|${a.fields.firebaseDb || ''}|${a.fields.cuit || ''}|${a.fields.ptoVta || ''}`)
+    .join(',');
+  useEffect(() => {
+    const current = accountsRef.current;
+    const unsubs = current.map((acc) => {
+      const { firebaseDb, cuit, ptoVta } = acc.fields;
+      if (!firebaseDb || !cuit || !ptoVta) return () => {};
+      return subscribeOwner(firebaseDb, cuit, ptoVta, (ownerVal) => {
+        if (ownerVal === undefined) { loadAndPoll(); return; } // cambio parcial → re-leer
+        enforceOwner(acc.key, ownerVal);
+      });
+    });
+    return () => unsubs.forEach((u) => { try { u && u(); } catch { /* noop */ } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subSignature, enforceOwner, loadAndPoll]);
 
   /**
    * Activa o desactiva el inicio automático de facturación para una cuenta EN

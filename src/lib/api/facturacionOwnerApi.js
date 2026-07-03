@@ -69,3 +69,70 @@ export const releaseOwner = async (firebaseDb, cuit, ptoVta) => {
     return { ok: false, error: e?.message };
   }
 };
+
+/**
+ * Escucha en TIEMPO REAL al dueño de una cuenta usando el streaming SSE de RTDB
+ * (EventSource sobre el endpoint .json). Cada vez que otra PC toma posesión
+ * (claimOwner) o la libera (releaseOwner), este callback se dispara casi al
+ * instante, permitiendo que la PC anterior se apague sin esperar al polling.
+ *
+ * callback(owner):
+ *   - owner = objeto { machineId, ... }  → dueño actual
+ *   - owner = null                        → sin dueño
+ *   - owner = undefined                   → cambio parcial: conviene re-leer con fetchOwner
+ *
+ * Devuelve una función para cancelar la suscripción. Reconecta solo ante errores.
+ */
+export const subscribeOwner = (firebaseDb, cuit, ptoVta, callback) => {
+  if (!firebaseDb || !cuit || !ptoVta || typeof EventSource === 'undefined') {
+    return () => {};
+  }
+  const url = ownerUrl(firebaseDb, cuit, ptoVta);
+  let es = null;
+  let closed = false;
+  let reconnectTimer = null;
+
+  const handleEvent = (e) => {
+    // RTDB manda keep-alive (data: null) que ignoramos.
+    if (!e?.data || e.data === 'null') return;
+    try {
+      const parsed = JSON.parse(e.data);
+      if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'path')) {
+        if (parsed.path === '/') {
+          callback(parsed.data ?? null);       // objeto completo del dueño (o null)
+        } else {
+          callback(undefined);                  // cambio parcial → re-leer
+        }
+      }
+    } catch {
+      /* keep-alive u otro evento no-JSON: ignorar */
+    }
+  };
+
+  const connect = () => {
+    if (closed) return;
+    try {
+      es = new EventSource(url);
+    } catch {
+      reconnectTimer = setTimeout(connect, 4000);
+      return;
+    }
+    es.addEventListener('put', handleEvent);
+    es.addEventListener('patch', handleEvent);
+    es.onerror = () => {
+      try { es && es.close(); } catch { /* noop */ }
+      if (!closed) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 4000);
+      }
+    };
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    clearTimeout(reconnectTimer);
+    try { es && es.close(); } catch { /* noop */ }
+  };
+};
