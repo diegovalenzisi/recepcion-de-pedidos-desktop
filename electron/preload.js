@@ -85,14 +85,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   components: {
-    check:   ()           => ipcRenderer.invoke('components:check'),
-    install: (keys)       => ipcRenderer.invoke('components:install', keys),
+    check:     ()     => ipcRenderer.invoke('components:check'),
+    install:   (keys) => ipcRenderer.invoke('components:install', keys),
+    bootstrap: ()     => ipcRenderer.invoke('components:bootstrap'),
+    markNotReady: ()  => ipcRenderer.invoke('components:mark-not-ready'),
     onProgress: (callback) => {
       const handler = (_e, data) => callback(data);
       ipcRenderer.on('components:progress', handler);
       return () => ipcRenderer.removeListener('components:progress', handler);
     },
   },
+  relaunchApp:  () => ipcRenderer.invoke('app:relaunch'),
+  getBootFlags: () => ipcRenderer.invoke('app:boot-flags'),
   isElectron: true,
 });
 

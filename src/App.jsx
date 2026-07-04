@@ -32,6 +32,7 @@ import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
 import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
+import DepsBootstrapScreen from '@/components/DepsBootstrapScreen.jsx';
 import FacturacionAutoStartWidget from '@/components/FacturacionAutoStartWidget.jsx';
 
 const AttentionPage = React.lazy(() => import('@/pages/AttentionPage.jsx'));
@@ -199,6 +200,16 @@ function AppContent() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
+  // ── Bootstrap de dependencias de facturación (primer inicio en PC nueva) ──────
+  const [depsStatus, setDepsStatus] = useState(() => {
+    // Solo en Electron empaquetado. En web/dev arranca en 'done' (no bloquea).
+    if (!window.electronAPI?.components?.bootstrap) return 'done';
+    return 'checking';
+  });
+  const [depsLabel, setDepsLabel] = useState('');
+  const [depsPct, setDepsPct] = useState(null);
+  const [depsError, setDepsError] = useState('');
+
   // Listener de progreso de descarga (IPC → renderer)
   useEffect(() => {
     if (!window.electronAPI?.onDownloadProgress) return;
@@ -207,6 +218,88 @@ function AppContent() {
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
+
+  // Ejecuta la verificación/instalación automática de dependencias de facturación.
+  // Reutiliza EXACTAMENTE la misma descarga desde Firebase que usa el instalador
+  // manual (components:bootstrap → installComponents en main.js). Idempotente:
+  // si ya está todo, resuelve al instante sin demorar el arranque.
+  const runDepsBootstrap = useCallback(async () => {
+    const comp = window.electronAPI?.components;
+    if (!comp?.bootstrap) { setDepsStatus('done'); return; }
+
+    setDepsError('');
+    setDepsPct(null);
+    setDepsLabel('');
+    setDepsStatus('checking');
+
+    try {
+      const res = await comp.bootstrap();
+
+      if (res?.ok && res.alreadyInstalled) {
+        setDepsStatus('done');           // ruta rápida: ya estaba todo
+        return;
+      }
+
+      if (res?.ok && res.installed) {
+        // Se instaló correctamente. Reiniciar UNA sola vez para arrancar limpio.
+        let flags = { depsBootstrapped: false };
+        try { flags = await window.electronAPI.getBootFlags?.() || flags; } catch { /* noop */ }
+        if (!flags.depsBootstrapped && window.electronAPI.relaunchApp) {
+          await window.electronAPI.relaunchApp();  // main hace app.relaunch + exit
+          return;                                   // la app se está reiniciando
+        }
+        setDepsStatus('done');           // ya venía de un reinicio: continuar
+        return;
+      }
+
+      // Otra instancia está instalando (lock activo): esperar y reintentar.
+      if (res?.busy) {
+        setDepsStatus('installing');
+        setDepsLabel('Otra ventana ya está instalando dependencias. Esperando...');
+        setDepsPct(null);
+        setTimeout(() => { runDepsBootstrap(); }, 4000);
+        return;
+      }
+
+      // No se pudo dejar todo instalado
+      const faltan = (res?.missing || []).join(', ');
+      setDepsError(
+        (res?.errors && res.errors.length ? res.errors.join(' · ') : '') ||
+        (faltan ? `Faltan componentes: ${faltan}.` : 'No se pudo completar la instalación.')
+      );
+      setDepsStatus('error');
+    } catch (e) {
+      console.error('[deps-bootstrap]', e);
+      setDepsError('No hay conexión o falló la descarga. Verificá internet y reintentá.');
+      setDepsStatus('error');
+    }
+  }, []);
+
+  // Corre el bootstrap una sola vez al montar, y escucha el progreso de instalación.
+  const didDepsBootstrap = useRef(false);
+  useEffect(() => {
+    const comp = window.electronAPI?.components;
+    if (!comp?.onProgress) return undefined;
+    const cleanup = comp.onProgress((p) => {
+      if (!p) return;
+      setDepsStatus('installing');
+      const name = p.label || p.component || '';
+      const stepTxt = p.step === 'download' ? 'Descargando'
+        : p.step === 'validate' ? 'Verificando'
+        : p.step === 'extract' ? 'Extrayendo'
+        : p.step === 'install' ? 'Instalando'
+        : p.step === 'manifest' ? 'Preparando' : '';
+      setDepsLabel([stepTxt, name].filter(Boolean).join(': '));
+      setDepsPct(typeof p.pct === 'number' ? p.pct : null);
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  useEffect(() => {
+    if (didDepsBootstrap.current) return;
+    didDepsBootstrap.current = true;
+    runDepsBootstrap();
+  }, [runDepsBootstrap]);
 
   // ── PreLoginUpdateCheck ───────────────────────────────────────────────────
   // Chequeo de actualizaciones UNA sola vez al arrancar, ANTES del login.
@@ -388,10 +481,29 @@ function AppContent() {
     window.location.reload();
   };
   
+  // Bootstrap de dependencias de facturación: PRIMERO de todo, antes de iniciar
+  // la app normal. En PC nueva descarga/instala desde Firebase y reinicia una vez.
+  if (['checking', 'installing', 'error'].includes(depsStatus)) {
+    return (
+      <DepsBootstrapScreen
+        status={depsStatus}
+        label={depsLabel}
+        pct={depsPct}
+        error={depsError}
+        onRetry={runDepsBootstrap}
+        onContinue={() => {
+          try { window.electronAPI?.components?.markNotReady?.(); } catch { /* noop */ }
+          console.warn('[deps-bootstrap] Continuar sin facturación: dependencias no instaladas en esta PC.');
+          setDepsStatus('done');
+        }}
+      />
+    );
+  }
+
   if (loading || authLoading) {
     return <LoadingFallback />;
   }
-  
+
   if (!localId) {
     return <Suspense fallback={<LoadingFallback />}><LocalIdSetup onSetupComplete={handleSetupComplete} /></Suspense>;
   }

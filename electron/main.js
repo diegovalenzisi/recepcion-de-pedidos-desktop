@@ -2142,12 +2142,20 @@ function checkComponentsState() {
 
 ipcMain.handle('components:check', () => checkComponentsState());
 
-ipcMain.handle('components:install', async (_e, componentKeys) => {
+// Dependencias de facturación requeridas (deben estar TODAS para facturar).
+const REQUIRED_COMPONENTS = ['nodeAfip', 'openssl', 'facturacionRuntime'];
+
+function requiredComponentsMissing(state) {
+  return REQUIRED_COMPONENTS.filter((k) => !state?.[k]?.ok);
+}
+
+// Descarga e instala componentes desde Firebase Storage (instalaciones/componentes).
+// Helper compartido por el instalador manual (components:install) y el bootstrap
+// automático (components:bootstrap). NO duplica lógica de descarga.
+async function installComponents(componentKeys, sendProg = () => {}) {
   const userData = app.getPath('userData');
   const tempDir  = path.join(app.getPath('temp'), 'dlvsistema-components');
   mkdirSync(tempDir, { recursive: true });
-
-  const sendProg = (payload) => mainWindow?.webContents?.send('components:progress', payload);
 
   // 1. Descargar manifest
   sendProg({ step: 'manifest', msg: 'Descargando manifest…' });
@@ -2155,13 +2163,13 @@ ipcMain.handle('components:install', async (_e, componentKeys) => {
   try {
     await downloadWithProgress(getComponentUrl('manifest.json'), manifestPath, () => {});
   } catch (e) {
-    return { ok: false, error: `No se pudo descargar el manifest: ${e.message}` };
+    return { ok: false, error: `No se pudo descargar el manifest: ${e.message}`, errors: [e.message] };
   }
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
   } catch (e) {
-    return { ok: false, error: `manifest.json inválido: ${e.message}` };
+    return { ok: false, error: `manifest.json inválido: ${e.message}`, errors: [e.message] };
   }
 
   const destDirMap = {
@@ -2228,7 +2236,121 @@ ipcMain.handle('components:install', async (_e, componentKeys) => {
 
   const state = checkComponentsState();
   return { ok: errors.length === 0, errors, state };
+}
+
+// Instalación MANUAL (SystemHealthPanel → clave DiegoL). Se mantiene como respaldo.
+ipcMain.handle('components:install', async (_e, componentKeys) => {
+  const sendProg = (payload) => mainWindow?.webContents?.send('components:progress', payload);
+  return installComponents(componentKeys, sendProg);
 });
+
+// Bootstrap AUTOMÁTICO de dependencias de facturación (primer inicio en PC nueva).
+// Chequeo LOCAL por PC. Solo descarga si falta algo. No pide clave. Idempotente.
+// No escribe NADA global en Firebase (solo lee componentes de Storage e instala en userData).
+let bootstrapPromise = null;              // guardia anti-concurrencia dentro de esta instancia
+const LOCK_STALE_MS = 10 * 60 * 1000;     // un lock más viejo que esto se considera abandonado
+const bootstrapLockPath = () => path.join(app.getPath('userData'), 'deps-bootstrap.lock');
+
+function bootstrapLockFresh() {
+  try {
+    const j = JSON.parse(readFileSync(bootstrapLockPath(), 'utf-8'));
+    return j && typeof j.ts === 'number' && (Date.now() - j.ts) < LOCK_STALE_MS;
+  } catch { return false; }
+}
+
+// Verificación + instalación real. La marca deps-bootstrap.json es SOLO informativa:
+// nunca reemplaza la verificación real de archivos (checkComponentsState siempre corre).
+async function runBootstrap() {
+  const userData = app.getPath('userData');
+  const state = checkComponentsState();
+  const missing = requiredComponentsMissing(state);
+
+  console.log('[BOOTSTRAP] Verificando dependencias de facturación...');
+  console.log(`[BOOTSTRAP]   userData: ${userData}`);
+  console.log(`[BOOTSTRAP]   node-afip:           ${state.nodeAfip.ok ? 'OK' : 'FALTA'} (${state.nodeAfip.version || 'no encontrado'}) → ${state.nodeAfip.path}`);
+  console.log(`[BOOTSTRAP]   openssl:             ${state.openssl.ok ? 'OK' : 'FALTA'} (${state.openssl.version || 'no encontrado'}) → ${state.openssl.path}`);
+  console.log(`[BOOTSTRAP]   facturacion-runtime: ${state.facturacionRuntime.ok ? 'OK' : 'FALTA'} → ${state.facturacionRuntime.path}`);
+
+  if (missing.length === 0) {
+    console.log('[BOOTSTRAP] Todas las dependencias presentes. Inicio normal.');
+    return { ok: true, alreadyInstalled: true, missing: [], state };
+  }
+
+  // Anti-concurrencia entre procesos (abrir/cerrar rápido → 2 instancias).
+  if (bootstrapLockFresh()) {
+    console.warn('[BOOTSTRAP] Otra instancia ya está instalando dependencias (lock activo). Se evita la ejecución en paralelo.');
+    return { ok: false, busy: true, missing, state };
+  }
+
+  try {
+    writeFileSync(bootstrapLockPath(), JSON.stringify({ pid: process.pid, ts: Date.now() }), 'utf-8');
+  } catch { /* si no se puede escribir el lock igual seguimos, el singleton en-proceso ya protege */ }
+
+  try {
+    console.log(`[BOOTSTRAP] Faltan dependencias: ${missing.join(', ')}. Descargando desde Firebase (instalaciones/componentes)...`);
+    const sendProg = (payload) => mainWindow?.webContents?.send('components:progress', payload);
+    const result = await installComponents(missing, sendProg);
+
+    const state2   = checkComponentsState();
+    const missing2 = requiredComponentsMissing(state2);
+
+    if (missing2.length === 0) {
+      // Marca informativa de instalación exitosa (NO reemplaza la verificación real).
+      try {
+        writeFileSync(
+          path.join(userData, 'deps-bootstrap.json'),
+          JSON.stringify({ installedAt: new Date().toISOString(), appVersion: app.getVersion() }, null, 2),
+          'utf-8'
+        );
+      } catch { /* la marca es informativa */ }
+      global.__facturacionDepsReady = true;
+      console.log('[BOOTSTRAP] Instalación correcta. Dependencias de facturación completas.');
+      return { ok: true, installed: true, missing: [], state: state2 };
+    }
+
+    console.error(`[BOOTSTRAP] Instalación INCOMPLETA. Todavía faltan: ${missing2.join(', ')}. No se marca como OK.`);
+    if (result.errors?.length) console.error(`[BOOTSTRAP]   detalle: ${result.errors.join(' | ')}`);
+    return { ok: false, installed: true, missing: missing2, errors: result.errors || [result.error].filter(Boolean), state: state2 };
+  } finally {
+    try { unlinkSync(bootstrapLockPath()); } catch { /* noop */ }
+  }
+}
+
+ipcMain.handle('components:bootstrap', async () => {
+  // En desarrollo se saltea (dev usa node del sistema y otro userData).
+  if (isDev) {
+    console.log('[BOOTSTRAP] modo dev — se saltea verificación de dependencias.');
+    return { ok: true, alreadyInstalled: true, missing: [], skipped: 'dev' };
+  }
+  // Singleton en-proceso: si ya hay un bootstrap corriendo en ESTA instancia, se reutiliza.
+  if (bootstrapPromise) {
+    console.log('[BOOTSTRAP] Ya hay un bootstrap en curso en esta instancia. Se reutiliza la ejecución.');
+    return bootstrapPromise;
+  }
+  bootstrapPromise = runBootstrap().finally(() => { bootstrapPromise = null; });
+  return bootstrapPromise;
+});
+
+// El usuario eligió "Continuar sin facturación": entra al sistema pero la facturación
+// NO queda preparada. Se deja constancia clara en logs y en un flag interno.
+ipcMain.handle('components:mark-not-ready', () => {
+  global.__facturacionDepsReady = false;
+  console.warn('[BOOTSTRAP] El usuario eligió CONTINUAR SIN facturación. Las dependencias NO están instaladas en esta PC; la facturación automática no funcionará hasta instalarlas (reintentar el bootstrap, o Configuración → Sistema con clave).');
+  return { ok: true };
+});
+
+// Reinicio controlado tras instalar dependencias. Marca el arranque con
+// --deps-bootstrapped para que el renderer NO vuelva a reiniciar (anti-loop).
+ipcMain.handle('app:relaunch', () => {
+  console.log('[BOOTSTRAP] Reiniciando la aplicación tras instalar dependencias...');
+  app.relaunch({ args: ['--deps-bootstrapped'] });
+  app.exit(0);
+});
+
+// Flags del arranque (para que el renderer sepa si viene de un reinicio post-instalación).
+ipcMain.handle('app:boot-flags', () => ({
+  depsBootstrapped: process.argv.includes('--deps-bootstrapped'),
+}));
 
 // ---------------------------------------------------------------------------
 // Ciclo de vida

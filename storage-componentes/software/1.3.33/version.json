@@ -1,0 +1,6 @@
+{
+  "version": "1.3.33",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.33.exe",
+  "releaseDate": "2026-07-04",
+  "notes": "Bootstrap automático de dependencias de facturación en PC nueva: verifica node-afip, openssl y facturacion-runtime; si faltan, descarga desde Firebase, instala, reinicia una vez y arranca normal. Verificación local por PC, anti-concurrencia y método manual (Configuración) intacto."
+}
