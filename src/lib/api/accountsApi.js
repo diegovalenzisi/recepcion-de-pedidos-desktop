@@ -61,6 +61,21 @@ export const fetchFavoriteAccountAlias = async () => {
   }
 };
 
+// Devuelve alias + titular de la cuenta favorita. El titular es el campo `aNombreDe`
+// del formulario de Cuentas ("A nombre de"). No rompe fetchFavoriteAccountAlias().
+export const fetchFavoriteAccountInfo = async () => {
+  try {
+    const favoriteAccount = await fetchFavoriteAccount();
+    return {
+      alias:   favoriteAccount?.alias || null,
+      titular: favoriteAccount?.aNombreDe || null,
+    };
+  } catch (error) {
+    console.error("Error fetching favorite account info:", error);
+    return { alias: null, titular: null };
+  }
+};
+
 export const listenToAccounts = (localId, callback, errorCallback) => {
     if (!localId) {
         callback([]);

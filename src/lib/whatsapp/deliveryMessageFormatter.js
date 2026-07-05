@@ -2,6 +2,7 @@ import { getDatabase, ref, get } from 'firebase/database';
 import { getCurrentLocalId } from '@/lib/firebase/core';
 import { findAccountByExactPaymentMethod } from '@/lib/api/accountsApi';
 import { extractDelivererName } from '@/lib/firebase/fieldMapping';
+import { buildDelivererAssignedMessage } from '@/lib/whatsapp/paymentMessage';
 
 /**
  * Generates a WhatsApp message for payment confirmation
@@ -176,6 +177,24 @@ export const generateEnDeliveryWhatsAppMessage = async (orderData, deliverer = n
   }
 
   console.log(`[WhatsApp] Generating EN DELIVERY message for order #${orderNumber}, client: ${clientName}, deliverer: ${delivererName}`);
-  
-  return `Hola *${clientName}*, tu pedido #${orderNumber} ya salió. El repartidor *${delivererName}* está en camino con tu pedido. ¡Por favor estén atentos, Muchas Gracias!`;
+
+  // Plantilla editable desde Configuración web → Mensaje al Asignar Repartidor
+  // (LOCAL_ID/CONFIGURACION/web/assignDelivererMessage). Si está vacía, el helper
+  // usa DEFAULT_ASSIGN_DELIVERER_MESSAGE. Reemplaza {cliente} {numero} {total}
+  // {repartidor} {direccion}. Usada por los 5 flujos de asignación/EN DELIVERY.
+  let template = '';
+  try {
+    if (localId) {
+      const tplSnap = await get(ref(db, `${localId}/CONFIGURACION/web/assignDelivererMessage`));
+      if (tplSnap.exists()) template = tplSnap.val() || '';
+    }
+  } catch (error) {
+    console.error('[WhatsApp] Error leyendo assignDelivererMessage:', error);
+  }
+
+  return buildDelivererAssignedMessage({
+    order: orderData,
+    template,
+    deliverer: delivererName,
+  });
 };

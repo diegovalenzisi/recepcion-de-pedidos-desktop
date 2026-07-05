@@ -1,0 +1,6 @@
+{
+  "version": "1.3.36",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.36.exe",
+  "releaseDate": "2026-07-05",
+  "notes": "Ícono DLV nuevo. Sonido de aviso solo para pedidos web/app (los manuales quedan silenciados con origen:\"manual\"). Mensaje de WhatsApp del pedido editable desde Configuración web (tokens {cliente} {numero} {total} {aliasFavorita} {titularCuenta}). Mensaje al asignar repartidor editable desde Configuración web, aplicado a los 5 flujos (tokens {cliente} {numero} {total} {repartidor} {direccion})."
+}

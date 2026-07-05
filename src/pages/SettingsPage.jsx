@@ -3,6 +3,7 @@ import { Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { useToast } from '@/components/ui/use-toast';
 import { fetchSettings, saveSettings, fetchAudioSetting } from '@/lib/api/settingsApi.js';
 import { reloadPrintSettings } from '@/lib/print.js';
+import { DEFAULT_WHATSAPP_MESSAGE, DEFAULT_ASSIGN_DELIVERER_MESSAGE } from '@/lib/whatsapp/paymentMessage';
 import { Loader2, Building, Globe, MapPin } from 'lucide-react';
 
 const LocalSettings = React.lazy(() => import('@/components/settings/LocalSettings.jsx'));
@@ -90,7 +91,7 @@ function SettingsPage({ applySettings }) {
             orderSoundVolume: 100,
             deliveryViewMode: 'table',
             printHorizontalOffset: 0,
-            web: { destacar: '', whatsappMessage: '', assignDelivererMessage: '', horarios: {}, showOptionalsInDelivery: true, requireCrossStreets: false }
+            web: { destacar: '', whatsappMessage: DEFAULT_WHATSAPP_MESSAGE, assignDelivererMessage: DEFAULT_ASSIGN_DELIVERER_MESSAGE, horarios: {}, showOptionalsInDelivery: true, requireCrossStreets: false }
         };
 
         if (fetchedSettings) {
@@ -119,6 +120,14 @@ function SettingsPage({ applySettings }) {
                     horarios: fetchedSettings.web?.horarios || {},
                     showOptionalsInDelivery: fetchedSettings.web?.showOptionalsInDelivery !== false,
                     requireCrossStreets: fetchedSettings.web?.requireCrossStreets === true,
+                    // Si no hay mensaje personalizado guardado, precargar el predeterminado
+                    // (editable/guardable desde Config web). NO pisa un mensaje existente.
+                    whatsappMessage: (fetchedSettings.web?.whatsappMessage || '').trim()
+                        ? fetchedSettings.web.whatsappMessage
+                        : DEFAULT_WHATSAPP_MESSAGE,
+                    assignDelivererMessage: (fetchedSettings.web?.assignDelivererMessage || '').trim()
+                        ? fetchedSettings.web.assignDelivererMessage
+                        : DEFAULT_ASSIGN_DELIVERER_MESSAGE,
                 },
                 newOrderSound: fetchedAudio,
             };

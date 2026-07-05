@@ -398,11 +398,11 @@ function WebSettings({ settings, onSettingsChange, onSave, saving }) {
                             id="assignDelivererMessage"
                             value={settings.web?.assignDelivererMessage || ''}
                             onChange={handleChange}
-                            placeholder="Ej: Se despachó en nuestro local y llegará en breve."
+                            placeholder="Ej: Hola *{cliente}*, tu pedido #{numero} salió con *{repartidor}*."
                             className="bg-gray-50"
-                            rows={3}
+                            rows={4}
                         />
-                         <p className="text-xs text-gray-500">Este texto se añadirá al final del mensaje automático que recibe el cliente al salir su pedido (ej: "Tu pedido n°123 ya está en camino. [tu texto aquí]").</p>
+                         <p className="text-xs text-gray-500">Mensaje que se envía al cliente cuando se asigna repartidor o el pedido pasa a EN DELIVERY. Variables disponibles: {'{cliente}'}, {'{numero}'}, {'{total}'}, {'{repartidor}'}, {'{direccion}'}.</p>
                     </div>
                 </div>
               </div>

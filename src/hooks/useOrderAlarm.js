@@ -96,7 +96,10 @@ export const useOrderAlarm = (isUserLoggedIn) => {
       }
 
       const newAlarmingOrders = fetchedOrders
-        .filter(order => order?.status?.main === 'ACEPTADO' && !order?.status?.acknowledged)
+        // Solo suenan los pedidos que llegan desde la web/app de clientes.
+        // Los pedidos cargados manualmente en el desktop se marcan con origen:'manual'
+        // (ver saveOrder en ordersApi.js) y NO deben hacer sonar la alarma.
+        .filter(order => order?.status?.main === 'ACEPTADO' && !order?.status?.acknowledged && order?.origen !== 'manual')
         .map(order => order.id);
       
       setAlarmingOrderIds(newAlarmingOrders);

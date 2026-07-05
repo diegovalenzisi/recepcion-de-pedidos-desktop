@@ -294,6 +294,10 @@ export const saveOrder = async (orderData, shift) => {
         acknowledged: false
       },
       turno: shift?.id || null,
+      // Campo aditivo: marca el pedido como cargado MANUALMENTE desde el desktop.
+      // La alarma de nuevos pedidos no debe sonar para estos (solo para los que
+      // llegan desde la web/app de clientes, que no traen este campo). Ver useOrderAlarm.js.
+      origen: 'manual',
     };
     
     if (!finalOrderData.times) {

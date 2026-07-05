@@ -19,10 +19,10 @@ import QRAssignDelivererModal from '@/components/attention/QRAssignDelivererModa
 import { listenToOrders, updateOrder, validateStatusChange } from '@/lib/api/ordersApi';
 import { fetchDeliverers } from '@/lib/api/deliverersApi';
 import { fetchOptionalGroups } from '@/lib/api/managementApi';
-import { fetchAccounts } from '@/lib/api/accountsApi';
+import { fetchAccounts, fetchFavoriteAccountInfo } from '@/lib/api/accountsApi';
 import { fetchEmployees, fetchCategories } from '@/lib/api/hrApi';
-import { generateDeliveryWhatsAppMessage } from '@/lib/whatsapp/deliveryMessageFormatter';
 import { openWhatsApp } from '@/lib/whatsapp/whatsappHandler';
+import { buildPaymentWhatsAppMessage } from '@/lib/whatsapp/paymentMessage';
 import DeliveryActionBar from '@/components/attention/delivery/DeliveryActionBar';
 import DeliveryOrderTable from '@/components/attention/delivery/DeliveryOrderTable';
 import DeliveryGridView from '@/components/attention/delivery/DeliveryGridView';
@@ -552,11 +552,8 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
       }
       
       try {
-        // Generate message using the formatter which fetches correct data from CUENTAS
-        const message = await generateDeliveryWhatsAppMessage(selectedOrder);
-        
         const phone = selectedOrder.client?.phone || selectedOrder.client?.telefono || '';
-        
+
         if (!phone) {
           toast({
             variant: "destructive",
@@ -566,9 +563,20 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
           return;
         }
 
+        // El texto sale de Configuración → Configuración web → Mensaje de WhatsApp
+        // (settings.web.whatsappMessage). Si está vacío, el helper usa el fallback.
+        // Alias y titular salen de la cuenta favorita (CUENTAS: alias / aNombreDe).
+        const { alias, titular } = await fetchFavoriteAccountInfo();
+        const message = buildPaymentWhatsAppMessage({
+          order: selectedOrder,
+          template: settings?.web?.whatsappMessage || '',
+          alias,
+          titular,
+        });
+
         const pref = settings?.whatsappPreference || 'web';
         openWhatsApp(phone, message, pref);
-        
+
       } catch (error) {
         console.error("Error generando WhatsApp:", error);
         toast({
