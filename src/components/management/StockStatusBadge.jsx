@@ -1,6 +1,7 @@
 import React from 'react';
 import { Package } from 'lucide-react';
 import { usePromotionMinimumStock } from '@/hooks/usePromotionMinimumStock';
+import { normalizarStock } from '@/lib/api/ventaUtils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const StockStatusBadge = ({ outOfStockCount = 0, lowStockCount = 0, onClick, item = null }) => {
@@ -49,7 +50,10 @@ const StockStatusBadge = ({ outOfStockCount = 0, lowStockCount = 0, onClick, ite
                 details.map((d, i) => (
                   <div key={i} className="flex justify-between text-xs gap-4">
                     <span className="truncate max-w-[150px]">{d.name} ({d.type === 'article' ? 'Art' : 'MP'})</span>
-                    <span className="font-mono">{d.stock} / {d.required} = {d.possible}</span>
+                    {/* d.stock puede llegar como objeto { stockType, receta } en artículos por
+                        receta; normalizarStock garantiza un número y evita el React #31 (renderizar
+                        un objeto como texto). */}
+                    <span className="font-mono">{normalizarStock(d.stock)} / {d.required} = {d.possible}</span>
                   </div>
                 ))
               ) : (

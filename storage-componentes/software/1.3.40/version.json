@@ -1,0 +1,6 @@
+{
+  "version": "1.3.40",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.40.exe",
+  "releaseDate": "2026-07-06",
+  "notes": "Facturación y Mercado Pago por local (multi-PC); mensajes de WhatsApp y de asignación de repartidor configurables; sonido de alarma solo para pedidos web/app; ícono nuevo; precarga de imágenes en Pedido nuevo y memoización de opcionales en Stock; corrección de listeners duplicados de stock; Cajas: lectura correcta de turnos cerrados/históricos desde BACKUP (ventas, gastos, caja fuerte), apertura de turno respetando la fecha de negocio (corte 2 AM) y acciones de caja restringidas al turno activo real; Ventas → Facturación ahora reconoce comprobantes Factura B y Factura C (Monotributo); diagnóstico extendido de archivos de facturación AFIP."
+}

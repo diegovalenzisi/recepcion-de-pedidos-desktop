@@ -9,7 +9,7 @@ const path = require('path');
 const os = require('os');
 const { randomUUID, createHash } = require('crypto');
 const { spawn, execSync } = require('child_process');
-const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync } = require('fs');
+const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync } = require('fs');
 const https = require('https');
 const http  = require('http');
 
@@ -76,7 +76,122 @@ function initMachineId() {
 // Facturación AFIP — plantillas bundleadas + procesos gestionados
 // ---------------------------------------------------------------------------
 
+// COMPARTIDO por PC: aloja node_modules + package.json del motor y la subcarpeta locales/.
 const FACTURACION_USER_DIR = () => path.join(app.getPath('userData'), 'facturacion');
+
+// --- Local activo (facturación/config por local) --------------------------------
+const ACTIVE_LOCAL_FILE = () => path.join(app.getPath('userData'), 'active-local.json');
+let activeLocalId = null;
+
+function getActiveLocalId() {
+  if (activeLocalId) return activeLocalId;
+  try {
+    const j = JSON.parse(readFileSync(ACTIVE_LOCAL_FILE(), 'utf-8'));
+    if (j && j.localId) activeLocalId = String(j.localId);
+  } catch { /* todavía no hay marca */ }
+  return activeLocalId;
+}
+
+function setActiveLocalId(localId) {
+  activeLocalId = localId ? String(localId) : null;
+  try {
+    writeFileSync(
+      ACTIVE_LOCAL_FILE(),
+      JSON.stringify({ localId: activeLocalId, updatedAt: new Date().toISOString() }, null, 2),
+      'utf-8'
+    );
+  } catch (e) {
+    console.error('[LOCAL] no se pudo persistir active-local.json:', e.message);
+  }
+}
+
+// Carpeta de facturación POR LOCAL. Queda BAJO FACTURACION_USER_DIR para que el motor
+// (index.mjs, ESM: import 'firebase-admin') resuelva el node_modules compartido por
+// árbol de directorios (userData/facturacion/node_modules).
+function getLocaleFacturacionDir(localId = getActiveLocalId()) {
+  return path.join(FACTURACION_USER_DIR(), 'locales', String(localId || '_sin_local'));
+}
+
+function getFacturacionConfigPath(localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'facturacion-config.json');
+}
+
+// --- Mercado Pago / backend de cobro POR LOCAL (Fase 2) -------------------------
+// Viven en la misma carpeta por local que la facturación.
+function getBackendEnvPath(localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'backend.env');
+}
+function getMpAccountsPath(localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'mp-accounts.json');
+}
+function getMpServiceAccountPath(localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'serviceAccountKey.json');
+}
+
+// Migración AUTOMÁTICA RESPONSABLE del MP global viejo → local activo.
+// Coherencia FUERTE: el LOCAL_ID embebido en backend.env / mp-accounts.json global
+// debe coincidir con el local activo. Si no coincide o no se puede verificar → no migra.
+// No pisa config local existente. No borra lo global. Deja marca. Una sola vez.
+function maybeMigrateMpToLocal(localId) {
+  if (!localId) return { result: 'no_active_local' };
+  const userDataPath = app.getPath('userData');
+  const localeDir  = getLocaleFacturacionDir(localId);
+  const marker     = path.join(localeDir, '.mp-migrated.json');
+  const destEnv    = getBackendEnvPath(localId);
+  const destMp     = getMpAccountsPath(localId);
+  const destSa     = getMpServiceAccountPath(localId);
+  const globalEnv  = path.join(userDataPath, 'backend.env');
+  const globalMp   = path.join(userDataPath, 'mp-accounts.json');
+  const globalSa   = path.join(userDataPath, 'serviceAccountKey.json');
+
+  const writeMarker = (result, reason, filesCopied = []) => {
+    try {
+      mkdirSync(localeDir, { recursive: true });
+      writeFileSync(marker, JSON.stringify({
+        date: new Date().toISOString(), localId, result, reason, filesCopied,
+      }, null, 2), 'utf-8');
+    } catch { /* marca informativa */ }
+    console.log(`[MIGRACION MP] local=${localId} result=${result} reason=${reason || ''}`);
+  };
+
+  // 6) No pisar config MP local existente
+  if (existsSync(destEnv) || existsSync(destMp)) { return { result: 'already_exists' }; }
+  // 1) Una sola vez
+  if (existsSync(marker)) return { result: 'already_attempted' };
+  // Nada global que migrar
+  if (!existsSync(globalEnv) && !existsSync(globalMp)) { writeMarker('skipped', 'no hay MP global'); return { result: 'no_global' }; }
+
+  // 3) Verificar coherencia por LOCAL_ID embebido
+  let globalLocalId = null;
+  try { if (existsSync(globalEnv)) globalLocalId = parseEnvFile(globalEnv).LOCAL_ID || null; } catch {}
+  if (!globalLocalId) {
+    try {
+      if (existsSync(globalMp)) {
+        const arr = JSON.parse(readFileSync(globalMp, 'utf-8'));
+        globalLocalId = (Array.isArray(arr) ? (arr.find(a => a.activo) || arr[0]) : null)?.localId || null;
+      }
+    } catch {}
+  }
+  if (!globalLocalId) { writeMarker('skipped', 'MP global sin LOCAL_ID para verificar'); return { result: 'mismatch' }; }
+  if (String(globalLocalId) !== String(localId)) {
+    writeMarker('mismatch', `MP global pertenece a ${globalLocalId}, no a ${localId}`);
+    return { result: 'mismatch' };
+  }
+
+  // 4) Coincidencia clara → migrar
+  try {
+    mkdirSync(localeDir, { recursive: true });
+    const copied = [];
+    if (existsSync(globalEnv)) { copyFileSync(globalEnv, destEnv); copied.push('backend.env'); }
+    if (existsSync(globalMp))  { copyFileSync(globalMp,  destMp);  copied.push('mp-accounts.json'); }
+    if (existsSync(globalSa))  { copyFileSync(globalSa,  destSa);  copied.push('serviceAccountKey.json'); }
+    writeMarker('migrated', `LOCAL_ID coincide (${localId})`, copied); // 7) no borra lo global
+    return { result: 'migrated', filesCopied: copied };
+  } catch (e) {
+    console.error('[MIGRACION MP] error:', e.message);
+    return { result: 'error', error: e.message };
+  }
+}
 
 function getTemplatesDir() {
   if (isDev) return path.join(__dirname, '..', 'resources', 'facturacion');
@@ -94,12 +209,12 @@ function getOpensslDir() {
   return null;
 }
 
-function getRIDir() {
-  return path.join(FACTURACION_USER_DIR(), 'ri');
+function getRIDir(localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'ri');
 }
 
-function getMonoDir(cuentaId) {
-  return path.join(FACTURACION_USER_DIR(), 'mono', cuentaId);
+function getMonoDir(cuentaId, localId = getActiveLocalId()) {
+  return path.join(getLocaleFacturacionDir(localId), 'mono', cuentaId);
 }
 
 // Refresca SOLO el motor de facturación (index.mjs) de una cuenta ya configurada
@@ -334,13 +449,18 @@ async function evaluateAutoStart(key, dir, fields, label) {
 
 async function autoStartFacturacion() {
   try {
-    const cfgPath = path.join(app.getPath('userData'), 'facturacion-config.json');
+    const localId = getActiveLocalId();
+    if (!localId) {
+      console.log('[AFIP AUTOSTART] no hay local activo, saltando');
+      return;
+    }
+    const cfgPath = getFacturacionConfigPath(localId);
     if (!existsSync(cfgPath)) {
-      console.log('[AFIP AUTOSTART] no existe facturacion-config.json, saltando');
+      console.log(`[AFIP AUTOSTART] no hay facturacion-config.json para el local ${localId}, saltando`);
       return;
     }
     const config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
-    console.log(`[AFIP AUTOSTART] config loaded tipo=${config.tipo}`);
+    console.log(`[AFIP AUTOSTART] config loaded local=${localId} tipo=${config.tipo}`);
     let dirty = false;
 
     if (config.tipo === 'responsable_inscripto') {
@@ -479,11 +599,11 @@ function repairBackendEnvIfNeeded(envPath, riSaPath) {
 // Cargar backend.env desde userData (producción) o backend/.env (desarrollo)
 // ---------------------------------------------------------------------------
 function loadBackendEnv() {
-  const userDataPath = app.getPath('userData');
-  const prodEnvPath = path.join(userDataPath, 'backend.env');
+  const localId = getActiveLocalId();
+  const prodEnvPath = localId ? getBackendEnvPath(localId) : null;
 
-  if (existsSync(prodEnvPath)) {
-    console.log('[main] backend.env desde userData:', prodEnvPath);
+  if (prodEnvPath && existsSync(prodEnvPath)) {
+    console.log(`[main] backend.env (local ${localId}):`, prodEnvPath);
     return { vars: parseEnvFile(prodEnvPath), source: prodEnvPath };
   }
 
@@ -495,16 +615,105 @@ function loadBackendEnv() {
     }
   }
 
-  console.warn('[main] backend.env no encontrado en:', prodEnvPath);
+  console.warn('[main] backend.env no encontrado para el local activo:', prodEnvPath || '(sin local activo)');
   return { vars: {}, source: null };
+}
+
+// ---------------------------------------------------------------------------
+// Crear/COMPLETAR el backend.env POR LOCAL con las variables base que el backend
+// necesita para arrancar (sobre todo FIREBASE_DATABASE_URL, cuya ausencia produce
+// el crash "Can't determine Firebase Database URL"). Rellena SOLO lo que falta:
+// nunca pisa un valor ya presente. La URL de Firebase la aporta el renderer desde
+// core.js (LOCATION_CONFIG del local) porque no se puede derivar del serviceAccount
+// (p.ej. Bynnon usa proyecto achava3703 pero RTDB heladeriabynnonadrogue).
+// cfg = { databaseURL, projectId, paymentsPath, token } — todos opcionales.
+// ---------------------------------------------------------------------------
+function ensureBackendEnv(localId = getActiveLocalId(), cfg = {}) {
+  if (!localId) return { ok: false, error: 'Sin local activo.' };
+  const envPath = getBackendEnvPath(localId);
+  mkdirSync(path.dirname(envPath), { recursive: true });
+
+  const vars = existsSync(envPath) ? parseEnvFile(envPath) : {};
+  const changes = [];
+  const setIfMissing = (key, value) => {
+    if (value && (!vars[key] || String(vars[key]).trim() === '')) {
+      vars[key] = String(value);
+      changes.push(key);
+    }
+  };
+
+  // Base coherente con el local activo (nunca pisa lo existente)
+  setIfMissing('LOCAL_ID', localId);
+  setIfMissing('FIREBASE_DATABASE_URL', cfg.databaseURL);
+  setIfMissing('FIREBASE_PROJECT_ID', cfg.projectId); // opcional; credenciales igual vienen del serviceAccount
+  setIfMissing('FIREBASE_PAGOS_PATH', cfg.paymentsPath || `${localId}/PAGOS_CONFIRMADOS`);
+  setIfMissing('PORT', String(BACKEND_PORT));
+  setIfMissing('POLL_INTERVAL_MS', '5000');
+
+  // Token: si se pasa explícitamente, se actualiza (completar backend.env al guardar token)
+  if (cfg.token) {
+    vars.MERCADOPAGO_ACCESS_TOKEN = String(cfg.token);
+    if (!changes.includes('MERCADOPAGO_ACCESS_TOKEN')) changes.push('MERCADOPAGO_ACCESS_TOKEN');
+  }
+
+  // Credenciales Firebase: si hay serviceAccountKey.json por local y no hay ni GAC ni
+  // el trío de env vars, apuntar GOOGLE_APPLICATION_CREDENTIALS al SA por local (ruta absoluta).
+  const saPath = getMpServiceAccountPath(localId);
+  const saExists = existsSync(saPath);
+  const hasEnvVarCreds = vars.FIREBASE_PROJECT_ID && vars.FIREBASE_CLIENT_EMAIL && vars.FIREBASE_PRIVATE_KEY;
+  if (saExists && !vars.GOOGLE_APPLICATION_CREDENTIALS && !hasEnvVarCreds) {
+    vars.GOOGLE_APPLICATION_CREDENTIALS = saPath;
+    changes.push('GOOGLE_APPLICATION_CREDENTIALS');
+  }
+
+  try {
+    const content = Object.entries(vars).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+    writeFileSync(envPath, content, 'utf-8');
+  } catch (e) {
+    return { ok: false, error: 'No se pudo escribir backend.env: ' + e.message };
+  }
+
+  // Crear mp-accounts.json si falta pero ya hay token + localId
+  const mpAccPath = getMpAccountsPath(localId);
+  let mpAccountsCreated = false;
+  if (!existsSync(mpAccPath) && vars.MERCADOPAGO_ACCESS_TOKEN && vars.LOCAL_ID) {
+    try {
+      const accounts = [{
+        nombreCuenta: 'Principal',
+        accessTokenMercadoPago: vars.MERCADOPAGO_ACCESS_TOKEN,
+        localId: vars.LOCAL_ID,
+        firebasePathPagos: vars.FIREBASE_PAGOS_PATH || `${vars.LOCAL_ID}/PAGOS_CONFIRMADOS`,
+        activo: true,
+      }];
+      writeFileSync(mpAccPath, JSON.stringify(accounts, null, 2), 'utf-8');
+      mpAccountsCreated = true;
+    } catch (e) {
+      console.warn('[MP ENSURE-ENV] no se pudo crear mp-accounts.json:', e.message);
+    }
+  }
+
+  if (changes.length) {
+    console.log(`[MP ENSURE-ENV] local ${localId}: completado backend.env (${changes.join(', ')})`);
+  }
+
+  return {
+    ok: true,
+    path: envPath,
+    localId,
+    changes,
+    hasDbUrl: !!vars.FIREBASE_DATABASE_URL,
+    hasToken: !!vars.MERCADOPAGO_ACCESS_TOKEN,
+    saExists,
+    mpAccountsCreated,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Resolver GOOGLE_APPLICATION_CREDENTIALS a ruta absoluta
 // Busca en userData, luego en ubicaciones de AFIP, y copia a userData si es necesario
 // ---------------------------------------------------------------------------
-function resolveCredentialsPath(vars, userDataPath) {
-  const defaultPath = path.join(userDataPath, 'serviceAccountKey.json');
+function resolveCredentialsPath(vars, baseDir) {
+  const defaultPath = path.join(baseDir, 'serviceAccountKey.json');
   const raw = vars.GOOGLE_APPLICATION_CREDENTIALS || '';
 
   console.log(`[MP SERVICE ACCOUNT] GOOGLE_APPLICATION_CREDENTIALS original=${raw || '(no definido)'}`);
@@ -517,7 +726,7 @@ function resolveCredentialsPath(vars, userDataPath) {
     if (exists) return defaultPath;
     // Si tampoco existe, buscar fallback abajo
     console.log('[MP SERVICE ACCOUNT] buscando fallback...');
-    return resolveCredentialsFallback(userDataPath, defaultPath);
+    return resolveCredentialsFallback(baseDir, defaultPath);
   }
 
   // 2. Ya es absoluta y existe → usar directamente
@@ -541,8 +750,9 @@ function resolveCredentialsPath(vars, userDataPath) {
 }
 
 // Busca serviceAccount en ubicaciones conocidas de AFIP y copia a userData/serviceAccountKey.json
-function resolveCredentialsFallback(userDataPath, destPath) {
-  const facturBase = path.join(userDataPath, 'facturacion');
+function resolveCredentialsFallback(baseDir, destPath) {
+  // baseDir es la carpeta por local (contiene ri/ y mono/ del local activo).
+  const facturBase = baseDir;
   const candidates = [
     path.join(facturBase, 'RI', 'serviceAccount.json'),
     path.join(facturBase, 'ri', 'serviceAccount.json'),
@@ -632,18 +842,27 @@ function killPortIfOccupied(port) {
 // ---------------------------------------------------------------------------
 function startBackend() {
   console.log('[MP BACKEND START] reiniciando backend');
-  const userDataPath = app.getPath('userData');
+  const localId = getActiveLocalId();
+  if (!localId) {
+    console.warn('[MP BACKEND START] sin local activo — no se inicia el backend de Mercado Pago hasta seleccionar un local.');
+    return;
+  }
+  // Migración automática responsable del MP global → este local (si coincide LOCAL_ID).
+  maybeMigrateMpToLocal(localId);
+
+  const baseDir = getLocaleFacturacionDir(localId);
+  mkdirSync(baseDir, { recursive: true });
   const { vars, source: envSource } = loadBackendEnv();
 
-  // Avisar si falta config (no bloqueante)
+  // Avisar si falta config (no bloqueante) — serviceAccount POR LOCAL
   const missingFirebase =
     !vars.FIREBASE_PROJECT_ID &&
     !vars.GOOGLE_APPLICATION_CREDENTIALS &&
-    !existsSync(path.join(userDataPath, 'serviceAccountKey.json'));
+    !existsSync(getMpServiceAccountPath(localId));
 
   if (!envSource) {
     // Solo log — el panel de salud en la UI muestra el estado y permite configurar
-    console.warn('[main] backend.env no encontrado. El SystemHealthPanel ofrecerá auto-generarlo.');
+    console.warn(`[main] backend.env no encontrado para el local ${localId}. El SystemHealthPanel ofrecerá auto-generarlo.`);
   } else if (missingFirebase) {
     console.warn('[main] ADVERTENCIA: credenciales de Firebase no encontradas en backend.env.');
   }
@@ -652,14 +871,15 @@ function startBackend() {
     console.warn('[main] ADVERTENCIA: MERCADOPAGO_ACCESS_TOKEN no configurado.');
   }
 
-  const resolvedCredentials = resolveCredentialsPath(vars, userDataPath);
+  const resolvedCredentials = resolveCredentialsPath(vars, baseDir);
 
   const env = {
     ...process.env,
     ...vars,
     PORT: vars.PORT || String(BACKEND_PORT),
     DOTENV_CONFIG_PATH: envSource || '',
-    ELECTRON_USER_DATA_PATH: userDataPath,
+    // Apunta al dir por local: el backend resuelve serviceAccountKey.json y backend-data ahí.
+    ELECTRON_USER_DATA_PATH: baseDir,
     NODE_ENV: isDev ? 'development' : 'production',
   };
 
@@ -698,7 +918,7 @@ function startBackend() {
   // Auto-crear mp-accounts.json si falta pero backend.env tiene el token y localId
   // Escenario: PC nueva donde se configuró backend.env manualmente pero no el manager de cuentas
   // ---------------------------------------------------------------------------
-  const accountsFilePath = path.join(userDataPath, 'mp-accounts.json');
+  const accountsFilePath = getMpAccountsPath(localId);
   if (!existsSync(accountsFilePath) && vars.MERCADOPAGO_ACCESS_TOKEN && vars.LOCAL_ID) {
     const autoLocalId = vars.LOCAL_ID;
     const autoAccounts = [{
@@ -752,6 +972,17 @@ function startBackend() {
   console.log(`[MP BACKEND START] localId=${env.LOCAL_ID || 'no configurado'}`);
   console.log(`[MP BACKEND START] ruta pagos=${_pagosPath}`);
   console.log(`[MP BACKEND START] firebase creds=${!!(env.FIREBASE_PROJECT_ID && env.FIREBASE_CLIENT_EMAIL)}`);
+  console.log(`[MP BACKEND START] databaseURL presente=${!!env.FIREBASE_DATABASE_URL}`);
+
+  // GUARD ANTI-CRASH: el backend inicializa Firebase con databaseURL=FIREBASE_DATABASE_URL en
+  // TODAS sus estrategias (backend/src/firebase.js). Sin esa variable, db.ref() lanza
+  // "Can't determine Firebase Database URL" y el proceso muere. Preferimos NO arrancarlo:
+  // se completará al entrar a Mercado Pago (backend:ensure-env) o al cargar el local (App.jsx).
+  if (!env.FIREBASE_DATABASE_URL) {
+    backendLastError = 'backend.env sin FIREBASE_DATABASE_URL — se completará al entrar a Mercado Pago.';
+    console.warn(`[MP BACKEND START] ${backendLastError} (no se inicia para evitar el crash de Firebase)`);
+    return;
+  }
 
   backendLastError = null;
   backendCrashFast = false;
@@ -1146,8 +1377,9 @@ function setupIPC() {
 
   // Gestión de cuentas de Mercado Pago
   ipcMain.handle('mp-accounts:read', () => {
-    const userDataPath = app.getPath('userData');
-    const accountsPath = path.join(userDataPath, 'mp-accounts.json');
+    const localId = getActiveLocalId();
+    if (!localId) return [];
+    const accountsPath = getMpAccountsPath(localId);
     if (!existsSync(accountsPath)) return [];
     try {
       return JSON.parse(readFileSync(accountsPath, 'utf-8'));
@@ -1157,12 +1389,17 @@ function setupIPC() {
   });
 
   ipcMain.handle('mp-accounts:write', (_e, accounts) => {
-    const userDataPath = app.getPath('userData');
-    const accountsPath = path.join(userDataPath, 'mp-accounts.json');
+    const localId = getActiveLocalId();
+    if (!localId) return false;
+    const accountsPath = getMpAccountsPath(localId);
+    mkdirSync(path.dirname(accountsPath), { recursive: true });
     writeFileSync(accountsPath, JSON.stringify(accounts, null, 2), 'utf-8');
-    console.log(`[mp-config] cuentas guardadas: ${accounts.length}`);
+    console.log(`[mp-config] cuentas guardadas (local ${localId}): ${accounts.length}`);
     return true;
   });
+
+  // Migración automática responsable del MP global viejo → local activo (idempotente).
+  ipcMain.handle('mp:migrate-global-to-local', () => maybeMigrateMpToLocal(getActiveLocalId()));
 
   ipcMain.handle('backend:restart', async () => {
     console.log('[mp-config] reiniciando backend por cambio de cuenta');
@@ -1199,29 +1436,18 @@ function setupIPC() {
     stopAllFacturacion();
     await new Promise((r) => setTimeout(r, 400));
 
-    // 2. Borrar archivos de configuración local
+    // 2. Borrar archivos de configuración local (MP — Fase 2, siguen siendo globales por ahora)
     console.log('[LOCAL NUEVO] Borrando configuración local...');
-    const filesToDelete = [
-      'mp-accounts.json',
-      'backend.env',
-      'serviceAccountKey.json',
-      'facturacion-config.json',
-    ];
-    for (const file of filesToDelete) {
-      const p = path.join(userDataPath, file);
+    // 3. Borrar TODA la config POR LOCAL del local activo (facturación + MP:
+    //    config, ri, mono, backend.env, mp-accounts.json, serviceAccountKey.json).
+    //    Los archivos GLOBALES viejos quedan como respaldo (no se borran).
+    //    Se conserva facturacion/node_modules (compartido) para no reinstalar.
+    const _resetLocalId = getActiveLocalId();
+    if (_resetLocalId) {
+      const localFacDir = getLocaleFacturacionDir(_resetLocalId);
       try {
-        if (existsSync(p)) { rmSync(p, { force: true }); console.log(`[LOCAL NUEVO] Borrado: ${file}`); }
-      } catch (e) { console.error(`[LOCAL NUEVO] Error borrando ${file}:`, e.message); }
-    }
-
-    // 3. Borrar carpetas de facturación del local anterior (ri, mono)
-    //    Se conserva facturacion/node_modules para no requerir re-instalación
-    const facDir = path.join(userDataPath, 'facturacion');
-    for (const sub of ['ri', 'mono']) {
-      const p = path.join(facDir, sub);
-      try {
-        if (existsSync(p)) { rmSync(p, { recursive: true, force: true }); console.log(`[LOCAL NUEVO] Borrado directorio: facturacion/${sub}`); }
-      } catch (e) { console.error(`[LOCAL NUEVO] Error borrando facturacion/${sub}:`, e.message); }
+        if (existsSync(localFacDir)) { rmSync(localFacDir, { recursive: true, force: true }); console.log(`[LOCAL NUEVO] Borrada config del local ${_resetLocalId}: ${localFacDir}`); }
+      } catch (e) { console.error(`[LOCAL NUEVO] Error borrando config del local ${_resetLocalId}:`, e.message); }
     }
 
     // 4. Limpiar localStorage y sessionStorage del renderer
@@ -1278,6 +1504,64 @@ function setupIPC() {
   };
 
   // Diagnóstico completo de una cuenta AFIP
+  // ---------------------------------------------------------------------------
+  // Helpers de diagnóstico extendido (SOLO LECTURA, no valida emisión ni firma).
+  // headerPreview nunca incluye más que la primera línea del archivo: para un PEM
+  // válido esa línea es únicamente el marcador "-----BEGIN...-----" (nunca el
+  // cuerpo en base64 de la clave/certificado); para un archivo corrupto/HTML,
+  // muestra esa misma primera línea recortada, que ayuda a diagnosticar sin
+  // exponer contenido sensible completo.
+  // ---------------------------------------------------------------------------
+  const PEM_HEADER_PREVIEW_MAX = 60;
+
+  const inspectFile = (filePath) => {
+    const base = { path: filePath, exists: existsSync(filePath), size: 0, empty: true };
+    if (!base.exists) return base;
+    try {
+      const st = statSync(filePath);
+      base.size  = st.size;
+      base.empty = st.size === 0;
+    } catch (e) {
+      base.statError = e.message;
+    }
+    return base;
+  };
+
+  const firstLine = (filePath, maxLen) => {
+    try {
+      const buf = readFileSync(filePath, { encoding: 'utf-8' });
+      const line = buf.split(/\r?\n/, 1)[0] || '';
+      return line.length > maxLen ? line.slice(0, maxLen) + '…' : line;
+    } catch {
+      return null;
+    }
+  };
+
+  const inspectPemFile = (filePath, validMarkers) => {
+    const info = inspectFile(filePath);
+    if (!info.exists || info.empty) {
+      return { ...info, headerPreview: null, valid: false };
+    }
+    const preview = firstLine(filePath, PEM_HEADER_PREVIEW_MAX);
+    const valid = !!preview && validMarkers.some((m) => preview.startsWith(m));
+    return { ...info, headerPreview: preview, valid };
+  };
+
+  const inspectJsonFile = (filePath) => {
+    const info = inspectFile(filePath);
+    if (!info.exists || info.empty) {
+      return { ...info, validJson: false };
+    }
+    let validJson = false;
+    try {
+      JSON.parse(readFileSync(filePath, 'utf-8'));
+      validJson = true;
+    } catch {
+      validJson = false;
+    }
+    return { ...info, validJson };
+  };
+
   ipcMain.handle('facturacion:diagnose', (_e, tipo, cuentaId) => {
     const userData       = app.getPath('userData');
     const facturDir      = FACTURACION_USER_DIR();
@@ -1302,14 +1586,23 @@ function setupIPC() {
         : path.resolve(accountDir, gcpRaw);
     }
 
+    const certPath = path.join(accountDir, 'cert', 'certificado.crt');
+    const keyPath  = path.join(accountDir, 'cert', 'clave.key');
+    const saPath   = path.join(accountDir, 'serviceAccount.json');
+
     const files = {
-      env:            chk(envPath),
+      env:            inspectFile(envPath),
       indexMjs:       chk(path.join(accountDir, 'index.mjs')),
-      serviceAccount: chk(path.join(accountDir, 'serviceAccount.json')),
-      cert:           chk(path.join(accountDir, 'cert', 'certificado.crt')),
-      key:            chk(path.join(accountDir, 'cert', 'clave.key')),
+      serviceAccount: inspectJsonFile(saPath),
+      cert:           inspectPemFile(certPath, ['-----BEGIN CERTIFICATE-----']),
+      key:            inspectPemFile(keyPath, ['-----BEGIN PRIVATE KEY-----', '-----BEGIN RSA PRIVATE KEY-----']),
       nodeModules:    chk(path.join(facturDir, 'node_modules', 'firebase-admin')),
     };
+
+    // Alias legibles para el consumo desde la UI/soporte, siguiendo los nombres
+    // pedidos: validPemCertificate / validPemPrivateKey / validJson.
+    files.cert.validPemCertificate = files.cert.valid;
+    files.key.validPemPrivateKey   = files.key.valid;
 
     const diag = {
       timestamp: new Date().toISOString(),
@@ -1319,19 +1612,47 @@ function setupIPC() {
       gcpExists: gcpAbsolute ? existsSync(gcpAbsolute) : false,
     };
 
-    // Escribir al archivo de log
+    // Escribir al archivo de log — diagnóstico extendido (solo lectura, sin
+    // contenido sensible: headerPreview es únicamente la línea "-----BEGIN...-----").
     const lines = [
       `\n=== Diagnóstico AFIP [${diag.timestamp}] ===`,
       `userData:    ${userData}`,
       `accountDir:  ${accountDir}`,
       ``,
-      `ARCHIVOS:`,
+      `ARCHIVOS (resumen):`,
       `  .env             ${files.env.exists             ? 'OK    ' : 'FALTA '} ${files.env.path}`,
       `  index.mjs        ${files.indexMjs.exists         ? 'OK    ' : 'FALTA '} ${files.indexMjs.path}`,
       `  serviceAccount   ${files.serviceAccount.exists   ? 'OK    ' : 'FALTA '} ${files.serviceAccount.path}`,
       `  certificado.crt  ${files.cert.exists             ? 'OK    ' : 'FALTA '} ${files.cert.path}`,
       `  clave.key        ${files.key.exists              ? 'OK    ' : 'FALTA '} ${files.key.path}`,
       `  node_modules     ${files.nodeModules.exists      ? 'OK    ' : 'FALTA '} ${files.nodeModules.path}`,
+      ``,
+      `Certificado:`,
+      `  path:                ${files.cert.path}`,
+      `  exists:              ${files.cert.exists}`,
+      `  size:                ${files.cert.size} bytes`,
+      `  empty:               ${files.cert.empty}`,
+      `  validPemCertificate: ${files.cert.validPemCertificate}`,
+      `  headerPreview:       ${files.cert.headerPreview ?? '(sin contenido)'}`,
+      ``,
+      `Clave:`,
+      `  path:                ${files.key.path}`,
+      `  exists:              ${files.key.exists}`,
+      `  size:                ${files.key.size} bytes`,
+      `  empty:               ${files.key.empty}`,
+      `  validPemPrivateKey:  ${files.key.validPemPrivateKey}`,
+      `  headerPreview:       ${files.key.headerPreview ?? '(sin contenido)'}`,
+      ``,
+      `Service Account:`,
+      `  path:                ${files.serviceAccount.path}`,
+      `  exists:              ${files.serviceAccount.exists}`,
+      `  size:                ${files.serviceAccount.size} bytes`,
+      `  validJson:           ${files.serviceAccount.validJson}`,
+      ``,
+      `.env:`,
+      `  path:                ${files.env.path}`,
+      `  exists:              ${files.env.exists}`,
+      `  size:                ${files.env.size} bytes`,
       ``,
       `GOOGLE_APPLICATION_CREDENTIALS: ${gcpRaw || '(no definido en .env)'}`,
       `  → Ruta absoluta: ${gcpAbsolute || 'N/A'}`,
@@ -1647,16 +1968,114 @@ function setupIPC() {
   ipcMain.handle('facturacion:status', (_e, key) => facturacionProcs[key]?.status ?? 'stopped');
   ipcMain.handle('facturacion:logs', (_e, key) => facturacionProcs[key]?.logs ?? []);
 
-  // Config persistente
+  // Config persistente POR LOCAL (nunca lee el archivo global viejo como fallback).
   ipcMain.handle('facturacion:config:read', () => {
-    const p = path.join(app.getPath('userData'), 'facturacion-config.json');
+    const localId = getActiveLocalId();
+    if (!localId) return null;
+    const p = getFacturacionConfigPath(localId);
     if (!existsSync(p)) return null;
     try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return null; }
   });
   ipcMain.handle('facturacion:config:write', (_e, config) => {
-    const p = path.join(app.getPath('userData'), 'facturacion-config.json');
+    const localId = getActiveLocalId();
+    if (!localId) return false;
+    const p = getFacturacionConfigPath(localId);
+    mkdirSync(path.dirname(p), { recursive: true });
     writeFileSync(p, JSON.stringify(config, null, 2), 'utf-8');
     return true;
+  });
+
+  // Setea el local activo (para que main lea/escriba facturación de ese local) y frena
+  // el motor de facturación del local anterior. Persiste en active-local.json.
+  ipcMain.handle('local:set-active', (_e, localId) => {
+    const prev = getActiveLocalId();
+    const changed = String(localId || '') !== String(prev || '');
+    setActiveLocalId(localId);
+    console.log(`[LOCAL] Local activo = ${getActiveLocalId()} (cambió=${changed})`);
+    if (changed) {
+      // Al cambiar de local: frenar el motor de facturación del local anterior y
+      // reiniciar el backend de Mercado Pago con la config del local nuevo (Fase 2).
+      stopAllFacturacion();
+      try {
+        stopBackend();
+        backendAutoRetried = false;
+        setTimeout(() => { if (!backendProcess) startBackend(); }, 700);
+      } catch (e) {
+        console.error('[LOCAL] error reiniciando backend MP al cambiar de local:', e.message);
+      }
+    }
+    return { ok: true, localId: getActiveLocalId() };
+  });
+
+  // Resumen (solo lectura) del facturacion-config.json GLOBAL viejo, para que el
+  // renderer decida (con Firebase) si corresponde migrarlo automáticamente al local activo.
+  ipcMain.handle('facturacion:global-config-summary', () => {
+    const p = path.join(app.getPath('userData'), 'facturacion-config.json');
+    if (!existsSync(p)) return { exists: false };
+    try {
+      const cfg = JSON.parse(readFileSync(p, 'utf-8'));
+      const acc = cfg.tipo === 'responsable_inscripto'
+        ? (cfg.ri || {})
+        : (cfg.monotributo?.cuentas?.[0] || {});
+      return {
+        exists: true,
+        tipo: cfg.tipo || null,
+        cuit: acc.cuit || null,
+        razonSocial: acc.razonSocial || acc.nombre || null,
+        ptoVta: acc.ptoVta || null,
+      };
+    } catch (e) {
+      return { exists: false, error: e.message };
+    }
+  });
+
+  // Migración AUTOMÁTICA RESPONSABLE del facturacion-config.json + ri/mono globales
+  // al local activo. El renderer solo la invoca si verificó coincidencia (mismo CUIT).
+  // Reglas: no pisa config local existente; no borra lo global; deja marca; una sola vez.
+  ipcMain.handle('facturacion:migrate-global-to-local', (_e, localId, meta = {}) => {
+    const userDataPath = app.getPath('userData');
+    const targetLocal = String(localId || getActiveLocalId() || '');
+    if (!targetLocal) return { ok: false, result: 'no_active_local' };
+
+    const localeDir  = getLocaleFacturacionDir(targetLocal);
+    const marker     = path.join(localeDir, '.facturacion-migrated.json');
+    const destCfg    = getFacturacionConfigPath(targetLocal);
+    const globalCfg  = path.join(userDataPath, 'facturacion-config.json');
+    const globalFac  = path.join(userDataPath, 'facturacion');
+
+    const writeMarker = (result, reason, filesCopied = []) => {
+      try {
+        mkdirSync(localeDir, { recursive: true });
+        writeFileSync(marker, JSON.stringify({
+          date: new Date().toISOString(), localId: targetLocal, result, reason,
+          filesCopied, sourceCuit: meta.cuit || null,
+        }, null, 2), 'utf-8');
+      } catch { /* la marca es informativa */ }
+      console.log(`[MIGRACION FACTURACION] local=${targetLocal} result=${result} reason=${reason || ''}`);
+    };
+
+    // 6) Nunca pisar config local existente
+    if (existsSync(destCfg)) { writeMarker('already_exists', 'config local ya presente'); return { ok: true, result: 'already_exists' }; }
+    // 1) Una sola vez
+    if (existsSync(marker)) return { ok: true, result: 'already_attempted' };
+    // Nada que migrar
+    if (!existsSync(globalCfg)) { writeMarker('skipped', 'no hay config global'); return { ok: true, result: 'no_global' }; }
+
+    try {
+      mkdirSync(localeDir, { recursive: true });
+      const copied = [];
+      copyFileSync(globalCfg, destCfg); copied.push('facturacion-config.json');
+      for (const sub of ['ri', 'mono']) {
+        const src = path.join(globalFac, sub);
+        if (existsSync(src)) { cpSync(src, path.join(localeDir, sub), { recursive: true }); copied.push(`facturacion/${sub}`); }
+      }
+      // 7) NO borrar lo global (queda como respaldo)
+      writeMarker('migrated', 'coincidencia verificada por el renderer', copied);
+      return { ok: true, result: 'migrated', filesCopied: copied };
+    } catch (e) {
+      console.error('[MIGRACION FACTURACION] error:', e.message);
+      return { ok: false, result: 'error', error: e.message };
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -1672,23 +2091,25 @@ function setupIPC() {
 
     const chk = (ok, label, detail = '') => ({ ok: !!ok, label, detail });
 
-    // Leer facturacion-config para saber si RI está inicializado
+    // Leer facturacion-config del LOCAL ACTIVO para saber si RI está inicializado
     let facturCfg = null;
     try {
-      const cfgPath = path.join(userData, 'facturacion-config.json');
-      if (existsSync(cfgPath)) facturCfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+      const localId = getActiveLocalId();
+      const cfgPath = localId ? getFacturacionConfigPath(localId) : null;
+      if (cfgPath && existsSync(cfgPath)) facturCfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
     } catch {}
 
     const riInitialized = facturCfg?.ri?.initialized || false;
 
-    // Leer backend.env para saber si tiene MP token
+    // Leer backend.env del LOCAL ACTIVO para saber si tiene MP token
+    const _scLocalId = getActiveLocalId();
+    const _scEnvPath = _scLocalId ? getBackendEnvPath(_scLocalId) : null;
     let backendVars = {};
     try {
-      const envPath = path.join(userData, 'backend.env');
-      if (existsSync(envPath)) backendVars = parseEnvFile(envPath);
+      if (_scEnvPath && existsSync(_scEnvPath)) backendVars = parseEnvFile(_scEnvPath);
     } catch {}
     const hasMpToken  = !!(backendVars.MERCADOPAGO_ACCESS_TOKEN);
-    const hasBackendEnv = existsSync(path.join(userData, 'backend.env'));
+    const hasBackendEnv = !!(_scEnvPath && existsSync(_scEnvPath));
 
     // SA del RI (para poder derivar backend.env)
     const riSaPath = path.join(riDir, 'serviceAccount.json');
@@ -1713,7 +2134,7 @@ function setupIPC() {
         'AFIP RI configurado', riDir
       ),
       backendEngine: chk(existsSync(path.join(backendDir, 'src', 'server.js')), 'Engine MP bundleado', backendDir),
-      backendEnv:    chk(hasBackendEnv, 'Config MP (backend.env)', path.join(userData, 'backend.env')),
+      backendEnv:    chk(hasBackendEnv, 'Config MP (backend.env)', _scEnvPath || '(sin local activo)'),
       mpToken:       chk(hasMpToken, 'Token Mercado Pago', hasMpToken ? 'configurado' : 'falta — ingresar en Cuenta MP'),
       // Datos extra para auto-reparación y guía de deps pack
       _meta: {
@@ -1775,9 +2196,9 @@ function setupIPC() {
 
   // Diagnóstico completo del backend (funciona aunque el backend esté caído)
   ipcMain.handle('mp:backend-diag', () => {
-    const userData   = app.getPath('userData');
-    const envPath    = path.join(userData, 'backend.env');
-    const mpAccPath  = path.join(userData, 'mp-accounts.json');
+    const _diagLocal = getActiveLocalId();
+    const envPath    = _diagLocal ? getBackendEnvPath(_diagLocal) : path.join(app.getPath('userData'), 'backend.env');
+    const mpAccPath  = _diagLocal ? getMpAccountsPath(_diagLocal) : path.join(app.getPath('userData'), 'mp-accounts.json');
     const entryProd  = app.isPackaged
       ? path.join(process.resourcesPath, 'backend', 'src', 'server.js')
       : path.join(__dirname, '..', 'backend', 'src', 'server.js');
@@ -1804,7 +2225,7 @@ function setupIPC() {
       } catch {}
     }
 
-    const saPath = path.join(userData, 'serviceAccountKey.json');
+    const saPath = _diagLocal ? getMpServiceAccountPath(_diagLocal) : path.join(app.getPath('userData'), 'serviceAccountKey.json');
     const saExists = existsSync(saPath);
     let saKeyOk = false;
     if (saExists) {
@@ -1822,8 +2243,10 @@ function setupIPC() {
     const rawGac = envVars.GOOGLE_APPLICATION_CREDENTIALS || '';
     let gacResolved = '';
     if (rawGac) {
+      // Las rutas relativas se resuelven contra el dir por local (ELECTRON_USER_DATA_PATH=baseDir)
+      const diagBaseDir = _diagLocal ? getLocaleFacturacionDir(_diagLocal) : app.getPath('userData');
       if (path.isAbsolute(rawGac) && existsSync(rawGac)) gacResolved = rawGac;
-      else if (existsSync(path.join(userData, rawGac))) gacResolved = path.join(userData, rawGac);
+      else if (existsSync(path.join(diagBaseDir, rawGac))) gacResolved = path.join(diagBaseDir, rawGac);
     }
 
     return {
@@ -1847,6 +2270,8 @@ function setupIPC() {
       localIdPresente:       !!(envVars.LOCAL_ID || localIdFromAccounts),
       firebaseCredsPresente,
       hasEnvVarCreds,
+      firebaseDbUrlPresente: !!envVars.FIREBASE_DATABASE_URL,
+      firebaseDbUrl:         envVars.FIREBASE_DATABASE_URL || null,
       rutaPagosPresente:     !!(envVars.FIREBASE_PAGOS_PATH || rutaPagosFromAccounts),
       googleAppCredentials:  rawGac || null,
       googleAppCredentialsResolved: gacResolved || null,
@@ -1862,9 +2287,11 @@ function setupIPC() {
   // Solo escribe las claves Firebase — deja MERCADOPAGO_ACCESS_TOKEN vacío
   // ---------------------------------------------------------------------------
   ipcMain.handle('backend:gen-env-from-sa', (_e, mpToken) => {
-    const userData = app.getPath('userData');
-    const riSaPath = path.join(getRIDir(), 'serviceAccount.json');
-    const destPath = path.join(userData, 'backend.env');
+    const localId = getActiveLocalId();
+    if (!localId) return { ok: false, error: 'Sin local activo.' };
+    const riSaPath = path.join(getRIDir(localId), 'serviceAccount.json');
+    const destPath = getBackendEnvPath(localId);
+    mkdirSync(path.dirname(destPath), { recursive: true });
 
     // Leer service account
     if (!existsSync(riSaPath)) {
@@ -1880,17 +2307,6 @@ function setupIPC() {
     if (!sa.project_id || !sa.client_email || !sa.private_key) {
       return { ok: false, error: 'serviceAccount.json incompleto (falta project_id, client_email o private_key).' };
     }
-
-    // Leer LOCAL_ID desde mp-accounts.json si existe
-    let localId = '';
-    try {
-      const mpAccPath = path.join(userData, 'mp-accounts.json');
-      if (existsSync(mpAccPath)) {
-        const accounts = JSON.parse(readFileSync(mpAccPath, 'utf-8'));
-        const active = accounts.find(a => a.activo) || accounts[0];
-        if (active?.localId) localId = active.localId;
-      }
-    } catch {}
 
     // Leer backend.env existente para no perder campos ya guardados
     let existing = {};
@@ -1927,20 +2343,33 @@ function setupIPC() {
   // ---------------------------------------------------------------------------
   // Leer / guardar token MP en backend.env (sólo el campo del token)
   // ---------------------------------------------------------------------------
-  ipcMain.handle('backend:set-mp-token', (_e, token) => {
-    const userData = app.getPath('userData');
-    const envPath  = path.join(userData, 'backend.env');
-    let vars = existsSync(envPath) ? parseEnvFile(envPath) : {};
-    vars.MERCADOPAGO_ACCESS_TOKEN = token || '';
-    const content = Object.entries(vars)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n') + '\n';
-    try {
-      writeFileSync(envPath, content, 'utf-8');
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e.message };
+  ipcMain.handle('backend:set-mp-token', (_e, token, cfg = {}) => {
+    const localId = getActiveLocalId();
+    if (!localId) return { ok: false, error: 'Sin local activo.' };
+    // Guardar el token Y completar las variables base (DB URL, LOCAL_ID, ruta pagos, credenciales)
+    // para que el backend quede listo para arrancar. cfg trae databaseURL/projectId/paymentsPath del local.
+    const res = ensureBackendEnv(localId, { ...cfg, token: token || '' });
+    if (!res.ok) return res;
+    return { ok: true, path: res.path, changes: res.changes, hasDbUrl: res.hasDbUrl };
+  });
+
+  // ---------------------------------------------------------------------------
+  // Crear/COMPLETAR backend.env del local activo con las variables base (idempotente).
+  // El renderer pasa la URL de Firebase del local (core.js) — imprescindible para no
+  // crashear con "Can't determine Firebase Database URL".
+  // ---------------------------------------------------------------------------
+  ipcMain.handle('backend:ensure-env', (_e, cfg = {}) => {
+    const localId = getActiveLocalId();
+    if (!localId) return { ok: false, error: 'Sin local activo.' };
+    const res = ensureBackendEnv(localId, cfg || {});
+    // Si acabamos de completar variables base (incluida la URL) y el backend está caído
+    // —típico tras un boot que se saltó por falta de FIREBASE_DATABASE_URL— arrancarlo ahora.
+    if (res.ok && res.hasDbUrl && res.changes.length && !backendProcess) {
+      console.log('[MP ENSURE-ENV] backend.env completado y backend caído → iniciando backend');
+      backendAutoRetried = false;
+      startBackend();
     }
+    return res;
   });
 
   // ---------------------------------------------------------------------------
@@ -1958,10 +2387,11 @@ function setupIPC() {
   }
 
   ipcMain.handle('mp:repair', async () => {
-    const userData  = app.getPath('userData');
-    const envPath   = path.join(userData, 'backend.env');
-    const mpAccPath = path.join(userData, 'mp-accounts.json');
-    const saPath    = path.join(userData, 'serviceAccountKey.json');
+    const _repairLocal = getActiveLocalId();
+    if (!_repairLocal) return { ok: false, error: 'Sin local activo.' };
+    const envPath   = getBackendEnvPath(_repairLocal);
+    const mpAccPath = getMpAccountsPath(_repairLocal);
+    const saPath    = getMpServiceAccountPath(_repairLocal);
     const diagnostics = {};
 
     // 1. Reparar serviceAccountKey.json si tiene private_key malformada
@@ -2360,11 +2790,13 @@ app.whenReady().then(() => {
   initMachineId();
   Menu.setApplicationMenu(null);
   setupIPC();
-  // Reparar backend.env con private_key malformada ANTES de iniciar el backend
-  const _userData   = app.getPath('userData');
-  const _envPath    = path.join(_userData, 'backend.env');
-  const _riSaPath   = path.join(getRIDir(), 'serviceAccount.json');
-  repairBackendEnvIfNeeded(_envPath, _riSaPath);
+  // Reparar backend.env (del local activo) con private_key malformada ANTES de iniciar el backend
+  const _bootLocal = getActiveLocalId();
+  if (_bootLocal) {
+    const _envPath  = getBackendEnvPath(_bootLocal);
+    const _riSaPath = path.join(getRIDir(_bootLocal), 'serviceAccount.json');
+    if (existsSync(_envPath)) repairBackendEnvIfNeeded(_envPath, _riSaPath);
+  }
   startBackend();
   createWindow();
   // El chequeo de actualizaciones ahora ocurre UNA sola vez antes del login,
@@ -2372,11 +2804,12 @@ app.whenReady().then(() => {
   // Se eliminó el setTimeout(checkForUpdates, 15000) para evitar un segundo aviso duplicado.
   setTimeout(autoStartFacturacion, 8000);
 
-  // Retry de arranque del backend MP + creación de mp-accounts.json si falta
+  // Retry de arranque del backend MP + creación de mp-accounts.json si falta (por local)
   setTimeout(() => {
-    const userData  = app.getPath('userData');
-    const envPath   = path.join(userData, 'backend.env');
-    const mpAccPath = path.join(userData, 'mp-accounts.json');
+    const _retryLocal = getActiveLocalId();
+    if (!_retryLocal) return;
+    const envPath   = getBackendEnvPath(_retryLocal);
+    const mpAccPath = getMpAccountsPath(_retryLocal);
     let envVars = {};
     try { if (existsSync(envPath)) envVars = parseEnvFile(envPath); } catch {}
     const hasFirebaseCreds = !!(envVars.FIREBASE_PROJECT_ID && envVars.FIREBASE_CLIENT_EMAIL && envVars.FIREBASE_PRIVATE_KEY);

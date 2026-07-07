@@ -139,7 +139,16 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       if (priorityArticle && priorityArticle.foto) {
         preloadImage(priorityArticle.foto).catch(e => console.warn("Failed to preload priority image", e));
       }
-      
+
+      // Fase A: precarga liviana en segundo plano de las imágenes de todos los artículos,
+      // para que al alternar entre departamentos ya estén en la caché del navegador y no
+      // reaparezca el skeleton. Fire-and-forget: no bloquea la pantalla ni espera a que
+      // terminen. El navegador limita la concurrencia por host, así que no satura la red.
+      fetchedArticles
+        .map(a => a && a.foto)
+        .filter(Boolean)
+        .forEach(url => { preloadImage(url).catch(() => {}); });
+
     } catch (err) {
       setError('No se pudieron cargar los datos. Inténtelo de nuevo.');
       toast({

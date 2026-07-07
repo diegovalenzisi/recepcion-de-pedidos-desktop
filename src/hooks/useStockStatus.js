@@ -1,7 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, createContext, useContext } from 'react';
 import { getCurrentLocalId } from '@/lib/firebase/core';
 import { ref, onValue } from 'firebase/database';
 import { getDatabase } from 'firebase/database';
+
+// Valor por defecto con la forma completa para que cualquier consumidor funcione
+// aunque (por error) quede fuera del provider, sin romper la UI.
+const STOCK_STATUS_DEFAULT = {
+  hasOutOfStock: false, hasLowStock: false, isLoading: true,
+  outOfStockArticles: [], outOfStockRawMaterials: [],
+  lowStockArticles: [], lowStockRawMaterials: [],
+  outOfStockItems: [], lowStockItems: [],
+  outOfStockCount: 0, lowStockCount: 0,
+  lastUpdated: null, localId: null,
+};
+
+// Contexto para compartir UNA sola instancia de useStockStatus en toda la app y así
+// evitar listeners duplicados sobre ARTICULOS/MATERIA_PRIMA. El provider vive en App.jsx;
+// StockPage consume con useStockStatusContext() en vez de volver a montar el hook.
+export const StockStatusContext = createContext(STOCK_STATUS_DEFAULT);
+export const useStockStatusContext = () => useContext(StockStatusContext);
 
 export const useStockStatus = () => {
   const [hasOutOfStock, setHasOutOfStock] = useState(false);
@@ -33,14 +50,13 @@ export const useStockStatus = () => {
 
     const db = getDatabase();
     const articulosRef = ref(db, `${currentId}/ARTICULOS`);
-    const materiaPrimaRefUpper = ref(db, `${currentId}/MATERIA-PRIMA`);
-    const materiaPrimaRefLower = ref(db, `${currentId}/materia-prima`);
-    const materiaPrimaRefUnderscore = ref(db, `${currentId}/MATERIA_PRIMA`);
+    // El único nodo real de materia prima es MATERIA_PRIMA (ver managementApi/stockApi).
+    // Se eliminaron los listeners a MATERIA-PRIMA y materia-prima: no existen en Firebase
+    // y solo generaban suscripciones y recálculos desperdiciados.
+    const materiaPrimaRef = ref(db, `${currentId}/MATERIA_PRIMA`);
 
     let currentArticles = [];
-    let currentRawMaterialsUpper = [];
-    let currentRawMaterialsLower = [];
-    let currentRawMaterialsUnderscore = [];
+    let currentRawMaterials = [];
 
     const updateState = () => {
       const outOfStockArt = [];
@@ -83,12 +99,7 @@ export const useStockStatus = () => {
         }
       });
 
-      const combinedRawMaterials = [
-        ...currentRawMaterialsUpper, 
-        ...currentRawMaterialsLower, 
-        ...currentRawMaterialsUnderscore
-      ];
-      const uniqueRawMaterials = Array.from(new Map(combinedRawMaterials.map(item => [item.codigo, item])).values());
+      const uniqueRawMaterials = currentRawMaterials;
       
       const outOfStockRaw = [];
       const lowStockRaw = [];
@@ -171,29 +182,15 @@ export const useStockStatus = () => {
       setIsLoading(false);
     });
 
-    const unsubscribeRawUpper = onValue(materiaPrimaRefUpper, (snapshot) => {
+    const unsubscribeRaw = onValue(materiaPrimaRef, (snapshot) => {
       const data = snapshot.val();
-      currentRawMaterialsUpper = data ? Object.keys(data).map(key => ({ codigo: key, ...data[key] })) : [];
-      updateState();
-    });
-
-    const unsubscribeRawLower = onValue(materiaPrimaRefLower, (snapshot) => {
-      const data = snapshot.val();
-      currentRawMaterialsLower = data ? Object.keys(data).map(key => ({ codigo: key, ...data[key] })) : [];
-      updateState();
-    });
-
-    const unsubscribeRawUnderscore = onValue(materiaPrimaRefUnderscore, (snapshot) => {
-      const data = snapshot.val();
-      currentRawMaterialsUnderscore = data ? Object.keys(data).map(key => ({ codigo: key, ...data[key] })) : [];
+      currentRawMaterials = data ? Object.keys(data).map(key => ({ codigo: key, ...data[key] })) : [];
       updateState();
     });
 
     return () => {
       unsubscribeArt();
-      unsubscribeRawUpper();
-      unsubscribeRawLower();
-      unsubscribeRawUnderscore();
+      unsubscribeRaw();
     };
   }, []);
 

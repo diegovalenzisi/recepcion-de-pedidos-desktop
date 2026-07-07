@@ -20,7 +20,14 @@ function CashRegisterSummary({ currentShift, totalSales, totalExpenses, totalSaf
     ? cashData.fondoInicial
     : (currentShift?.fondoInicial || 0);
 
-  const isClosed = currentShift?.estado === 'cerrado';
+  // Fix 2: detección robusta de cerrado. Si cashData viene desde BACKUP/.../TURNO/.../CAJA
+  // con campos de cierre, usar esos valores guardados aunque selectedShift.estado venga incompleto.
+  const isClosed =
+    currentShift?.estado === 'cerrado'
+    || cashData?.estado === 'cerrado'
+    || cashData?.cierreTotalVentas !== undefined
+    || cashData?.cierreGanancia !== undefined
+    || cashData?.cierreTotalesPorPago !== undefined;
 
   // Para turnos cerrados usar los valores guardados al cierre; fallback a los calculados
   const cashInBoxFinal = isClosed ? (cashData?.cierreEfectivoContado ?? cashInBox) : cashInBox;

@@ -29,16 +29,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   backendRestart: () => ipcRenderer.invoke('backend:restart'),
   localResetForNew: () => ipcRenderer.invoke('local:reset-for-new'),
+  setActiveLocal: (localId) => ipcRenderer.invoke('local:set-active', localId),
   getMachineId: () => ipcRenderer.invoke('machine-id:get'),
   getMachineInfo: () => ipcRenderer.invoke('machine-id:get-info'),
   systemCheck:  () => ipcRenderer.invoke('app:system-check'),
+  mpMigrateGlobalToLocal: ()   => ipcRenderer.invoke('mp:migrate-global-to-local'),
   mpBackendHealth:    ()       => ipcRenderer.invoke('mp:backend-health'),
   mpRecentPayments:   (horas)  => ipcRenderer.invoke('mp:recent-payments', horas),
   mpBackendDiag:      ()       => ipcRenderer.invoke('mp:backend-diag'),
   mpRepair:           ()       => ipcRenderer.invoke('mp:repair'),
   backend: {
-    genEnvFromSA: (mpToken) => ipcRenderer.invoke('backend:gen-env-from-sa', mpToken),
-    setMpToken:   (token)   => ipcRenderer.invoke('backend:set-mp-token', token),
+    genEnvFromSA: (mpToken)      => ipcRenderer.invoke('backend:gen-env-from-sa', mpToken),
+    setMpToken:   (token, cfg)   => ipcRenderer.invoke('backend:set-mp-token', token, cfg),
+    // Crea/completa el backend.env del local activo con las variables base (DB URL del local, LOCAL_ID, ruta pagos)
+    ensureEnv:    (cfg)          => ipcRenderer.invoke('backend:ensure-env', cfg),
   },
   facturacion: {
     // Configuración de cuentas
@@ -64,9 +68,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     restart:   (key, accountDir) => ipcRenderer.invoke('facturacion:restart', key, accountDir),
     getStatus: (key) => ipcRenderer.invoke('facturacion:status', key),
     getLogs:   (key) => ipcRenderer.invoke('facturacion:logs', key),
-    // Config persistente
+    // Config persistente (por local)
     readConfig:  () => ipcRenderer.invoke('facturacion:config:read'),
     writeConfig: (config) => ipcRenderer.invoke('facturacion:config:write', config),
+    // Migración responsable del config global viejo → local activo
+    globalConfigSummary: () => ipcRenderer.invoke('facturacion:global-config-summary'),
+    migrateGlobalToLocal: (localId, meta) => ipcRenderer.invoke('facturacion:migrate-global-to-local', localId, meta),
     // Eventos en tiempo real
     onLog: (callback) => {
       const handler = (_e, data) => callback(data);

@@ -139,6 +139,156 @@ export const fetchCashRegisterData = async (date, shiftId) => {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Lectura HISTÓRICA de la caja de un turno cerrado, directamente desde BACKUP.
+// A diferencia de fetchCashRegisterData (que la usan también la caja ABIERTA en
+// LoginPage/ShiftSummaryUpdater y por eso chequea CAJAS vivo primero), este helper:
+//   - NO mira CAJAS vivo → evita devolver un stub sin gastos/CAJAFUERTE.
+//   - Alinea la fecha con la misma tolerancia ±1 día que las ventas (cruce de medianoche).
+//   - Lee EXPLÍCITAMENTE CAJA/gastos y CAJA/CAJAFUERTE (nombres exactos) y los normaliza,
+//     por si el nodo CAJA viniera incompleto.
+// Solo lectura. No toca escritura, cierre ni backup.
+// ---------------------------------------------------------------------------
+export const fetchHistoricalCashData = async (shift) => {
+    if (!shift || !shift.id || !shift.date) {
+        return { fondoInicial: 0, gastos: {}, CAJAFUERTE: {} };
+    }
+    checkLocalId();
+    const API_URL = getFirebaseUrl();
+    const LOCAL_ID = getCurrentLocalId();
+    const shiftId = shift.id;
+
+    // Candidatos de fecha: exacta, día anterior, día siguiente (igual que fetchSalesForShift).
+    const candidates = [shift.date];
+    const base = parseDateString(shift.date);
+    if (base && !isNaN(base)) {
+        const prev = new Date(base); prev.setDate(prev.getDate() - 1);
+        const next = new Date(base); next.setDate(next.getDate() + 1);
+        candidates.push(formatDateForFirebase(prev), formatDateForFirebase(next));
+    }
+
+    for (const cand of candidates) {
+        const [day, month, year] = cand.split('-');
+        const backupBase = `${API_URL}/${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shiftId}`;
+        try {
+            const [cajaRes, gastosRes, safeRes] = await Promise.all([
+                fetch(`${backupBase}/CAJA.json`),
+                fetch(`${backupBase}/CAJA/gastos.json`),
+                fetch(`${backupBase}/CAJA/CAJAFUERTE.json`),
+            ]);
+            const caja = cajaRes.ok ? await cajaRes.json() : null;
+            if (caja) {
+                const gastos     = gastosRes.ok ? await gastosRes.json() : null;
+                const cajafuerte = safeRes.ok   ? await safeRes.json()   : null;
+                const normalized = {
+                    ...caja,
+                    gastos:     gastos     || caja.gastos     || {},
+                    CAJAFUERTE: cajafuerte || caja.CAJAFUERTE || {},
+                };
+                if (cand !== shift.date) {
+                    console.log(`[CAJA] CAJA histórica de turno #${shiftId} hallada en fecha adyacente ${cand}.`);
+                }
+                console.log(`[CAJA] BACKUP CAJA #${shiftId} (${cand}): gastos=${Object.keys(normalized.gastos).length} cajafuerte=${Object.keys(normalized.CAJAFUERTE).length}`);
+                return normalized;
+            }
+        } catch (e) {
+            console.warn(`[CAJA] Error leyendo BACKUP CAJA ${cand}:`, e?.message || e);
+        }
+    }
+
+    // Sin CAJA en BACKUP en ninguna fecha cercana → fallback al lector genérico
+    // (CAJAS vivo exacto + BACKUP exacto), por si fuese un turno aún no respaldado.
+    console.log(`[CAJA] Sin BACKUP CAJA para #${shiftId} en ${candidates.join(', ')} — usando fetchCashRegisterData.`);
+    return fetchCashRegisterData(base || parseDateString(shift.date), shiftId);
+};
+
+// Formatea una venta cruda (de MOSTRADOR/PEDIDOS, vivo o BACKUP) al shape que usa la
+// tabla de ventas. `kind` = 'MOSTRADOR' | 'DELIVERY'. Devuelve null si la venta no aplica.
+const formatSale = (kind, saleId, sale) => {
+    if (kind === 'MOSTRADOR') {
+        const isSpecialDiscount = sale.specialDiscount && ['Sorteo', 'Regalo', 'Mal Armado'].includes(sale.specialDiscount.type);
+        const displayId = (sale.type === 'Seña' && sale.referenceOrder) ? sale.referenceOrder : saleId;
+        return {
+            id: displayId,
+            originalId: saleId,
+            hora: sale.hora,
+            payments: isSpecialDiscount ? [{ method: sale.specialDiscount.type, amount: 0 }] : sale.payments,
+            total: isSpecialDiscount ? 0 : sale.total,
+            type: sale.type || 'Mostrador',
+            description: sale.description,
+            status: sale.status || 'COMPLETADO',
+            CostoTotal: sale.CostoTotal,
+            items: sale.items || [],
+        };
+    }
+    // DELIVERY: solo entregados con pago (igual que el flujo vivo)
+    if (sale.status?.main === 'ENTREGADO' && sale.payment != null) {
+        let total = sale.payment.total;
+        if (typeof total === 'undefined' || total === null || total === 0) {
+            total = sale.payment.amount || 0;
+        }
+        if (sale.payment.deposit?.amount) {
+            total = total - sale.payment.deposit.amount;
+        }
+        return {
+            id: saleId,
+            hora: sale.times?.ingress || new Date(sale.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+            payments: sale.payment.payments || [{ method: sale.payment.method, amount: total }],
+            total: total,
+            type: 'Delivery',
+            status: sale.status?.main || 'ENTREGADO',
+            CostoTotal: sale.CostoTotal,
+            items: sale.items || [],
+        };
+    }
+    return null;
+};
+
+const sortSalesByHora = (sales) => sales.sort((a, b) => {
+    const val = (t) => {
+        const [h, m, s] = (t || '00:00:00').split(':').map(Number);
+        return (h >= 0 && h <= 4 ? h + 24 : h) * 3600 + m * 60 + (s || 0);
+    };
+    return val(b.hora) - val(a.hora);
+});
+
+// Lectura de las ventas históricas del turno cerrado desde BACKUP. Cada carpeta de estado
+// contiene las mismas ventas crudas que estaban en MOSTRADOR/PEDIDOS antes del cierre, ya
+// aisladas por TURNO/{id}, así que no hay mezcla de turnos, fechas ni locales.
+const fetchSalesFromBackup = async (localId, shiftDateStr, shiftId) => {
+    const [day, month, year] = shiftDateStr.split('-');
+    const base = `${localId}/BACKUP/${year}/${month}/${day}/TURNO/${shiftId}`;
+    const db = getDatabase();
+
+    const readFolder = async (relPath, kind) => {
+        try {
+            const snap = await get(ref(db, `${base}/${relPath}`));
+            if (!snap.exists()) return [];
+            const out = [];
+            const data = snap.val();
+            Object.keys(data).forEach(saleId => {
+                const formatted = formatSale(kind, saleId, data[saleId]);
+                if (formatted) out.push(formatted);
+            });
+            return out;
+        } catch (e) {
+            console.warn(`[CAJA] No se pudo leer BACKUP ${relPath}:`, e?.message || e);
+            return [];
+        }
+    };
+
+    const [mostradorCompletados, mostradorCancelados, deliveryEntregados, deliveryCancelados] = await Promise.all([
+        readFolder('MOSTRADOR/COMPLETADOS', 'MOSTRADOR'),
+        readFolder('MOSTRADOR/CANCELADOS', 'MOSTRADOR'),
+        readFolder('DELIVERY/ENTREGADOS', 'DELIVERY'),
+        readFolder('DELIVERY/CANCELADOS', 'DELIVERY'),
+    ]);
+
+    const all = [...mostradorCompletados, ...mostradorCancelados, ...deliveryEntregados, ...deliveryCancelados];
+    console.log(`[CAJA] Ventas desde BACKUP turno #${shiftId}: ${mostradorCompletados.length + mostradorCancelados.length} mostrador + ${deliveryEntregados.length + deliveryCancelados.length} delivery = ${all.length} total`);
+    return all;
+};
+
 export const fetchSalesForShift = async (shift) => {
     if (!shift || !shift.id || !shift.date) return [];
 
@@ -159,50 +309,9 @@ export const fetchSalesForShift = async (shift) => {
         if (snapshot.exists()) {
             snapshot.forEach(childSnapshot => {
                 const sale = childSnapshot.val();
-
-                if (String(sale.turno) !== String(shiftId)) {
-                    return;
-                }
-
-                const saleId = childSnapshot.key;
-                let formattedSale;
-
-                if (nodeName === 'MOSTRADOR') {
-                    const isSpecialDiscount = sale.specialDiscount && ['Sorteo', 'Regalo', 'Mal Armado'].includes(sale.specialDiscount.type);
-                    const displayId = (sale.type === 'Seña' && sale.referenceOrder) ? sale.referenceOrder : saleId;
-                    formattedSale = {
-                        id: displayId,
-                        originalId: saleId,
-                        hora: sale.hora,
-                        payments: isSpecialDiscount ? [{ method: sale.specialDiscount.type, amount: 0 }] : sale.payments,
-                        total: isSpecialDiscount ? 0 : sale.total,
-                        type: sale.type || 'Mostrador',
-                        description: sale.description,
-                        status: sale.status || 'COMPLETADO',
-                        CostoTotal: sale.CostoTotal,
-                        items: sale.items || [],
-                    };
-                } else if (sale.status?.main === 'ENTREGADO' && sale.payment != null) {
-                    let total = sale.payment.total;
-                    if (typeof total === 'undefined' || total === null || total === 0) {
-                        total = sale.payment.amount || 0;
-                    }
-                    if (sale.payment.deposit?.amount) {
-                        total = total - sale.payment.deposit.amount;
-                    }
-                    formattedSale = {
-                        id: saleId,
-                        hora: sale.times?.ingress || new Date(sale.timestamp).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
-                        payments: sale.payment.payments || [{ method: sale.payment.method, amount: total }],
-                        total: total,
-                        type: 'Delivery',
-                        status: sale.status?.main || 'ENTREGADO',
-                        CostoTotal: sale.CostoTotal,
-                        items: sale.items || [],
-                    };
-                }
-
-                if (formattedSale) sales.push(formattedSale);
+                if (String(sale.turno) !== String(shiftId)) return;
+                const formatted = formatSale(nodeName === 'MOSTRADOR' ? 'MOSTRADOR' : 'DELIVERY', childSnapshot.key, sale);
+                if (formatted) sales.push(formatted);
             });
         }
         return sales;
@@ -214,16 +323,38 @@ export const fetchSalesForShift = async (shift) => {
             fetchSalesFromNode('PEDIDOS'),
         ]);
 
-        const allSales = [...counterSales, ...deliverySales];
-        console.log(`[CAJA] Ventas encontradas: ${counterSales.length} mostrador + ${deliverySales.length} delivery = ${allSales.length} total`);
+        let allSales = [...counterSales, ...deliverySales];
+        console.log(`[CAJA] Ventas vivas: ${counterSales.length} mostrador + ${deliverySales.length} delivery = ${allSales.length} total`);
 
-        return allSales.sort((a, b) => {
-            const val = (t) => {
-                const [h, m, s] = (t || '00:00:00').split(':').map(Number);
-                return (h >= 0 && h <= 4 ? h + 24 : h) * 3600 + m * 60 + (s || 0);
-            };
-            return val(b.hora) - val(a.hora);
-        });
+        // Fallback a BACKUP SOLO si las ventas vivas vinieron vacías (turno cerrado, ya movido).
+        // Nunca se combinan vivo + backup del mismo turno → no hay duplicación.
+        if (allSales.length === 0) {
+            console.log(`[CAJA] Sin ventas vivas para turno #${shiftId} — probando BACKUP...`);
+
+            // Capa 1: probar la fecha exacta y, si viene vacía, ±1 día (cruce de medianoche).
+            // Regla estricta: cada consulta lee SOLO bajo BACKUP/{fecha}/TURNO/{id} (nunca mezcla
+            // turnos ni locales) y se toma la PRIMERA fecha con ventas (no se combinan fechas).
+            const candidateDates = [shiftDateStr];
+            const baseDate = parseDateString(shiftDateStr);
+            if (baseDate && !isNaN(baseDate)) {
+                const prev = new Date(baseDate); prev.setDate(prev.getDate() - 1);
+                const next = new Date(baseDate); next.setDate(next.getDate() + 1);
+                candidateDates.push(formatDateForFirebase(prev), formatDateForFirebase(next));
+            }
+
+            for (const cand of candidateDates) {
+                const backupSales = await fetchSalesFromBackup(localId, cand, shiftId);
+                if (backupSales.length > 0) {
+                    allSales = backupSales;
+                    if (cand !== shiftDateStr) {
+                        console.log(`[CAJA] Ventas del turno #${shiftId} halladas en fecha adyacente ${cand} (cruce de medianoche).`);
+                    }
+                    break; // primera fecha con ventas → no combinar más fechas
+                }
+            }
+        }
+
+        return sortSalesByHora(allSales);
     } catch (error) {
         console.error('[CAJA] Error al leer ventas:', error);
         return [];

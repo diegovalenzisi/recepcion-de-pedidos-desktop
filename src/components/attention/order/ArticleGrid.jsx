@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
+import { getCachedImage } from '@/lib/cache/imageCache';
 
 // Memoized ArticleCard to prevent unnecessary re-renders when parent state changes
 const ArticleCard = memo(({ article, onArticleClick, isCompact }) => {
-  const [imgLoaded, setImgLoaded] = useState(false);
+  // Si la imagen ya fue vista/cacheada (memoria o localStorage), arrancar en "cargada"
+  // para no mostrar el skeleton ni el parpadeo al volver a montar la tarjeta (cambio de
+  // departamento). Solo afecta el estado inicial; onLoad sigue marcando la carga real.
+  const [imgLoaded, setImgLoaded] = useState(() => !!getCachedImage(article.foto));
   const imgRef = useRef(null);
 
   const cardPadding = isCompact ? "p-2" : "p-3";

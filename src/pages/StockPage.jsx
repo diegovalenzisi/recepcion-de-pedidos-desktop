@@ -15,7 +15,7 @@ import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OptionalExportButton from '@/components/management/OptionalExportButton.jsx';
 import OptionalImportModal from '@/components/management/OptionalImportModal.jsx';
 import StockDeliveryAutomationStatus from '@/components/management/StockDeliveryAutomationStatus.jsx';
-import { useStockStatus } from '@/hooks/useStockStatus.js';
+import { useStockStatusContext } from '@/hooks/useStockStatus.js';
 import { useAuth } from '@/hooks/useAuth.jsx';
 import { 
   saveData, 
@@ -84,7 +84,7 @@ function StockPage({ userPermissions, userRole }) {
     outOfStockArticles, lowStockArticles,
     outOfStockRawMaterials, lowStockRawMaterials,
     localId: stockLocalId
-  } = useStockStatus();
+  } = useStockStatusContext();
 
   const [data, setData] = useState({
     articulos: [],

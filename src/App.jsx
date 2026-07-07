@@ -6,7 +6,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Settings, HeartHandshake, Loader2, Warehouse, CreditCard, Archive, Users as UsersIcon, LogOut, Receipt, FileText, FileSpreadsheet, Smartphone, PieChart, DatabaseZap, Globe } from 'lucide-react';
 import { permissionsList } from '@/config/permissions.js';
 import { useAuth } from '@/hooks/useAuth.jsx';
-import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp, getFirebaseUrl } from '@/lib/firebase/core.js';
+import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp, getFirebaseUrl, getLocationSpecificDatabaseURL, getLocationSpecificProjectId } from '@/lib/firebase/core.js';
 import { fetchSettings, listenToChanges } from '@/lib/api/settingsApi.js';
 import { checkOpenShift, createNewShift } from '@/lib/api/cash/index.js';
 import UpdateNotification from '@/components/UpdateNotification.jsx';
@@ -20,7 +20,7 @@ import { useVoicePaymentAlerts } from '@/hooks/useVoicePaymentAlerts.js';
 import { useMpBackendStatus } from '@/hooks/useMpBackendStatus.js';
 import { useMpAccounts } from '@/hooks/useMpAccounts.js';
 import VoicePaymentAlertWidget from '@/components/VoicePaymentAlertWidget.jsx';
-import { useStockStatus } from '@/hooks/useStockStatus.js';
+import { useStockStatus, StockStatusContext } from '@/hooks/useStockStatus.js';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OutOfStockModal from '@/components/management/OutOfStockModal.jsx';
 import { clearCache } from '@/lib/cache/cacheManager.js';
@@ -167,17 +167,21 @@ function AppContent() {
 
   const [clearingCache, setClearingCache] = useState(false);
   
-  const { 
-    hasOutOfStock, 
+  // ÚNICA instancia de useStockStatus en toda la app. Se comparte por contexto
+  // (StockStatusContext) para que StockPage NO vuelva a montar el hook ni duplique
+  // los listeners de ARTICULOS/MATERIA_PRIMA.
+  const stockStatus = useStockStatus();
+  const {
+    hasOutOfStock,
     hasLowStock,
     outOfStockCount,
     lowStockCount,
-    outOfStockArticles, 
+    outOfStockArticles,
     lowStockArticles,
-    outOfStockRawMaterials, 
+    outOfStockRawMaterials,
     lowStockRawMaterials,
-    localId: stockLocalId 
-  } = useStockStatus();
+    localId: stockLocalId
+  } = stockStatus;
   
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const { showModal: showAlarmModal, dismiss: dismissAlarm, pendingAmount: commissionAlarmAmount } = useCommissionAlarm(
@@ -405,6 +409,19 @@ function AppContent() {
         perfMonitor.startTimer('initial-data-load');
         setFirebaseLocalId(id);
         setAccountsLocalId(id);
+        // Fija el local activo en el proceso principal ANTES de cualquier lectura de
+        // facturación por local (así main lee/escribe userData/facturacion/locales/{id}).
+        try { await window.electronAPI?.setActiveLocal?.(id); } catch { /* no-electron o error transitorio */ }
+        // Completar el backend.env de Mercado Pago del local con SU URL de Firebase (core.js).
+        // Imprescindible: sin FIREBASE_DATABASE_URL el backend MP crashea con
+        // "Can't determine Firebase Database URL". Idempotente: solo rellena lo que falta.
+        try {
+          await window.electronAPI?.backend?.ensureEnv?.({
+            databaseURL: getLocationSpecificDatabaseURL(id),
+            projectId:   getLocationSpecificProjectId(id),
+            paymentsPath: `${id}/PAGOS_CONFIRMADOS`,
+          });
+        } catch { /* no-electron o error transitorio */ }
         await initializeFirebaseApp();
 
         const fetchedSettings = await fetchSettings();
@@ -539,7 +556,7 @@ function AppContent() {
   const backgroundLocation = location.state?.backgroundLocation;
 
   return (
-    <>
+    <StockStatusContext.Provider value={stockStatus}>
       <Helmet>
         <title>DLV Sistemas</title>
         <meta name="description" content="Sistema de gestión integral para tu negocio." />
@@ -722,7 +739,7 @@ function AppContent() {
         onAccept={dismissAlarm}
       />
       <Toaster />
-    </>
+    </StockStatusContext.Provider>
   );
 }
 

@@ -185,7 +185,12 @@ const SalesPage = () => {
     });
   }, [sales, startDate, endDate]);
 
-  const facturas = filteredSales.filter(sale => String(sale.id)?.startsWith('FCB'));
+  // FCB = Responsable Inscripto. FCC = Monotributo (Factura C, ej. FCC0001-00000790).
+  // Ambas son facturas emitidas con CAE; solo cambia el motor/régimen que las generó.
+  const facturas = filteredSales.filter(sale => {
+    const id = String(sale.id || '');
+    return id.startsWith('FCB') || id.startsWith('FCC');
+  });
   const remitos = filteredSales.filter(sale => String(sale.id)?.startsWith('FCX'));
   
   const defaultTab = canViewInvoices ? 'facturacion' : canViewDeliveryNotes ? 'remitos' : '';

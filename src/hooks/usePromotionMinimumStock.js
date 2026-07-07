@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getDatabase, ref, onValue, get } from 'firebase/database';
 import { getCurrentLocalId } from '@/lib/firebase/core';
+import { normalizarStock } from '@/lib/api/ventaUtils';
 
 export const usePromotionMinimumStock = (promotion) => {
     const [state, setState] = useState({
@@ -112,8 +113,11 @@ export const usePromotionMinimumStock = (promotion) => {
                         continue;
                     }
 
-                    // Check article stock
-                    let available = article.stock?.propio !== undefined ? article.stock.propio : (article.stock || 0);
+                    // Check article stock. normalizarStock devuelve SIEMPRE un número:
+                    // para artículos por receta/heredado stock es un objeto { stockType, receta }
+                    // y antes se propagaba tal cual a details.stock (causaba React #31 al renderizar)
+                    // y NaN en possible. Ahora queda como número seguro.
+                    let available = normalizarStock(article.stock);
                     const possiblePromosArt = Math.floor(available / qtyNeeded);
                     
                     details.push({ 

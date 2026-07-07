@@ -7,11 +7,13 @@ import { Label } from '@/components/ui/label';
 import { DollarSign, Loader2, Send, Calendar as CalendarIcon } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
-import { formatDateForFirebase } from '@/lib/utils';
+import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 
 function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitialSetup = false }) {
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date());
+  // Capa 3: fecha de negocio (corte 2 AM), no calendario cruda. Un turno abierto entre 00:00 y
+  // 01:59 debe quedar bajo la fecha del día anterior, igual que ventas/backup/pantalla de Cajas.
+  const [date, setDate] = useState(() => getOperationalDate(new Date()));
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
 
@@ -22,7 +24,7 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
       setAmount('');
     }
     if (isInitialSetup) {
-      setDate(new Date());
+      setDate(getOperationalDate(new Date()));
     }
   }, [shift, isOpen, isEditable, isInitialSetup]);
 

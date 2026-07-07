@@ -761,7 +761,12 @@ const FacturacionManager = () => {
     if (!f) return;
 
     (async () => {
-      const [saved, deps, mid, fbCfg] = await Promise.all([
+      // Fijar el local activo en main ANTES de leer la config por local (evita races
+      // si se entra a Configuración con la sesión ya iniciada).
+      const activeLocalId = getCurrentLocalId();
+      try { await window.electronAPI?.setActiveLocal?.(activeLocalId); } catch { /* no-op */ }
+
+      let [saved, deps, mid, fbCfg] = await Promise.all([
         f.readConfig(),
         f.depsOk(),
         window.electronAPI.getMachineId(),
@@ -770,6 +775,33 @@ const FacturacionManager = () => {
 
       setMachineId(mid);
       if (fbCfg) setFirebaseConfig(fbCfg);
+
+      // ── Migración automática RESPONSABLE (Fase 1) ───────────────────────────
+      // Si este local no tiene config propia, pero existe la config GLOBAL vieja y su
+      // CUIT coincide con el CUIT de ESTE local en Firebase, migrar automáticamente.
+      // Si no hay coincidencia clara → NO migrar (se mostrará "no configurado").
+      if (!saved && activeLocalId) {
+        try {
+          const gsum = await f.globalConfigSummary?.();
+          if (gsum?.exists) {
+            const fbCuit = fbCfg?.ri?.cuit || fbCfg?.monotributo?.cuentas?.[0]?.cuit || null;
+            const norm = (v) => String(v || '').replace(/\D/g, '');
+            const sameCuit = gsum.cuit && fbCuit && norm(gsum.cuit) === norm(fbCuit);
+            if (sameCuit) {
+              const r = await f.migrateGlobalToLocal(activeLocalId, { cuit: gsum.cuit });
+              console.log('[MIGRACION FACTURACION][UI] resultado =', r?.result);
+              if (r?.result === 'migrated') {
+                saved = await f.readConfig();
+                toast({ title: 'Facturación migrada a este local', className: 'bg-green-500 text-white' });
+              }
+            } else {
+              console.log('Migración de facturación omitida: no se pudo verificar que la configuración global pertenezca al local activo.');
+            }
+          }
+        } catch (e) {
+          console.error('[MIGRACION FACTURACION][UI] error:', e.message);
+        }
+      }
 
       // ── Auto-setup silencioso para PC nueva ─────────────────────────────────
 

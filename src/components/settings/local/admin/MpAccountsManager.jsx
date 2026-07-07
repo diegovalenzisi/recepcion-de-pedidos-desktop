@@ -11,6 +11,22 @@ import {
 } from 'lucide-react';
 import { createTestMercadoPagoPayment } from '@/lib/api/paymentAlertsApi';
 import { useToast } from '@/components/ui/use-toast';
+import { getLocalId, getLocationSpecificDatabaseURL, getLocationSpecificProjectId } from '@/lib/firebase/core.js';
+
+// Completa el backend.env del local activo con las variables base (URL Firebase del local,
+// LOCAL_ID, ruta pagos y opcionalmente el token). Evita el crash "Can't determine Firebase Database URL".
+async function ensureBackendEnvForLocal(extra = {}) {
+  const id = getLocalId();
+  if (!id || !window.electronAPI?.backend?.ensureEnv) return null;
+  try {
+    return await window.electronAPI.backend.ensureEnv({
+      databaseURL:  getLocationSpecificDatabaseURL(id),
+      projectId:    getLocationSpecificProjectId(id),
+      paymentsPath: `${id}/PAGOS_CONFIRMADOS`,
+      ...extra,
+    });
+  } catch { return null; }
+}
 
 const EMPTY_FORM = {
   nombreCuenta: '',
@@ -140,6 +156,7 @@ function BackendDiagPanel({ diag, onRefresh }) {
       <div className="space-y-0.5 bg-white rounded p-2 border border-slate-100">
         <Item label="backend.env" ok={diag.backendEnvExists} detail={diag.backendEnvPath?.replace(/.*[/\\]/, '…/')} />
         <Item label="Credenciales Firebase (env vars)" ok={diag.hasEnvVarCreds} />
+        <Item label="URL Firebase (DB)" ok={diag.firebaseDbUrlPresente} detail={diag.firebaseDbUrl?.replace(/^https?:\/\//, '') || undefined} />
         <Item label="serviceAccountKey.json" ok={diag.serviceAccountExists} detail={diag.serviceAccountKeyOk === false ? '⚠ private_key inválida' : undefined} />
         <Item label="Token Mercado Pago" ok={diag.tokenPresente} />
         <Item label="Local ID" ok={diag.localIdPresente} detail={diag.localId || undefined} />
@@ -205,18 +222,27 @@ const MpAccountsManager = () => {
     try { setDiag(await window.electronAPI.mpBackendDiag()); } catch {}
   }, []);
 
-  useEffect(() => { loadDiag(); }, [loadDiag]);
+  // Al entrar a la pantalla: crear/reparar backend.env del local con su URL de Firebase,
+  // luego mostrar el diagnóstico ya actualizado.
+  useEffect(() => {
+    (async () => { await ensureBackendEnvForLocal(); await loadDiag(); })();
+  }, [loadDiag]);
 
   const handleAdd = async (form) => {
     await addAccount(form);
+    // Completar backend.env con la ruta de pagos + token de la cuenta recién creada
+    await ensureBackendEnvForLocal({ paymentsPath: form.firebasePathPagos, token: form.accessTokenMercadoPago });
     setShowAddForm(false);
     toast({ title: `Cuenta "${form.nombreCuenta}" agregada` });
+    await loadDiag();
   };
 
   const handleEdit = async (form) => {
     await updateAccount(editingName, form);
+    await ensureBackendEnvForLocal({ paymentsPath: form.firebasePathPagos, token: form.accessTokenMercadoPago });
     setEditingName(null);
     toast({ title: `Cuenta "${editingName}" actualizada` });
+    await loadDiag();
   };
 
   const handleDelete = async (nombre) => {

@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Loader2, AlertTriangle, CheckCircle2, RotateCcw, Package, Clock } from 'lucide-react';
 import { fetchAffectedArticles, manualOverrideDelivery } from '@/lib/api/stockDeliveryAutomation';
 import { listenToManagementData } from '@/lib/api/managementApi';
+import { normalizarStock } from '@/lib/api/ventaUtils';
 
 const StockDeliveryAutomationStatus = ({ departments = [] }) => {
   const [affectedArticles, setAffectedArticles] = useState([]);
@@ -159,7 +160,10 @@ const StockDeliveryAutomationStatus = ({ departments = [] }) => {
                       <TableCell className="text-center">
                         <Badge variant="destructive" className="gap-1">
                           <Package className="w-3 h-3" />
-                          {article.stock}
+                          {/* stock puede venir como objeto { stockType, propio, receta } en
+                              artículos por receta/heredados; normalizarStock devuelve un número
+                              seguro y evita el React #31 al renderizar un objeto como texto. */}
+                          {normalizarStock(article.stock)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-center">

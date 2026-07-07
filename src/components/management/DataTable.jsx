@@ -7,7 +7,7 @@ import { useParentArticleStock } from '@/hooks/useParentArticleStock.js';
 import { normalizarStock, normalizarCosto } from '@/lib/api/ventaUtils';
 import StockStatusBadge from './StockStatusBadge';
 
-const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess }) => {
+const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess, gruposOpcionalesMap }) => {
 
   const heredadoDeId = (item.stock?.stockType === 'heredado' || item.stock?.heredadoDe) ? item.stock?.heredadoDe : null;
   const { stock: parentStock, loading: parentLoading, parentExists } = useParentArticleStock(heredadoDeId);
@@ -195,7 +195,11 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
         );
     },
     opcionales: () => {
-      const grupo = allData['grupos-opcionales']?.find(g => g.codigo === item.grupo);
+      // Fase B: lookup O(1) por Map en vez de un find lineal por fila (allData['grupos-opcionales']).
+      // Fallback al find solo por seguridad si el Map no llegara. Mismo resultado visual.
+      const grupo = gruposOpcionalesMap
+        ? gruposOpcionalesMap.get(item.grupo)
+        : allData['grupos-opcionales']?.find(g => g.codigo === item.grupo);
       return (
         <>
           <td className="py-3 px-4 font-mono text-sm whitespace-nowrap">{item.codigo}</td>
@@ -325,6 +329,15 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
 });
 
 const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess }) => {
+  // Fase B: índice codigo→grupo construido UNA sola vez (no por fila). Evita el find lineal
+  // repetido en cada opcional al renderizar la pestaña Opcionales. Solo lectura, sin cambios
+  // de datos ni visuales.
+  const gruposOpcionalesMap = React.useMemo(() => {
+    const map = new Map();
+    (allData['grupos-opcionales'] || []).forEach(g => { if (g && g.codigo != null) map.set(g.codigo, g); });
+    return map;
+  }, [allData['grupos-opcionales']]);
+
   const headers = {
     articulos: ['Foto', 'Código', 'Nombre', 'Departamento', 'Valor', 'Costo Total', 'Stock', 'Control Stock', 'Activo', 'Acciones'],
     'materia-prima': ['Código', 'Nombre', 'Unidad', 'Stock', 'Mínimo', 'Costo Unit.', 'Acciones'],
@@ -361,7 +374,7 @@ const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, 
           <AnimatePresence>
             {data.length > 0 ? (
               data.map((item, index) => (
-                <TableRow key={item.codigo} item={item} index={index} activeTab={activeTab} onEdit={onEdit} onDelete={onDelete} onDuplicate={onDuplicate} allData={allData} onToggleStatus={onToggleStatus} onToggleControlStock={onToggleControlStock} onTachoStockChange={onTachoStockChange} canModifyTachoStock={canModifyTachoStock} hasFullAccess={hasFullAccess} />
+                <TableRow key={item.codigo} item={item} index={index} activeTab={activeTab} onEdit={onEdit} onDelete={onDelete} onDuplicate={onDuplicate} allData={allData} onToggleStatus={onToggleStatus} onToggleControlStock={onToggleControlStock} onTachoStockChange={onTachoStockChange} canModifyTachoStock={canModifyTachoStock} hasFullAccess={hasFullAccess} gruposOpcionalesMap={gruposOpcionalesMap} />
               ))
             ) : (
               <motion.tr

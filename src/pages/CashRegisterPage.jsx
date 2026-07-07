@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useToast } from '@/components/ui/use-toast.js';
 import { 
-  fetchShiftsForDate, 
-  fetchCashRegisterData, 
+  fetchShiftsForDate,
+  fetchHistoricalCashData,
   fetchSalesForShift,
   listenToCashData,
   listenToSales
@@ -23,7 +23,7 @@ import CashRegisterHeader from '@/components/cash/CashRegisterHeader.jsx';
 import CashRegisterSummary from '@/components/cash/CashRegisterSummary.jsx';
 import CashRegisterExpenses from '@/components/cash/CashRegisterExpenses.jsx';
 import CashRegisterSales from '@/components/cash/CashRegisterSales.jsx';
-import { parseDateString, getOperationalDate, formatDateForFirebase } from '@/lib/utils.js';
+import { getOperationalDate, formatDateForFirebase } from '@/lib/utils.js';
 import { useAsyncEffect } from '@/hooks/useAsyncEffect.js';
 import ErrorBoundary from '@/components/ErrorBoundary.jsx';
 
@@ -99,9 +99,17 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
 
     setLoading(true);
 
-    if (selectedShift.estado === 'cerrado') {
+    // Fix 1: SOLO el turno activo real usa listeners vivos. Cualquier turno que no sea el activo
+    // (mismo id + misma fecha de negocio) —o que esté cerrado— se trata como HISTÓRICO y se lee
+    // desde BACKUP (CAJA + MOSTRADOR/DELIVERY), evitando caer en CAJAS/MOSTRADOR/PEDIDOS vivos.
+    const isHistorical =
+        selectedShift?.estado === 'cerrado'
+        || String(selectedShift?.id) !== String(activeShift?.id)
+        || selectedShift?.date !== activeShift?.date;
+
+    if (isHistorical) {
         Promise.all([
-            fetchCashRegisterData(parseDateString(selectedShift.date), selectedShift.id),
+            fetchHistoricalCashData(selectedShift),
             fetchSalesForShift(selectedShift)
         ]).then(([fetchedCashData, fetchedSales]) => {
             if (isMounted) {
@@ -136,7 +144,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
         cashUnsub();
         salesUnsub();
     };
-  }, [selectedShift, toast]);
+  }, [selectedShift, activeShift, toast]);
 
   const handleShiftClosed = (newShift) => {
     onShiftChange(newShift);
@@ -207,7 +215,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
     }, {});
     
     const expensesArray = cashData?.gastos ? Object.values(cashData.gastos).filter(Boolean) : [];
-    const paidExpenses = expensesArray.filter(expense => expense.status !== 'A Pagar' && !expense.concepto.startsWith('Nota de Credito'));
+    const paidExpenses = expensesArray.filter(expense => expense.status !== 'A Pagar' && !(expense.concepto || '').startsWith('Nota de Credito'));
     const totalExpensesValue = paidExpenses.reduce((sum, expense) => sum + (expense.monto || 0), 0);
     
     const safeEntries = cashData?.CAJAFUERTE ? Object.values(cashData.CAJAFUERTE).filter(Boolean) : [];
@@ -231,7 +239,13 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
     };
   }, [sales, cashData, selectedShift]);
 
-  const shiftIsActive = selectedShift && selectedShift.estado !== 'cerrado';
+  // Capa 2: las acciones de caja (Cerrar Turno, Fondo, Caja Fuerte, Cierre Parcial) solo se
+  // habilitan cuando el turno VISUALIZADO es el turno ACTIVO real (mismo id y misma fecha de
+  // negocio) y no está cerrado. Así no se puede cerrar/modificar una caja histórica por error.
+  const shiftIsActive = !!selectedShift
+    && String(selectedShift.id) === String(activeShift?.id)
+    && selectedShift.date === activeShift?.date
+    && selectedShift.estado !== 'cerrado';
 
   const renderContent = () => {
     return (

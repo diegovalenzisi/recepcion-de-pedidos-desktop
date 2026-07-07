@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.36",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.36%2FRecepcion-de-Pedidos-Setup-1.3.36.exe?alt=media",
-  "sha256": "887e3ad2d75e995bd2d4598a86286e683ffecbac07ded39830439e0e53ceeb49",
-  "size": 120808825,
+  "latest": "1.3.40",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.40%2FRecepcion-de-Pedidos-Setup-1.3.40.exe?alt=media",
+  "sha256": "78a6174b761974d34bff99ae0c7abf100e821b9fbe1af524420dc4182abb8238",
+  "size": 120833316,
   "mandatory": false,
-  "releaseDate": "2026-07-05",
-  "notes": "Versión 1.3.36: ícono nuevo, sonido solo para pedidos web/app, y mensajes de WhatsApp (pedido y asignación de repartidor) editables desde Configuración web."
+  "releaseDate": "2026-07-06",
+  "notes": "Versión 1.3.40: facturación y Mercado Pago por local (multi-PC); mensajes de WhatsApp y asignación de repartidor configurables; sonido solo para pedidos web/app; ícono nuevo; Pedido nuevo e imágenes más rápidas; Stock → Opcionales más ágil; Cajas: turnos cerrados muestran ventas, gastos y caja fuerte desde el historial, apertura de turno respeta la fecha de negocio, y las acciones de caja quedan restringidas al turno activo real; Ventas → Facturación reconoce Factura B y Factura C."
 }

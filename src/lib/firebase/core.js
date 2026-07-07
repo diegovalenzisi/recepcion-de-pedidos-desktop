@@ -51,6 +51,7 @@ export const getFirebaseUrl = () => getConfig(getLocalId()).dbUrl;
 
 export const getLocationSpecificDatabaseURL = (localId) => getConfig(localId).dbUrl;
 export const getLocationSpecificStorageBucket = (localId) => getConfig(localId).storage;
+export const getLocationSpecificProjectId = (localId) => getConfig(localId).projectId;
 
 export const setFirebaseLocalId = (localId) => {
   LOCAL_ID = localId;
