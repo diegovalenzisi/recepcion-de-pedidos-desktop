@@ -119,8 +119,15 @@ export const saveSettings = async (settingsData) => {
   // pantalla) y los pisaba. Los excluimos para no sobreescribir lo recién guardado.
   const COMMISSION_KEYS = new Set(['porcentaje', 'alarmaPago', 'salesPercentage']);
 
+  // gridViewSettings (preferencias de Vista Cuadrilla) se guarda EXCLUSIVAMENTE desde
+  // GridViewSettingsManager con saveGridViewSettings (escribe CONFIGURACION/gridViewSettings).
+  // El guardado general recibía un gridViewSettings VIEJO desde el estado del padre (cargado al
+  // montar la pantalla) y lo pisaba. Se excluye, igual que las claves de comisión.
+  const DEDICATED_KEYS = new Set(['gridViewSettings']);
+
   for (const key in settingsData) {
     if (COMMISSION_KEYS.has(key)) continue;
+    if (DEDICATED_KEYS.has(key)) continue;
     const value = settingsData[key];
     if (key === 'web') {
       if (value && value.horarios !== undefined) {
@@ -136,8 +143,6 @@ export const saveSettings = async (settingsData) => {
        updates['newOrderSound'] = value;
     } else if (key === 'salesPercentage') {
        updates['porcentaje'] = value;
-    } else if (key === 'gridViewSettings') {
-       updates['gridViewSettings'] = value;
     } else {
       updates[key] = value;
     }

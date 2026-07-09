@@ -304,3 +304,40 @@ export const uploadAppIcon = async (file, localId) => {
     throw error;
   }
 };
+
+/**
+ * Sube el LOGO de la app de pedidos a Firebase Storage, a una ruta fija por local:
+ * `{localId}/logo`. Es independiente del ícono de la app (uploadAppIcon → app-icons/...).
+ * Usa un nombre fijo (se sobrescribe en cada guardado, sin acumular archivos). Devuelve la
+ * URL de descarga, que el caller guarda en RTDB (CONFIGURACION/logoAppPedidos) para leerla luego.
+ */
+export const uploadAppLogo = async (file, localId) => {
+  try {
+    const app = getFirebaseApp();
+    if (!app) {
+      throw new Error('Firebase no está inicializado');
+    }
+
+    const storageBucket = getLocationSpecificStorageBucket(localId);
+    const storage = getStorage(app);
+
+    const fileName = `${localId}/logo`;
+    const storageRef = ref(storage, fileName);
+
+    const metadata = {
+      contentType: file.type,
+      customMetadata: {
+        type: 'app_logo',
+        uploadedAt: new Date().toISOString(),
+        localId: String(localId),
+        storageBucket: storageBucket
+      }
+    };
+
+    await uploadBytes(storageRef, file, metadata);
+    return await getDownloadURL(storageRef);
+  } catch (error) {
+    console.error('Error uploading app logo:', error);
+    throw error;
+  }
+};
