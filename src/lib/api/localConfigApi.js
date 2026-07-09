@@ -1,124 +1,84 @@
 import { getDatabase, ref, set, get } from 'firebase/database';
 import { initializeApp, getApps } from 'firebase/app';
 
-// Base Firebase configuration for the central IDs database
-const IDS_DB_CONFIG = {
+// Configuración fija del proyecto Firebase central donde vive el registro de
+// rutas por local (/rutas/{numeroLocal}). Es intencionalmente hardcodeada: es
+// el único punto de partida conocido antes de saber a qué proyecto pertenece
+// un local — no se puede resolver dinámicamente lo que sirve para resolver
+// todo lo demás.
+const ROUTES_DB_CONFIG = {
   apiKey: "AIzaSyDFsKxM8F5v9YqJxT8pYxQZvLzRxNmWqKs",
   projectId: "achava3703",
   databaseURL: "https://achava3703-default-rtdb.firebaseio.com",
   storageBucket: "achava3703.firebasestorage.app",
 };
 
-// Initialize or get the IDs database app instance
-const getIDsDBApp = () => {
-  const existingApp = getApps().find(app => app.name === 'ids-db');
-  if (existingApp) {
-    return existingApp;
-  }
-  return initializeApp(IDS_DB_CONFIG, 'ids-db');
+const ROUTES_APP_NAME = 'routes-config-db';
+
+const getRoutesDBApp = () => {
+  const existingApp = getApps().find(app => app.name === ROUTES_APP_NAME);
+  if (existingApp) return existingApp;
+  return initializeApp(ROUTES_DB_CONFIG, ROUTES_APP_NAME);
+};
+
+const routesRef = (numeroLocal) => {
+  const db = getDatabase(getRoutesDBApp());
+  return ref(db, `rutas/${numeroLocal}`);
 };
 
 /**
- * Saves local configuration to the central IDs database
- * @param {string} numeroLocal - Local number/ID
- * @param {string} firebaseDatabase - Firebase database URL
- * @param {string} firebaseStorage - Firebase storage bucket
- * @returns {Promise<{success: boolean, error?: string}>}
+ * Guarda la configuración de rutas Firebase de un local en
+ * https://achava3703-default-rtdb.firebaseio.com/rutas/{numeroLocal}/
+ *
+ * Campos principales (los que ve el usuario en la pantalla de configuración):
+ *   databaseURL, databasePath, storageBucket, storageBasePath
+ * Campos técnicos opcionales (solo necesarios para un local totalmente nuevo,
+ * no mostrados como principales en la UI):
+ *   apiKey, projectId
  */
-export const saveLocalConfiguration = async (numeroLocal, firebaseDatabase, firebaseStorage) => {
+export const saveLocalRoutes = async (numeroLocal, routes) => {
   try {
-    if (!numeroLocal || !firebaseDatabase || !firebaseStorage) {
-      return { success: false, error: 'Todos los campos son obligatorios' };
+    if (!numeroLocal || !routes?.databaseURL) {
+      return { success: false, error: 'databaseURL es obligatorio' };
     }
 
-    const app = getIDsDBApp();
-    const db = getDatabase(app);
-    const configRef = ref(db, `ids/${numeroLocal}`);
-
-    const configData = {
-      numeroLocal,
-      firebaseDatabase,
-      firebaseStorage,
-      updatedAt: new Date().toISOString(),
+    const data = {
+      databaseURL:     routes.databaseURL,
+      databasePath:    routes.databasePath ?? '',
+      storageBucket:   routes.storageBucket ?? '',
+      storageBasePath: routes.storageBasePath ?? '',
+      updatedAt:       new Date().toISOString(),
     };
+    // apiKey/projectId son técnicos y opcionales — solo se guardan si vienen.
+    if (routes.apiKey)    data.apiKey    = routes.apiKey;
+    if (routes.projectId) data.projectId = routes.projectId;
 
-    await set(configRef, configData);
-
+    await set(routesRef(numeroLocal), data);
     return { success: true };
   } catch (error) {
-    console.error('Error saving local configuration:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Error al guardar la configuración' 
-    };
+    console.error('[localConfigApi] Error guardando rutas del local:', error);
+    return { success: false, error: error.message || 'Error al guardar la configuración' };
   }
 };
 
 /**
- * Fetches local configuration from the central IDs database
- * @param {string} numeroLocal - Local number/ID to fetch
- * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+ * Lee la configuración de rutas de un local desde
+ * https://achava3703-default-rtdb.firebaseio.com/rutas/{numeroLocal}/
+ * Devuelve { success: false } si no hay nada configurado (comportamiento
+ * esperado para la mayoría de los locales existentes — deben caer al
+ * fallback de LOCATION_CONFIG).
  */
-export const fetchLocalConfiguration = async (numeroLocal) => {
+export const fetchLocalRoutes = async (numeroLocal) => {
   try {
-    if (!numeroLocal) {
-      return { success: false, error: 'Número de local requerido' };
-    }
+    if (!numeroLocal) return { success: false, error: 'Número de local requerido' };
 
-    const app = getIDsDBApp();
-    const db = getDatabase(app);
-    const configRef = ref(db, `ids/${numeroLocal}`);
-
-    const snapshot = await get(configRef);
-
+    const snapshot = await get(routesRef(numeroLocal));
     if (snapshot.exists()) {
-      return { 
-        success: true, 
-        data: snapshot.val() 
-      };
-    } else {
-      return { 
-        success: false, 
-        error: 'No se encontró configuración para este número de local' 
-      };
+      return { success: true, data: snapshot.val() };
     }
+    return { success: false, error: 'No hay rutas configuradas para este local' };
   } catch (error) {
-    console.error('Error fetching local configuration:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Error al obtener la configuración' 
-    };
-  }
-};
-
-/**
- * Fetches all local configurations from the central IDs database
- * @returns {Promise<{success: boolean, data?: object, error?: string}>}
- */
-export const fetchAllLocalConfigurations = async () => {
-  try {
-    const app = getIDsDBApp();
-    const db = getDatabase(app);
-    const idsRef = ref(db, 'ids');
-
-    const snapshot = await get(idsRef);
-
-    if (snapshot.exists()) {
-      return { 
-        success: true, 
-        data: snapshot.val() 
-      };
-    } else {
-      return { 
-        success: true, 
-        data: {} 
-      };
-    }
-  } catch (error) {
-    console.error('Error fetching all local configurations:', error);
-    return { 
-      success: false, 
-      error: error.message || 'Error al obtener las configuraciones' 
-    };
+    console.error('[localConfigApi] Error leyendo rutas del local:', error);
+    return { success: false, error: error.message || 'Error al obtener la configuración' };
   }
 };

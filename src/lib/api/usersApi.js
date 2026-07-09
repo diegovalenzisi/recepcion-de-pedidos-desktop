@@ -1,11 +1,11 @@
-import { getFirebaseUrl, checkLocalId, getCurrentLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, checkLocalId, getCurrentDatabasePath } from '@/lib/firebase/core';
 
 const USERS_PATH = 'USUARIOS';
 
 // Fetch all users from Firebase
 export const fetchUsers = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const url = `${getFirebaseUrl()}/${localId}/${USERS_PATH}.json`;
     try {
         const response = await fetch(url);
@@ -27,7 +27,7 @@ export const fetchUsers = async () => {
 // Save a new user or update an existing one in Firebase
 export const saveUser = async (userData, isUpdate = false) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const userId = userData.usuario; 
 
     if (userId === 'DiegoL') {
@@ -67,7 +67,7 @@ export const saveUser = async (userData, isUpdate = false) => {
 // Delete a user from Firebase
 export const deleteUser = async (userId) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
 
     if (userId === 'DiegoL') {
         throw new Error("No se puede eliminar al usuario administrador.");

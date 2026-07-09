@@ -1,10 +1,10 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { formatDateForFirebase } from '@/lib/utils';
 
 export const setInitialCashFund = async (shiftId, amount, dateString) => {
   checkLocalId();
   const API_URL = getFirebaseUrl();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
 
   if (!shiftId || !dateString) {
     throw new Error("Shift ID and date are required to set the initial fund.");

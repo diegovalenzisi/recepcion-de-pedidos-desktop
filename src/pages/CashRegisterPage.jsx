@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useToast } from '@/components/ui/use-toast.js';
-import { 
+import {
   fetchShiftsForDate,
   fetchHistoricalCashData,
   fetchSalesForShift,
@@ -99,13 +99,13 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
 
     setLoading(true);
 
-    // Fix 1: SOLO el turno activo real usa listeners vivos. Cualquier turno que no sea el activo
-    // (mismo id + misma fecha de negocio) —o que esté cerrado— se trata como HISTÓRICO y se lee
-    // desde BACKUP (CAJA + MOSTRADOR/DELIVERY), evitando caer en CAJAS/MOSTRADOR/PEDIDOS vivos.
-    const isHistorical =
-        selectedShift?.estado === 'cerrado'
-        || String(selectedShift?.id) !== String(activeShift?.id)
-        || selectedShift?.date !== activeShift?.date;
+    // Historial vs. vivo: se decide por el campo `estado` PROPIO del turno, que es la única
+    // señal confiable (createNewShift lo pone en 'abierto'; closeShift lo pasa a 'cerrado' y a
+    // la vez mueve los datos a BACKUP). Solo un turno 'abierto' usa listeners vivos; cualquier
+    // otro estado (cerrado, o incompleto/sin estado) se lee desde BACKUP. NO se compara contra
+    // ningún turno "activo" externo, porque ese dato puede llegar stale y marcaría el turno
+    // abierto real como histórico (bug que bloqueaba caja y mostraba datos en cero).
+    const isHistorical = !selectedShift || selectedShift.estado !== 'abierto';
 
     if (isHistorical) {
         Promise.all([
@@ -144,7 +144,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
         cashUnsub();
         salesUnsub();
     };
-  }, [selectedShift, activeShift, toast]);
+  }, [selectedShift, toast]);
 
   const handleShiftClosed = (newShift) => {
     onShiftChange(newShift);
@@ -239,13 +239,12 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
     };
   }, [sales, cashData, selectedShift]);
 
-  // Capa 2: las acciones de caja (Cerrar Turno, Fondo, Caja Fuerte, Cierre Parcial) solo se
-  // habilitan cuando el turno VISUALIZADO es el turno ACTIVO real (mismo id y misma fecha de
-  // negocio) y no está cerrado. Así no se puede cerrar/modificar una caja histórica por error.
-  const shiftIsActive = !!selectedShift
-    && String(selectedShift.id) === String(activeShift?.id)
-    && selectedShift.date === activeShift?.date
-    && selectedShift.estado !== 'cerrado';
+  // Las acciones de caja (Cerrar Turno, Fondo, Caja Fuerte, Cierre Parcial) se habilitan cuando
+  // el turno visualizado está ABIERTO. Se usa el estado propio del turno (señal confiable), no
+  // una comparación contra un "turno activo" externo que puede llegar stale y deshabilitar los
+  // botones a usuarios con permiso aunque el turno del día esté realmente abierto. Los turnos
+  // cerrados/históricos quedan 'cerrado', por lo que siguen protegidos (no se pueden operar).
+  const shiftIsActive = !!selectedShift && selectedShift.estado === 'abierto';
 
   const renderContent = () => {
     return (

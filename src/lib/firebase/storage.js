@@ -1,5 +1,14 @@
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { getFirebaseApp, getLocationSpecificStorageBucket, getLocalId } from './core';
+import { getFirebaseApp, getLocationSpecificStorageBucket, getLocationSpecificStorageBasePath, getLocalId } from './core';
+
+// Prefijo interno de Storage por local (storageBasePath). NO es el bucket: el bucket
+// se usa tal cual para inicializar Firebase. Esto es solo una carpeta base dentro del
+// bucket para las subidas NUEVAS. Si no hay storageBasePath configurado → prefijo vacío
+// → comportamiento idéntico al actual (rutas sin prefijo). Normaliza barras sobrantes.
+const storagePrefix = (localId) => {
+  const base = (getLocationSpecificStorageBasePath(localId) || '').replace(/^\/+|\/+$/g, '');
+  return base ? `${base}/` : '';
+};
 
 export const uploadArticleImage = async (file, articleCode) => {
   try {
@@ -14,7 +23,7 @@ export const uploadArticleImage = async (file, articleCode) => {
     
     const timestamp = Date.now();
     const fileExtension = file.name.split('.').pop().toLowerCase();
-    const fileName = `articulos/${articleCode}_${timestamp}.${fileExtension}`;
+    const fileName = `${storagePrefix(localId)}articulos/${articleCode}_${timestamp}.${fileExtension}`;
     const storageRef = ref(storage, fileName);
 
     const metadata = {
@@ -59,7 +68,7 @@ export const uploadWebImage = async (file) => {
     
     const timestamp = Date.now();
     // Always use jpg for compressed web images
-    const fileName = `web/featured_${timestamp}.jpg`;
+    const fileName = `${storagePrefix(localId)}web/featured_${timestamp}.jpg`;
     const storageRef = ref(storage, fileName);
 
     const metadata = {
@@ -115,6 +124,64 @@ export const deleteArticleImage = async (imageUrl) => {
 
 // Alias for web images since the logic is the same
 export const deleteWebImage = deleteArticleImage;
+
+// Extrae el path interno de Storage desde una URL de descarga de Firebase.
+// Ej: https://.../o/40508022%2Farticulos%2F123.png?alt=media... → "40508022/articulos/123.png"
+const extractStoragePath = (imageUrl) => {
+  const urlParts = (imageUrl || '').split('/o/')[1];
+  if (!urlParts) return null;
+  return decodeURIComponent(urlParts.split('?')[0]);
+};
+
+/**
+ * Migra (copia) la imagen de UN artículo a la carpeta base storageBasePath, SOLO si
+ * hace falta. Devuelve { newUrl } si migró, o null si no había nada que hacer.
+ * NO borra la imagen vieja: eso lo hace el caller (managementApi) DESPUÉS de guardar
+ * en RTDB, para respetar el orden seguro.
+ *
+ * No hace nada si: foto vacío · no es URL de Firebase Storage · no hay storageBasePath
+ * configurado · el path ya empieza con "{storageBasePath}/".
+ * Si la descarga/subida falla, LANZA (el caller lo captura y no borra la vieja).
+ */
+export const migrateArticleImageIfNeeded = async (foto, articleCode) => {
+  if (!foto || !foto.includes('firebasestorage.googleapis.com')) return null;
+
+  const localId = getLocalId();
+  const prefix = storagePrefix(localId); // "40508022/" o ""
+  if (!prefix) return null; // sin storageBasePath → nada que migrar
+
+  const oldPath = extractStoragePath(foto);
+  if (!oldPath) return null;
+  if (oldPath.startsWith(prefix)) return null; // ya está bajo storageBasePath
+
+  const app = getFirebaseApp();
+  if (!app) throw new Error('Firebase no está inicializado');
+
+  // Descargar la imagen vieja como blob
+  const resp = await fetch(foto);
+  if (!resp.ok) throw new Error(`No se pudo descargar la imagen vieja (HTTP ${resp.status})`);
+  const blob = await resp.blob();
+
+  // Subir al nuevo path con prefijo storageBasePath, conservando la extensión real
+  const ext = (oldPath.split('.').pop() || 'png').toLowerCase();
+  const timestamp = Date.now();
+  const newName = `${prefix}articulos/${articleCode}_${timestamp}.${ext}`;
+  const storage = getStorage(app);
+  const storageRef = ref(storage, newName);
+
+  await uploadBytes(storageRef, blob, {
+    contentType: blob.type || 'application/octet-stream',
+    customMetadata: {
+      articleCode: String(articleCode),
+      migratedAt: new Date().toISOString(),
+      localId: localId || '',
+      migratedFrom: oldPath,
+    },
+  });
+
+  const newUrl = await getDownloadURL(storageRef);
+  return { newUrl };
+};
 
 /**
  * Sube un archivo de certificado AFIP (cert/key/json) a Firebase Storage.

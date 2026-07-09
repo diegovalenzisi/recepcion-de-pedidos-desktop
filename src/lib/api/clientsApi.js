@@ -1,5 +1,5 @@
 import { getDatabase, ref, onValue, set, remove, update } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const sanitizeFirebaseKey = (key) => {
   if (typeof key !== 'string') {
@@ -10,7 +10,7 @@ const sanitizeFirebaseKey = (key) => {
 
 export const fetchClients = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   
   console.log(`[ClientsAPI] Iniciando carga de clientes para Local ID: ${LOCAL_ID}`);
@@ -56,7 +56,7 @@ export const fetchClients = async () => {
 
 export const fetchClientByPhone = async (phone) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const sanitizedPhone = sanitizeFirebaseKey(phone);
   const clientRef = ref(db, `${LOCAL_ID}/CLIENTES/${sanitizedPhone}`);
@@ -73,7 +73,7 @@ export const fetchClientByPhone = async (phone) => {
 
 export const saveClient = async (clientData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   if (!clientData.phone) {
     throw new Error("El teléfono es obligatorio para guardar un cliente.");
   }
@@ -96,7 +96,7 @@ export const saveClient = async (clientData) => {
 
 export const deleteClient = async (phone) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   try {
     const db = getDatabase();
     const sanitizedPhone = sanitizeFirebaseKey(phone);
@@ -111,7 +111,7 @@ export const deleteClient = async (phone) => {
 
 export const importClients = async (clients) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const updates = {};
 

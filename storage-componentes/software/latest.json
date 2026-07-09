@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.40",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.40%2FRecepcion-de-Pedidos-Setup-1.3.40.exe?alt=media",
-  "sha256": "78a6174b761974d34bff99ae0c7abf100e821b9fbe1af524420dc4182abb8238",
-  "size": 120833316,
+  "latest": "1.3.50",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.50%2FRecepcion-de-Pedidos-Setup-1.3.50.exe?alt=media",
+  "sha256": "d323437b25416e3d22c279fcc8beffd43ea82bdc0a87bc152a4b82045f3287ed",
+  "size": 120836968,
   "mandatory": false,
-  "releaseDate": "2026-07-06",
-  "notes": "Versión 1.3.40: facturación y Mercado Pago por local (multi-PC); mensajes de WhatsApp y asignación de repartidor configurables; sonido solo para pedidos web/app; ícono nuevo; Pedido nuevo e imágenes más rápidas; Stock → Opcionales más ágil; Cajas: turnos cerrados muestran ventas, gastos y caja fuerte desde el historial, apertura de turno respeta la fecha de negocio, y las acciones de caja quedan restringidas al turno activo real; Ventas → Facturación reconoce Factura B y Factura C."
+  "releaseDate": "2026-07-08",
+  "notes": "Versión 1.3.50: rutas de Firebase configurables por local (Database y Storage) desde la pantalla inicial, guardadas en el registro central de rutas; el sistema usa databasePath como raíz real (con fallback al número de local) y storageBasePath como carpeta interna para las imágenes nuevas; migración y limpieza individual de imágenes de artículos. Además conserva los arreglos probados: al abrir turno la fecha de caja sugerida es siempre la actual del sistema y pide confirmación (no arrastra fecha vieja); se quitó el botón de facturación del pie de pantalla (arranca automática según configuración y se administra solo desde Configuración por DiegoL); y se corrige el mensaje de WhatsApp duplicado al salir el pedido."
 }

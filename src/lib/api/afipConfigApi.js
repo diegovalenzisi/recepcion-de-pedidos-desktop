@@ -1,5 +1,5 @@
 import { getDatabase, ref, set, get } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath } from '@/lib/firebase/core';
 
 const AFIP_PATH = (localId) => `${localId}/CONFIGURACION/FACTURACION_AFIP`;
 
@@ -23,7 +23,7 @@ function sanitize(fields) {
  * Los paths de Storage (certStoragePath, etc.) se guardan si ya fueron subidos.
  */
 export const saveAfipConfigToFirebase = async (config) => {
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) throw new Error('localId no disponible');
 
   const db  = getDatabase();
@@ -48,7 +48,7 @@ export const saveAfipConfigToFirebase = async (config) => {
  * Devuelve null si no existe.
  */
 export const fetchAfipConfigFromFirebase = async () => {
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) return null;
   const db  = getDatabase();
   const snap = await get(ref(db, AFIP_PATH(localId)));
@@ -60,7 +60,7 @@ export const fetchAfipConfigFromFirebase = async () => {
  * sin pisar el resto de la configuración.
  */
 export const updateAfipCertPaths = async (tipo, cuentaId, paths) => {
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) return;
   const db    = getDatabase();
   let subPath = '';

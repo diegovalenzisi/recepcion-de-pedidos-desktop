@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
 import { resolveStockImpact } from './transactionsApi';
@@ -6,7 +6,7 @@ import { resolveStockImpact } from './transactionsApi';
 const fetchData = async (path) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID) throw new Error("Local ID no está configurado.");
 
     const url = `${API_URL}/${LOCAL_ID}/${path}.json`;
@@ -30,7 +30,7 @@ const fetchData = async (path) => {
 export const fetchAllStockableItems = async () => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID) throw new Error("Local ID no está configurado.");
 
     const articulosUrl = `${API_URL}/${LOCAL_ID}/ARTICULOS.json`;
@@ -80,7 +80,7 @@ export const fetchStockItems = async () => {
 export const updateStock = async (itemCodigo, newStock, itemType) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID) throw new Error("Local ID no está configurado.");
 
     const path = itemType === 'Artículo' ? 'ARTICULOS' : 'MATERIA_PRIMA';
@@ -143,7 +143,7 @@ export const updateStock = async (itemCodigo, newStock, itemType) => {
 export const bulkUpdateStock = async (updates) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID) throw new Error("Local ID no está configurado.");
 
     const stockChanges = [];

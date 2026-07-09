@@ -1,9 +1,10 @@
 
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, runTransaction, update, onValue, off } from 'firebase/database';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { calcularCostoPromo } from '@/lib/utils/promoCosting';
+import { deleteArticleImage, migrateArticleImageIfNeeded } from '@/lib/firebase/storage';
 
 const getTabConfig = (tabId) => {
     const config = {
@@ -47,7 +48,7 @@ const processSnapshot = (snapshot, tabId) => {
 
 const syncOptionalToArticles = async (groupCode, optionalCode) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     try {
@@ -94,7 +95,7 @@ const syncOptionalToArticles = async (groupCode, optionalCode) => {
 
 const removeOptionalFromArticles = async (groupCode, optionalCode) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     try {
@@ -135,7 +136,7 @@ const removeOptionalFromArticles = async (groupCode, optionalCode) => {
 
 export const listenToManagementData = (tabId, callback, errorCallback) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const tabConfig = getTabConfig(tabId);
     if (!tabConfig) return () => {};
@@ -154,7 +155,7 @@ export const listenToManagementData = (tabId, callback, errorCallback) => {
 
 export const fetchAllManagementData = async (tabs) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const data = {};
 
@@ -178,7 +179,7 @@ export const fetchAllManagementData = async (tabs) => {
 
 export const fetchOptionalGroups = async () => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const groupsRef = ref(db, `${LOCAL_ID}/GRUPOS_OPCIONALES`);
     
@@ -193,7 +194,7 @@ export const fetchOptionalGroups = async () => {
 
 export const fetchPromotionMinimumStock = async (promotionId) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     try {
@@ -292,7 +293,7 @@ export const fetchPromotionMinimumStock = async (promotionId) => {
 
 export const saveData = async (tabId, data, isEditing, allData = {}) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const tabConfig = getTabConfig(tabId);
     if (!tabConfig) throw new Error("Invalid tab ID");
 
@@ -500,6 +501,37 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
         }
     }
 
+    // ── Imagen de artículo: migración a storageBasePath + limpieza de la vieja ──
+    // Se decide ANTES del set() qué imagen vieja borrar (después), y si hay que
+    // migrar la actual. NUNCA se borra antes de que el set() sea exitoso.
+    let oldFotoToDelete = null;
+    if (tabId === 'articulos' && isEditing) {
+        const oldFoto  = existingArticleData?.foto;
+        const formFoto = dataToSave.foto;
+        const isFirebaseUrl = (u) => typeof u === 'string' && u.includes('firebasestorage.googleapis.com');
+
+        if (formFoto === oldFoto && isFirebaseUrl(oldFoto)) {
+            // A) Guardado sin cambiar imagen → intentar migrar a storageBasePath.
+            try {
+                const migrated = await migrateArticleImageIfNeeded(oldFoto, newKey);
+                if (migrated?.newUrl) {
+                    dataToSave.foto = migrated.newUrl; // se guarda la URL nueva
+                    oldFotoToDelete = oldFoto;         // borrar la vieja tras el set
+                }
+            } catch (e) {
+                // Migración falló → mantener la vieja, no borrar nada.
+                console.warn('[Article Image] Migración omitida (se conserva la imagen actual):', e?.message || e);
+            }
+        } else if (formFoto === '' && isFirebaseUrl(oldFoto)) {
+            // C) Se quitó la imagen → borrar la vieja tras el set.
+            oldFotoToDelete = oldFoto;
+        } else if (isFirebaseUrl(formFoto) && formFoto !== oldFoto && isFirebaseUrl(oldFoto)) {
+            // B) Se reemplazó por una imagen nueva de Firebase → borrar la vieja tras el set.
+            oldFotoToDelete = oldFoto;
+        }
+        // D) precio/nombre sin imagen, o URL externa → no se toca Storage.
+    }
+
     // [DIAG] Log del objeto completo enviado a Firebase
     if (dataToSave.isPromo) {
         console.log('[PROMO DIAG] saveData - objeto completo enviado a Firebase:', {
@@ -511,6 +543,12 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
         });
     }
     await set(ref(db, finalPath), dataToSave);
+
+    // RTDB ya quedó guardado OK → recién ahora borrar la imagen vieja (best-effort).
+    if (oldFotoToDelete && oldFotoToDelete !== dataToSave.foto) {
+        try { await deleteArticleImage(oldFotoToDelete); }
+        catch (e) { console.warn('[Article Image] No se pudo borrar la imagen vieja:', e?.message || e); }
+    }
 
     if (tabId === 'opcionales') {
         try {
@@ -545,7 +583,7 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
 
 export const deleteData = async (tabId, item) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const tabConfig = getTabConfig(tabId);
     if (!tabConfig) throw new Error("Invalid tab ID");
     
@@ -567,12 +605,19 @@ export const deleteData = async (tabId, item) => {
     
     await remove(itemRef);
 
+    // Artículo borrado de RTDB → borrar también su imagen en Storage (best-effort).
+    // deleteArticleImage ya ignora foto vacío y URLs que no sean de Firebase Storage.
+    if (tabId === 'articulos') {
+        try { await deleteArticleImage(item.foto); }
+        catch (e) { console.warn('[Article Image] No se pudo borrar la imagen del artículo eliminado:', e?.message || e); }
+    }
+
     return true;
 };
 
 export const updateTachoStock = async (tachoId, newStock) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const stockRef = ref(db, `${LOCAL_ID}/TACHOS/${tachoId}/stock`);
     
@@ -581,7 +626,7 @@ export const updateTachoStock = async (tachoId, newStock) => {
 
 export const updateArticlePrice = async (articleId, newPrice) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const priceRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articleId}/valor`);
     
@@ -597,7 +642,7 @@ export const updateArticlePrice = async (articleId, newPrice) => {
 
 export const updateArticleControlStock = async (articleId, newStatus) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const controlStockRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articleId}/controlStock`);
     
@@ -617,7 +662,7 @@ export const updateArticleStatusBasedOnStock = async (articleId, newStock) => {
 
 export const sendTachoReport = async (reportData, tachos) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     const operationalDate = getOperationalDate(new Date());

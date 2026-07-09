@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, set, runTransaction, update } from "firebase/database";
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { fetchSalesPercentage } from '@/lib/api/settingsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { registrarComision } from '@/lib/api/comisionesApi';
@@ -10,7 +10,7 @@ import { registrarComision } from '@/lib/api/comisionesApi';
  */
 export const recalcularTotalComisionAPagar = async () => {
   try {
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     if (!localId) return;
     const db = getDatabase();
     const snap = await get(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`));
@@ -29,7 +29,7 @@ export const recalcularTotalComisionAPagar = async () => {
 
 export const fetchAccountSummary = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     const summaryRef = ref(db, `${localId}/RESUMEN_CUENTA`);
 
@@ -79,7 +79,7 @@ export const fetchAccountSummary = async () => {
 
 export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
 
     try {
@@ -157,7 +157,7 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
  */
 export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
 
     try {

@@ -1,9 +1,9 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, runTransaction, get, set, onValue, off, update } from 'firebase/database';
 
 export const fetchAccounts = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CUENTAS.json`;
 
@@ -27,7 +27,7 @@ export const fetchAccounts = async () => {
 };
 
 export const fetchFavoriteAccount = async () => {
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) return null;
 
   const db = getDatabase();
@@ -83,7 +83,7 @@ export const listenToAccounts = (localId, callback, errorCallback) => {
         return () => {};
     }
     const db = getDatabase();
-    const accountsRef = ref(db, `${localId}/CUENTAS`);
+    const accountsRef = ref(db, `${getLocationSpecificDatabasePath(localId)}/CUENTAS`);
 
     const listener = onValue(accountsRef, (snapshot) => {
         const data = snapshot.val();
@@ -115,7 +115,7 @@ const getNextAccountId = async (db, localId) => {
 
 export const saveAccount = async (accountData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const db = getDatabase();
   
@@ -143,7 +143,7 @@ export const saveAccount = async (accountData) => {
 
 export const deleteAccount = async (accountId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CUENTAS/${accountId}.json`;
 
@@ -163,7 +163,7 @@ export const deleteAccount = async (accountId) => {
 
 export const setFavoriteAccount = async (accountIdToSet, allAccounts) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const updates = {};
   
@@ -190,7 +190,7 @@ export const findAccountByPaymentMethod = async (localId, paymentMethod) => {
   if (!localId || !paymentMethod) return null;
   try {
     const db = getDatabase();
-    const accountsRef = ref(db, `${localId}/CUENTAS`);
+    const accountsRef = ref(db, `${getLocationSpecificDatabasePath(localId)}/CUENTAS`);
     const snapshot = await get(accountsRef);
     if (snapshot.exists()) {
       const data = snapshot.val();
@@ -216,7 +216,7 @@ export const findAccountByExactPaymentMethod = async (localId, exactPaymentMetho
   if (!localId || !exactPaymentMethod) return null;
   try {
     const db = getDatabase();
-    const accountsRef = ref(db, `${localId}/CUENTAS`);
+    const accountsRef = ref(db, `${getLocationSpecificDatabasePath(localId)}/CUENTAS`);
     const snapshot = await get(accountsRef);
     if (snapshot.exists()) {
       const data = snapshot.val();

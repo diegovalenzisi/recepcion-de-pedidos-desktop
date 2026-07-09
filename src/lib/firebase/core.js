@@ -41,7 +41,94 @@ const LOCATION_CONFIG = {
 
 const DEFAULT_CONFIG = LOCATION_CONFIG['40508022'];
 
-const getConfig = (localId) => LOCATION_CONFIG[localId] ?? DEFAULT_CONFIG;
+// Permite distinguir "local ya conocido en la tabla hardcodeada" de "local
+// nuevo" SIN exponer la tabla completa — para no precargar por error los
+// datos de Achaval (el fallback) como si fueran los de un local desconocido.
+export const isKnownLocationConfig = (localId) => Object.prototype.hasOwnProperty.call(LOCATION_CONFIG, localId);
+
+// ---------------------------------------------------------------------------
+// Override de rutas configurable por local (pantalla de configuración inicial,
+// guardado en https://achava3703-default-rtdb.firebaseio.com/rutas/{localId}/).
+// Se cachea en memoria + localStorage para que getConfig() siga siendo 100%
+// SÍNCRONA (la usan ~50 archivos con fetch() inmediato) — la única llamada
+// async real ocurre una vez, en la pantalla de configuración, que llama a
+// applyRoutesOverride() para que quede disponible sincrónicamente de ahí en más.
+// ---------------------------------------------------------------------------
+const ROUTES_OVERRIDE_KEY_PREFIX = 'firebaseRoutesOverride_';
+const overrideCache = {}; // { [localId]: { databaseURL, databasePath, storageBucket, storageBasePath, apiKey, projectId } }
+
+const readOverrideFromStorage = (localId) => {
+  try {
+    const raw = localStorage.getItem(`${ROUTES_OVERRIDE_KEY_PREFIX}${localId}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getOverride = (localId) => {
+  if (!localId) return null;
+  if (overrideCache[localId] !== undefined) return overrideCache[localId];
+  const stored = readOverrideFromStorage(localId);
+  overrideCache[localId] = stored; // cachea también el "no hay override" (null)
+  return stored;
+};
+
+/**
+ * Aplica (y persiste localmente) el override de rutas de un local, resultado
+ * de guardar desde la pantalla de configuración o de sincronizar desde
+ * /rutas/{localId} en el arranque. NO escribe en Firebase — eso lo hace
+ * localConfigApi.saveLocalRoutes(); esta función solo actualiza la caché local
+ * que consume getConfig().
+ */
+export const applyRoutesOverride = (localId, routes) => {
+  if (!localId || !routes) return;
+  overrideCache[localId] = routes;
+  try {
+    localStorage.setItem(`${ROUTES_OVERRIDE_KEY_PREFIX}${localId}`, JSON.stringify(routes));
+  } catch (e) {
+    console.warn('[core] No se pudo persistir el override de rutas en localStorage:', e.message);
+  }
+};
+
+/** Devuelve el override crudo (tal cual quedó guardado) o null si no hay. Uso: precargar el form. */
+export const getRoutesOverride = (localId) => getOverride(localId);
+
+const getConfig = (localId) => {
+  const override = getOverride(localId);
+  if (override?.databaseURL) {
+    const base = LOCATION_CONFIG[localId] ?? DEFAULT_CONFIG;
+    return {
+      dbUrl:     override.databaseURL,
+      storage:   override.storageBucket || base.storage,
+      // apiKey/projectId son técnicos: si el override no los trae (caso normal
+      // para un local YA existente en LOCATION_CONFIG), se resuelven solos.
+      apiKey:    override.apiKey    || base.apiKey,
+      projectId: override.projectId || base.projectId,
+    };
+  }
+  return LOCATION_CONFIG[localId] ?? DEFAULT_CONFIG;
+};
+
+// databasePath resuelto: el override lo trae explícito; si no hay override,
+// el comportamiento actual (implícito en todo el código existente) es que la
+// raíz de datos = el propio número de local. Getter nuevo, listo para usar,
+// pero TODAVÍA NO conectado en las llamadas de pedidos/caja/stock/facturación/
+// ventas/historial (eso requiere tocar esos ~50 call sites, fuera de alcance
+// de este cambio).
+export const getLocationSpecificDatabasePath = (localId) => {
+  const override = getOverride(localId);
+  return override?.databasePath || localId;
+};
+// Raíz OFICIAL de la base de datos del local actual: databaseURL + "/" + <esto>.
+// Resuelve el id tanto desde la variable de módulo (getCurrentLocalId, seteada
+// por checkLocalId) como desde localStorage (getLocalId), para funcionar en
+// todos los archivos de src/lib/api independientemente de cuál usaran antes.
+export const getCurrentDatabasePath = () => getLocationSpecificDatabasePath(getCurrentLocalId() || getLocalId());
+
+// storageBasePath resuelto: mismo criterio que databasePath — se guarda y se
+// puede leer, pero storage.js todavía no lo usa para componer rutas de subida.
+export const getLocationSpecificStorageBasePath = (localId) => getOverride(localId)?.storageBasePath || '';
 
 let LOCAL_ID = null;
 
@@ -75,6 +162,11 @@ export const checkLocalId = () => {
 let currentDBURL = null;
 let currentStorageBucket = null;
 
+// Devuelve la app Firebase '[DEFAULT]' si existe, o null. NO usar getApps()[0]:
+// puede haber apps con NOMBRE (ej. 'routes-config-db' de localConfigApi) creadas
+// antes que la default, y getApps()[0] devolvería esa por error.
+const getDefaultAppOrNull = () => getApps().find((a) => a.name === '[DEFAULT]') || null;
+
 export const initializeFirebaseApp = async () => {
   const localId = getLocalId();
 
@@ -83,6 +175,8 @@ export const initializeFirebaseApp = async () => {
   }
 
   const config = getConfig(localId);
+  // IMPORTANTE: storageBucket es SOLO el bucket (ej. "achava3703.firebasestorage.app").
+  // El storageBasePath NUNCA se concatena acá — se guarda aparte para rutas internas.
   const firebaseConfig = {
     apiKey: config.apiKey,
     projectId: config.projectId,
@@ -90,19 +184,20 @@ export const initializeFirebaseApp = async () => {
     storageBucket: config.storage,
   };
 
+  const defaultApp = getDefaultAppOrNull();
+
   if (
+    defaultApp &&
     currentDBURL === firebaseConfig.databaseURL &&
-    currentStorageBucket === firebaseConfig.storageBucket &&
-    getApps().length > 0
+    currentStorageBucket === firebaseConfig.storageBucket
   ) {
-    return getApps()[0];
+    return defaultApp;
   }
 
   currentDBURL = firebaseConfig.databaseURL;
   currentStorageBucket = firebaseConfig.storageBucket;
 
-  if (getApps().length > 0) {
-    const defaultApp = getApps()[0];
+  if (defaultApp) {
     if (
       defaultApp.options.databaseURL !== firebaseConfig.databaseURL ||
       defaultApp.options.storageBucket !== firebaseConfig.storageBucket
@@ -119,6 +214,7 @@ export const initializeFirebaseApp = async () => {
   }
 
   try {
+    // initializeApp SIN nombre crea la app '[DEFAULT]' (coexiste con las nombradas).
     return initializeApp(firebaseConfig);
   } catch (e) {
     console.error("Firebase initialization error:", e);
@@ -127,10 +223,9 @@ export const initializeFirebaseApp = async () => {
 };
 
 export const getFirebaseApp = () => {
-  if (getApps().length === 0) {
-    return initializeFirebaseApp();
-  }
-  return getApp();
+  const defaultApp = getDefaultAppOrNull();
+  if (defaultApp) return defaultApp;
+  return initializeFirebaseApp();
 };
 
 /**

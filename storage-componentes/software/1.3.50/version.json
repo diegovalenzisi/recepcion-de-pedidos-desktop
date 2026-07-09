@@ -1,0 +1,6 @@
+{
+  "version": "1.3.50",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.50.exe",
+  "releaseDate": "2026-07-08",
+  "notes": "Rutas de Firebase configurables por local (Database y Storage) desde la pantalla inicial de configuración, guardadas en el registro central de rutas (/rutas/{numeroLocal}); el sistema usa databasePath como raíz real (databaseURL + '/' + databasePath) con fallback al número de local, y storageBasePath como carpeta interna del bucket para las subidas nuevas ({storageBasePath}/articulos y {storageBasePath}/web); migración y limpieza individual de imágenes de artículos (migra la imagen vieja fuera de storageBasePath al guardar, borra la anterior tras confirmar RTDB, borra la imagen al eliminar el artículo; sin migración masiva ni borrado de externas); corrección de inicialización de la app Firebase [DEFAULT]. Conserva los arreglos probados de 1.3.42: fecha de caja actual del sistema con confirmación al abrir turno, sin botón de facturación en el pie de pantalla (arranque automático administrable solo por DiegoL desde Configuración) y sin mensajes de WhatsApp duplicados al salir el pedido."
+}

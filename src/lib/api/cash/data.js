@@ -1,12 +1,12 @@
 
 import { getDatabase, ref, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase, parseDateString } from '@/lib/utils';
 
 export const getLatestCashRegisterDate = async () => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const cashRegisterUrl = `${API_URL}/${LOCAL_ID}/CAJAS.json?shallow=true`;
 
     try {
@@ -36,7 +36,7 @@ export const getLatestCashRegisterDate = async () => {
 export const fetchShiftsForDate = async (date) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const dateString = formatDateForFirebase(date);
 
     console.log(`[CAJA] Fecha usada: ${dateString}`);
@@ -99,7 +99,7 @@ export const fetchShiftsForDate = async (date) => {
 export const fetchCashRegisterData = async (date, shiftId) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID || !shiftId) throw new Error("Faltan datos para la consulta.");
 
     const dateString = formatDateForFirebase(date);
@@ -155,7 +155,7 @@ export const fetchHistoricalCashData = async (shift) => {
     }
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const shiftId = shift.id;
 
     // Candidatos de fecha: exacta, día anterior, día siguiente (igual que fetchSalesForShift).
@@ -294,7 +294,7 @@ export const fetchSalesForShift = async (shift) => {
 
     checkLocalId();
     const db = getDatabase();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const shiftDateStr = shift.date;
     const shiftId = shift.id;
 
@@ -366,7 +366,7 @@ export const listenToCashData = (shift, callback) => {
 
     checkLocalId();
     const db = getDatabase();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     
     const cajaPath = `${localId}/CAJAS/${shift.date}/turnos/${shift.id}`;
     console.log(`[CAJA] Fecha usada: ${shift.date}`);
@@ -388,7 +388,7 @@ export const listenToSales = (shift, callback) => {
 
     checkLocalId();
     const db = getDatabase();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
 
     console.log(`[data.js] Listening to sales data for Shift: ${shift.id}, Date: ${shift.date}`);
     const mostradorRef = ref(db, `${localId}/MOSTRADOR`);

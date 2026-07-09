@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const getEntityPath = (entity) => {
   const paths = {
@@ -26,7 +26,7 @@ const getEntityPath = (entity) => {
 
 export const fetchData = async (entity) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const path = getEntityPath(entity);
 

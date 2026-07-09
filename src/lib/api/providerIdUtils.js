@@ -1,13 +1,13 @@
 
 import { getDatabase, ref, get, set, runTransaction, remove, update } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 /**
  * Initializes the provider ID counter if it doesn't exist
  */
 export const initializeProviderIdCounter = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/PROVEEDORES`);
   
@@ -24,7 +24,7 @@ export const initializeProviderIdCounter = async () => {
  */
 export const getNextProviderId = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/PROVEEDORES`);
   
@@ -47,7 +47,7 @@ export const getNextProviderId = async () => {
  */
 export const migrateProvidersToSequentialIds = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   const providersRef = ref(db, `${LOCAL_ID}/PROVEEDORES_META`);

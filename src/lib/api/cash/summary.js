@@ -1,11 +1,11 @@
 
 import { getDatabase, ref, set, update } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { formatDateForFirebase } from '@/lib/utils';
 
 export const updateShiftSummary = async (summaryData) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
 
     const summaryRef = ref(db, `${localId}/RESUMEN_TURNO`);
@@ -26,13 +26,16 @@ export const saveShiftSummaryToPath = async (localId, dateString, shiftNumber, s
     
     // Ensure dateString is correctly formatted to dd-mm-aaaa, fallback to today's date if needed
     const formattedDate = dateString || formatDateForFirebase(new Date());
-    
+
+    // Raíz oficial del local: databasePath (fallback a localId). El caller pasa el
+    // localId real; el mapeo interno lo resuelve.
+    const rootPath = getLocationSpecificDatabasePath(localId);
     const db = getDatabase();
-    const summaryRef = ref(db, `${localId}/CAJAS/${formattedDate}/turnos/${shiftNumber}`);
+    const summaryRef = ref(db, `${rootPath}/CAJAS/${formattedDate}/turnos/${shiftNumber}`);
 
     try {
         await update(summaryRef, summaryData);
-        console.log(`Shift summary successfully saved to path: /${localId}/CAJAS/${formattedDate}/turnos/${shiftNumber}`);
+        console.log(`Shift summary successfully saved to path: /${rootPath}/CAJAS/${formattedDate}/turnos/${shiftNumber}`);
     } catch (error) {
         console.error("Error saving shift summary to path:", error);
         throw new Error("Could not save shift summary to path.");

@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, runTransaction, get, update, set } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary, reversarVentaCuenta } from '@/lib/api/myAccountApi';
 import { cancelarComision } from '@/lib/api/comisionesApi';
 import { restoreStockForItem, bulkUpdateStock, fetchAllStockableItems } from '@/lib/api/stockApi';
@@ -76,7 +76,7 @@ export const saveCounterSale = async (saleData, shift) => {
   console.log('[VENTA MOSTRADOR] inicio confirmar venta');
 
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const db = getDatabase();
 
@@ -217,7 +217,7 @@ export const saveCounterSale = async (saleData, shift) => {
 
 export const cancelCounterSale = async (sale, shift) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
 
   const saleRef = ref(db, `${LOCAL_ID}/MOSTRADOR/${sale.id}`);
@@ -299,7 +299,7 @@ export const cancelCounterSale = async (sale, shift) => {
 export const fetchCounterSalesForShift = async (shift, limit) => {
   if (!shift || !shift.id || !shift.date) return [];
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   const salesRef = ref(db, `${LOCAL_ID}/MOSTRADOR`);

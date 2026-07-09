@@ -1,10 +1,10 @@
 import { getDatabase, ref, get, set, remove, runTransaction } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const getNextDelivererId = async () => {
     checkLocalId();
     const db = getDatabase();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const counterRef = ref(db, `${localId}/CONTADORES/repartidor`);
     const { committed, snapshot } = await runTransaction(counterRef, (currentValue) => {
         return (currentValue || 0) + 1;
@@ -17,7 +17,7 @@ const getNextDelivererId = async () => {
 
 export const fetchDeliverers = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   try {
     const response = await fetch(`${FIREBASE_URL}/${LOCAL_ID}/REPARTIDORES.json`);
@@ -38,7 +38,7 @@ export const fetchDeliverers = async () => {
 
 export const saveDeliverer = async (delivererData, isEditing) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -63,7 +63,7 @@ export const saveDeliverer = async (delivererData, isEditing) => {
 
 export const deleteDeliverer = async (delivererId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   try {
     const delivererRef = ref(db, `${LOCAL_ID}/REPARTIDORES/${delivererId}`);

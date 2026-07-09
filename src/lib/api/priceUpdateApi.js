@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, update, push, remove } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { savePriceHistory } from './PriceHistoryApi';
 import { fetchAndCacheDepartments, mapDepartmentIdToName, validatePriceData, fetchAndMapDepartmentNames, getDepartmentName } from './priceUpdateUtils';
 
@@ -10,7 +10,7 @@ export const validatePrice = (price) => {
 
 export const fetchAllArticles = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
@@ -43,7 +43,7 @@ export const updateArticlePrices = async (articles, userName, tipo = 'inmediato'
   if (!articles || articles.length === 0) throw new Error("No hay artículos para actualizar");
 
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const updates = {};
   const historyEntries = [];
@@ -95,7 +95,7 @@ export const saveScheduledUpdate = async (updateData) => {
   });
 
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const scheduledRef = ref(db, `${LOCAL_ID}/ACTUALIZACIONES_PROGRAMADAS`);
   await push(scheduledRef, {
@@ -107,7 +107,7 @@ export const saveScheduledUpdate = async (updateData) => {
 
 export const fetchScheduledUpdates = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const scheduledRef = ref(db, `${LOCAL_ID}/ACTUALIZACIONES_PROGRAMADAS`);
   
@@ -141,7 +141,7 @@ export const fetchScheduledUpdates = async () => {
 
 export const cancelScheduledUpdate = async (updateId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const updateRef = ref(db, `${LOCAL_ID}/ACTUALIZACIONES_PROGRAMADAS/${updateId}`);
   await remove(updateRef);

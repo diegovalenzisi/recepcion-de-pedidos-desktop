@@ -1,8 +1,8 @@
 import { getDatabase, ref, get } from 'firebase/database';
-import { getLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath } from '@/lib/firebase/core';
 
 export const fetchBillingData = async () => {
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) {
     throw new Error('Local ID no está configurado.');
   }

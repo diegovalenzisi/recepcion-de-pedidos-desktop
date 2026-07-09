@@ -1,10 +1,10 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, set, get, runTransaction, update, onValue, off } from 'firebase/database';
 import { registrarPagoComision } from '@/lib/api/comisionesApi';
 
 export const fetchSettings = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   try {
     const response = await fetch(`${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION.json`);
@@ -46,7 +46,7 @@ export const fetchSettings = async () => {
 
 export const listenToChanges = (path, callback) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const dataRef = ref(db, `${LOCAL_ID}/${path}`);
 
@@ -82,7 +82,7 @@ export const listenToChanges = (path, callback) => {
 
 export const fetchPaymentMethods = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const url = `${getFirebaseUrl()}/${localId}/CONFIGURACION/formasDePago.json`;
     try {
         const response = await fetch(url);
@@ -106,7 +106,7 @@ export const fetchPaymentMethods = async () => {
 
 export const saveSettings = async (settingsData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const configRef = ref(db, `${LOCAL_ID}/CONFIGURACION`);
   
@@ -156,7 +156,7 @@ export const saveSettings = async (settingsData) => {
 
 export const fetchGridViewSettings = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/gridViewSettings.json`;
 
@@ -187,7 +187,7 @@ export const fetchGridViewSettings = async () => {
 
 export const saveGridViewSettings = async (settings) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const settingsRef = ref(db, `${LOCAL_ID}/CONFIGURACION/gridViewSettings`);
   
@@ -210,7 +210,7 @@ export const saveGridViewSettings = async (settings) => {
 
 export const saveAudioSetting = async (audioData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const audioRef = ref(db, `${LOCAL_ID}/CONFIGURACION/newOrderSound`);
   
@@ -225,7 +225,7 @@ export const saveAudioSetting = async (audioData) => {
 
 export const fetchAudioSetting = async () => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const FIREBASE_URL = getFirebaseUrl();
     const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/newOrderSound.json`;
 
@@ -244,7 +244,7 @@ export const fetchAudioSetting = async () => {
 
 export const fetchOrderSoundVolume = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/orderSoundVolume.json`;
 
@@ -264,7 +264,7 @@ export const fetchOrderSoundVolume = async () => {
 
 export const saveSalesPercentage = async (percentage) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/porcentaje.json`;
 
@@ -301,7 +301,7 @@ export const saveSalesPercentage = async (percentage) => {
 
 export const fetchSalesPercentage = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/porcentaje.json`;
 
@@ -320,7 +320,7 @@ export const fetchSalesPercentage = async () => {
 
 export const fetchCommissionTotals = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
 
   const [totalsSnap, pagosSnap] = await Promise.all([
@@ -348,7 +348,7 @@ export const fetchCommissionTotals = async () => {
 
 export const fetchAccountTotals = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const totalsRef = ref(db, `${LOCAL_ID}/RESUMEN_CUENTA/TOTALES`);
   try {
@@ -374,7 +374,7 @@ const getNextPaymentId = async (db, localId) => {
 
 export const processCommissionPayment = async (paymentAmount, responsable = 'Sistema') => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     const totalsRef = ref(db, `${LOCAL_ID}/RESUMEN_CUENTA/TOTALES`);
@@ -453,7 +453,7 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
 
 export const saveWhatsAppPreference = async (preference) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const prefRef = ref(db, `${LOCAL_ID}/CONFIGURACION/whatsappPreference`);
   try {
@@ -466,7 +466,7 @@ export const saveWhatsAppPreference = async (preference) => {
 
 export const fetchAlarmaPago = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/alarmaPago.json`;
   try {
@@ -485,7 +485,7 @@ export const fetchAlarmaPago = async () => {
 
 export const saveAlarmaPago = async (amount) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/alarmaPago.json`;
   const response = await fetch(url, {
@@ -500,7 +500,7 @@ export const saveAlarmaPago = async (amount) => {
 
 export const saveUpdateMetadata = async ({ version, url, nombreArchivo, fecha, obligatoria = true }) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const updateRef = ref(db, `${LOCAL_ID}/actualizaciones`);
   await set(updateRef, {
@@ -514,7 +514,7 @@ export const saveUpdateMetadata = async ({ version, url, nombreArchivo, fecha, o
 
 export const fetchWhatsAppPreference = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/whatsappPreference.json`;
   try {

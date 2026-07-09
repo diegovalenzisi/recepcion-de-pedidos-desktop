@@ -1,10 +1,10 @@
 import { getDatabase, ref, get, set, push, remove, runTransaction, onValue } from 'firebase/database';
-import { getLocalId, getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, checkLocalId, getCurrentDatabasePath } from '@/lib/firebase/core';
 import { format } from 'date-fns';
 
 const getShiftExpensesRef = (shiftDate, shiftId, path = '') => {
     const db = getDatabase();
-    const localId = getLocalId();
+    const localId = getCurrentDatabasePath();
     if (!localId) throw new Error("Local ID no está configurado.");
     return ref(db, `${localId}/CAJAS/${shiftDate}/turnos/${shiftId}/gastos/${path}`);
 };
@@ -24,7 +24,7 @@ const getNextExpenseId = async (db, localId) => {
 export const addExpenseToShift = async (shift, expenseData) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     if (!shift || !shift.id || !shift.date) {
@@ -61,7 +61,7 @@ export const addExpenseToShift = async (shift, expenseData) => {
 export const deleteExpenseFromShift = async (shift, expenseId) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
 
     if (!shift || !shift.id || !shift.date) {
         throw new Error("Datos del turno inválidos.");

@@ -3,7 +3,7 @@ import { generateEnDeliveryWhatsAppMessage } from '@/lib/whatsapp/deliveryMessag
 import { useWhatsAppPreference } from '@/hooks/useWhatsAppPreference';
 import { openWhatsApp } from '@/lib/whatsapp/whatsappHandler';
 import { getLocalWhatsAppPreference } from '@/hooks/useLocalWhatsAppPreference';
-import { wasWaRecentlySent } from '@/lib/whatsapp/waTracker';
+import { wasWaRecentlySent, markWaSent } from '@/lib/whatsapp/waTracker';
 
 export const useDeliveryStatusWhatsApp = (orders) => {
   const previousStatuses = useRef(new Map());
@@ -33,6 +33,11 @@ export const useDeliveryStatusWhatsApp = (orders) => {
           if (wasWaRecentlySent(order.id)) {
             // Manual send already happened (e.g., from AssignDelivererModal checkbox) — skip auto-open to avoid duplicate
           } else if (isLocalWhatsAppEnabled) {
+            // Marcar YA (antes del await) para que cualquier segundo disparo del mismo evento
+            // —otro montaje del hook, doble render con nueva referencia de `orders`, o el doble
+            // invoke de efectos de React— vea el pedido como recién enviado y NO abra un segundo
+            // WhatsApp. Sin esto, el camino automático nunca marcaba y se duplicaba (auto→auto).
+            markWaSent(order.id);
             try {
               const message = await generateEnDeliveryWhatsAppMessage(order);
               const phoneStr = order.client?.phone || order.cliente?.telefono || '';

@@ -1,7 +1,7 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const getCounterUrl = (type) => {
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const API_URL = getFirebaseUrl();
 
     if (LOCAL_ID === '38827976') {

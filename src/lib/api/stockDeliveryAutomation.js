@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, update } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 /**
  * Stock Delivery Automation Module
@@ -26,7 +26,7 @@ export const shouldAutoToggleDelivery = (article) => {
  */
 export const validateInheritedStockStatus = async (parentId, parentStockValue) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -101,7 +101,7 @@ export const handleStockDepletion = async (articleId, currentStock, previousStoc
   if (currentStock !== 0 || previousStock <= 0) return;
   
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -146,7 +146,7 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
   if (previousStock !== 0 || currentStock <= 0) return;
   
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -185,7 +185,7 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
 
 export const fetchAffectedArticles = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -222,7 +222,7 @@ export const fetchAffectedArticles = async () => {
 
 export const manualOverrideDelivery = async (articleId, newDeliveryStatus) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {

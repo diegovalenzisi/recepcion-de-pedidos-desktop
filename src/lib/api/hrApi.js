@@ -1,25 +1,25 @@
 import { getDatabase, ref, get, set, push, remove, runTransaction, update } from 'firebase/database';
-import { getLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import { addExpenseToShift } from '@/lib/api/expensesApi';
 import { format } from 'date-fns';
 
 const getHrRef = (path) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) throw new Error("Local ID no está configurado.");
   return ref(db, `${localId}/RRHH/${path}`);
 };
 
 const getHistorialRef = (path) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   if (!localId) throw new Error("Local ID no está configurado.");
   return ref(db, `${localId}/HISTORIAL/${path}`);
 }
 
 const getNextId = async (counterName) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   const counterRef = ref(db, `${localId}/CONTADORES/${counterName}`);
   const { committed, snapshot } = await runTransaction(counterRef, (currentValue) => {
     return (currentValue || 0) + 1;
@@ -66,7 +66,7 @@ export const fetchVendorsByCategory = async () => {
 
 export const saveEmployee = async (employeeData, isEditing) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   let legajo;
   if (isEditing && employeeData.legajo) {
     legajo = employeeData.legajo;
@@ -88,7 +88,7 @@ export const saveEmployee = async (employeeData, isEditing) => {
 };
 
 export const deleteEmployee = async (legajo) => {
-  const employeeRef = ref(getDatabase(), `${getLocalId()}/RRHH/EMPLEADOS/${legajo}`);
+  const employeeRef = ref(getDatabase(), `${getCurrentDatabasePath()}/RRHH/EMPLEADOS/${legajo}`);
   await remove(employeeRef);
 };
 
@@ -146,7 +146,7 @@ export const fetchHRPayments = async () => {
 
 export const saveHRPayment = async (paymentData, isEditing, currentShift, allEmployees) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   let paymentId;
 
   if (isEditing && paymentData.id) {
@@ -194,7 +194,7 @@ export const saveHRPayment = async (paymentData, isEditing, currentShift, allEmp
 };
 
 export const deleteHRPayment = async (paymentId) => {
-  const paymentRef = ref(getDatabase(), `${getLocalId()}/RRHH/PAGOS/${paymentId}`);
+  const paymentRef = ref(getDatabase(), `${getCurrentDatabasePath()}/RRHH/PAGOS/${paymentId}`);
   await remove(paymentRef);
 };
 
@@ -271,7 +271,7 @@ export const fetchCategories = async () => {
 
 export const saveCategory = async (categoryData, isEditing) => {
   const db = getDatabase();
-  const localId = getLocalId();
+  const localId = getCurrentDatabasePath();
   let categoryId;
 
   if (isEditing && categoryData.id) {
@@ -287,6 +287,6 @@ export const saveCategory = async (categoryData, isEditing) => {
 };
 
 export const deleteCategory = async (categoryId) => {
-  const categoryRef = ref(getDatabase(), `${getLocalId()}/RRHH/CATEGORIAS/${categoryId}`);
+  const categoryRef = ref(getDatabase(), `${getCurrentDatabasePath()}/RRHH/CATEGORIAS/${categoryId}`);
   await remove(categoryRef);
 };

@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, get, set, remove, onValue, off, runTransaction } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getNextProviderId } from './providerIdUtils';
 
 /**
@@ -35,7 +35,7 @@ const parseDDMMAAAAtoYYYYMMDD = (dateString) => {
  */
 export const getNextRemitoId = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const counterRef = ref(db, `${LOCAL_ID}/PROVEEDORES/counter`);
 
@@ -67,7 +67,7 @@ export const getNextRemitoId = async () => {
 export const checkRemitoExists = async (numeroRemito) => {
   if (!numeroRemito) return false;
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -85,7 +85,7 @@ export const checkRemitoExists = async (numeroRemito) => {
  */
 export const fetchProviders = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -119,7 +119,7 @@ export const fetchProviders = async () => {
  */
 export const saveProvider = async (providerData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -151,7 +151,7 @@ export const saveProvider = async (providerData) => {
  */
 export const updateProvider = async (providerId, providerData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -179,7 +179,7 @@ export const updateProvider = async (providerId, providerData) => {
  */
 export const deleteProvider = async (providerId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -197,7 +197,7 @@ export const deleteProvider = async (providerId) => {
  */
 export const fetchRemitos = async (providerId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -251,7 +251,7 @@ export const fetchRemitos = async (providerId) => {
  */
 export const saveRemito = async (providerId, remitoData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -300,7 +300,7 @@ export const saveRemito = async (providerId, remitoData) => {
  */
 export const updateRemito = async (providerId, remitoId, remitoData) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -354,7 +354,7 @@ export const updateRemito = async (providerId, remitoId, remitoData) => {
  */
 export const deleteRemito = async (providerId, remitoId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {
@@ -382,7 +382,7 @@ export const deleteRemito = async (providerId, remitoId) => {
  */
 export const listenToProviders = (callback) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   const providersRef = ref(db, `${LOCAL_ID}/PROVEEDORES_META`);
@@ -423,7 +423,7 @@ export const listenToProviders = (callback) => {
  */
 export const listenToRemitos = (providerId, callback) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   const remitosRef = ref(db, `${LOCAL_ID}/PROVEEDORES`);

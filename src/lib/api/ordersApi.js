@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
@@ -73,7 +73,7 @@ export const formatInvoiceData = (orderData, invoiceNumber = null) => {
 
 const syncOrderCounter = async () => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/pedidos`);
     const ordersRef = ref(db, `${LOCAL_ID}/PEDIDOS`);
@@ -108,7 +108,7 @@ const syncOrderCounter = async () => {
 export const listenToOrders = (callback, errorCallback) => {
   try {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const ordersRef = ref(db, `${LOCAL_ID}/PEDIDOS`);
 
@@ -212,7 +212,7 @@ const formatOrderItemsForFirebase = (items) => {
 
 const getNextOrderId = async () => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/pedidos`);
     
@@ -257,7 +257,7 @@ const saveMostradorDeposit = async (db, localId, shift, orderId, deposit, client
 
 export const saveOrder = async (orderData, shift) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   try {
     const newOrderId = await getNextOrderId();
@@ -338,7 +338,7 @@ const getFacturacionNodeForPayment = (paymentMethod) => {
 
 export const saveFacturacionForPayments = async (orderId, orderData, saleType) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     const paymentDetails = orderData.payment?.payments || [];
@@ -433,7 +433,7 @@ const sanitizeUpdatePayload = (payload) => {
 
 export const updateOrder = async (orderId, dataToUpdate, currentShift = null) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const orderRef = ref(db, `${LOCAL_ID}/PEDIDOS/${orderId}`);
 
@@ -555,7 +555,7 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
 
 export const deleteOrder = async (orderId) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     try {
         const orderRef = ref(db, `${LOCAL_ID}/PEDIDOS/${orderId}`);
@@ -568,7 +568,7 @@ export const deleteOrder = async (orderId) => {
 
 export const fetchOrders = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   try {
     const ordersRef = ref(db, `${LOCAL_ID}/PEDIDOS`);
@@ -629,7 +629,7 @@ const searchInMonth = async (localId, orderId, dateObj) => {
 
 export const findOrderGlobal = async (orderId, specificDate = null) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const id = orderId.toString().trim();
 
@@ -661,7 +661,7 @@ export const fetchPaymentMethodForOrder = async (localId, orderId) => {
   if (!localId || !orderId) return null;
   try {
     const db = getDatabase();
-    const methodRef = ref(db, `${localId}/PEDIDOS/${orderId}/paid/method`);
+    const methodRef = ref(db, `${getLocationSpecificDatabasePath(localId)}/PEDIDOS/${orderId}/paid/method`);
     const snapshot = await get(methodRef);
     return snapshot.exists() ? snapshot.val() : null;
   } catch (error) {

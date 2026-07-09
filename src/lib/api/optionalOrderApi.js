@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, set } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 /**
  * Optional Order API Module
@@ -15,7 +15,7 @@ import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
  */
 export const saveOptionalOrder = async (groupId, orderedItemIds) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   if (!groupId || !orderedItemIds || !Array.isArray(orderedItemIds)) {
@@ -47,7 +47,7 @@ export const saveOptionalOrder = async (groupId, orderedItemIds) => {
  */
 export const fetchOptionalOrder = async (groupId) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   if (!groupId) {
@@ -86,7 +86,7 @@ export const fetchOptionalOrder = async (groupId) => {
  */
 export const saveMultipleOptionalOrders = async (ordersMap) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   if (!ordersMap || typeof ordersMap !== 'object') {
@@ -127,7 +127,7 @@ export const saveMultipleOptionalOrders = async (ordersMap) => {
  */
 export const fetchAllOptionalOrders = async () => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   
   try {

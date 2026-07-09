@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, runTransaction, update, push, set } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
@@ -185,7 +185,7 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
     if (!items || items.length === 0) return { success: true, message: 'No items' };
 
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     if (referenceId) {

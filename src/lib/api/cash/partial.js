@@ -1,9 +1,9 @@
 import { getDatabase, ref, get, set } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 export const savePartialClose = async (shift, summary, responsible) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
 
     if (!shift || !shift.id || !shift.date) {

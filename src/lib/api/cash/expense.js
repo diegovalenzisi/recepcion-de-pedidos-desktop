@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, runTransaction } from 'firebase/database';
 
 const getNextExpenseId = async (db, localId) => {
@@ -16,7 +16,7 @@ const getNextExpenseId = async (db, localId) => {
 export const addExpenseToShift = async (shift, expenseData) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     if (!shift || !shift.id || !shift.date) {
@@ -46,7 +46,7 @@ export const addExpenseToShift = async (shift, expenseData) => {
 export const fetchExpensesForShift = async (shift) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
 
     if (!shift || !shift.id || !shift.date) {
         console.error("Invalid shift data for fetching expenses:", shift);

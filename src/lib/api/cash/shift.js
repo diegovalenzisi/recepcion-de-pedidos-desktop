@@ -1,12 +1,12 @@
 
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, update } from 'firebase/database';
 import { formatDateForFirebase } from '@/lib/utils';
 
 export const checkOpenShift = async () => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     
     const db = getDatabase();
     const cajasRef = ref(db, `${LOCAL_ID}/CAJAS`);
@@ -43,7 +43,7 @@ export const createNewShift = async (initialFund, date) => {
     
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const allShiftsUrl = `${API_URL}/${LOCAL_ID}/CONTADORES/turnos.json`;
 
     let lastShiftNumber = 0;
@@ -82,7 +82,7 @@ const BATCH_SIZE = 25;
 const backupAndClearOrders = async (shift, progressCallback) => {
     checkLocalId();
     const db = getDatabase();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
 
     const [day, month, year] = shift.date.split('-');
     const backupBasePath = `${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shift.id}`;
@@ -139,7 +139,7 @@ const backupAndClearOrders = async (shift, progressCallback) => {
 const backupShiftData = async (shift, closingPayload, progressCallback) => {
     checkLocalId();
     const db = getDatabase();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const dateString = shift.date || formatDateForFirebase(new Date());
 
     const shiftRef = ref(db, `${LOCAL_ID}/CAJAS/${dateString}/turnos/${shift.id}`);

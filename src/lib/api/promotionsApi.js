@@ -1,10 +1,10 @@
 import { getDatabase, ref, get, set, remove, update } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { v4 as uuidv4 } from 'uuid';
 
 const getPromotionsPath = () => {
   checkLocalId();
-  return `${getCurrentLocalId()}/PROMOTIONS`;
+  return `${getCurrentDatabasePath()}/PROMOTIONS`;
 };
 
 export const fetchPromotions = async () => {

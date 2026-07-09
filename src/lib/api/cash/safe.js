@@ -1,11 +1,11 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { format } from 'date-fns';
 import { getDatabase, ref, get, set } from 'firebase/database';
 
 export const saveToSafe = async (shift, safeData, performSave = true) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
 
     if (!shift || !shift.id || !shift.date) {

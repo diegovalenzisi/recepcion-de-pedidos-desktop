@@ -1,5 +1,5 @@
 import { getDatabase, ref, set, get, remove, update, push } from 'firebase/database';
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const mapsBase = (localId) => `${localId}/CONFIGURACION/maps`;
 
@@ -7,7 +7,7 @@ const mapsBase = (localId) => `${localId}/CONFIGURACION/maps`;
 
 export const fetchMapsApiKey = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const url = `${getFirebaseUrl()}/${localId}/CONFIGURACION/maps/apiKey.json`;
     try {
         const response = await fetch(url);
@@ -25,7 +25,7 @@ export const fetchMapsApiKey = async () => {
 
 export const saveMapsApiKey = async (apiKey) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     const keyRef = ref(db, `${mapsBase(localId)}/apiKey`);
     await set(keyRef, apiKey);
@@ -33,7 +33,7 @@ export const saveMapsApiKey = async (apiKey) => {
 
 export const deleteMapsApiKey = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     await remove(ref(db, `${mapsBase(localId)}/apiKey`));
 };
@@ -42,7 +42,7 @@ export const deleteMapsApiKey = async () => {
 
 export const fetchZonasVerdes = async () => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const url = `${getFirebaseUrl()}/${localId}/CONFIGURACION/maps/zonasVerdes.json`;
     try {
         const response = await fetch(url);
@@ -61,7 +61,7 @@ export const fetchZonasVerdes = async () => {
 
 export const saveZonaVerde = async (zona) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     const zonasRef = ref(db, `${mapsBase(localId)}/zonasVerdes`);
     const newRef = push(zonasRef);
@@ -79,7 +79,7 @@ export const saveZonaVerde = async (zona) => {
 
 export const updateZonaVerde = async (zonaId, zonaData) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     const zonaRef = ref(db, `${mapsBase(localId)}/zonasVerdes/${zonaId}`);
     const updates = {
@@ -95,14 +95,14 @@ export const updateZonaVerde = async (zonaId, zonaData) => {
 
 export const deleteZonaVerde = async (zonaId) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     await remove(ref(db, `${mapsBase(localId)}/zonasVerdes/${zonaId}`));
 };
 
 export const toggleZonaVerde = async (zonaId, activa) => {
     checkLocalId();
-    const localId = getCurrentLocalId();
+    const localId = getCurrentDatabasePath();
     const db = getDatabase();
     const zonaRef = ref(db, `${mapsBase(localId)}/zonasVerdes/${zonaId}`);
     await update(zonaRef, { activa, updatedAt: new Date().toISOString() });

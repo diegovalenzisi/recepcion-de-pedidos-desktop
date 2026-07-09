@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, query, orderByChild, equalTo, runTransaction } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { fetchAllStockableItems } from '@/lib/api/stockApi';
 
 const updateStatisticsRecursive = async (item, quantity, fechaCaja, allStockableItems, updates) => {
@@ -41,7 +41,7 @@ const updateStatisticsRecursive = async (item, quantity, fechaCaja, allStockable
 
 export const updateStatistics = async (items, fechaCaja) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
 
   const allStockableItems = await fetchAllStockableItems();
@@ -62,7 +62,7 @@ export const updateStatistics = async (items, fechaCaja) => {
 
 export const fetchSalesByDate = async (date) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
 
   const processOrders = (orders) => {
@@ -98,7 +98,7 @@ export const fetchSalesByDate = async (date) => {
 
 export const fetchStatisticsByDateRange = async (startDate, endDate) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const statisticsRef = ref(db, `${LOCAL_ID}/ESTADISTICAS`);
 

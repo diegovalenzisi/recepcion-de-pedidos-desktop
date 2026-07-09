@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useToast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
@@ -7,6 +7,14 @@ import { Label } from '@/components/ui/label';
 import { DollarSign, Loader2, Send, Calendar as CalendarIcon } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 
 function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitialSetup = false }) {
@@ -15,6 +23,11 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
   // 01:59 debe quedar bajo la fecha del día anterior, igual que ventas/backup/pantalla de Cajas.
   const [date, setDate] = useState(() => getOperationalDate(new Date()));
   const [saving, setSaving] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  // Solo pasa a true si el usuario elige una fecha manualmente en el calendario. Mientras sea
+  // false, la fecha sugerida se mantiene sincronizada con la fecha actual del sistema para que
+  // NUNCA arrastre el día anterior (p. ej. si la PC quedó prendida de un día para el otro).
+  const dateTouched = useRef(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -23,29 +36,39 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
     } else {
       setAmount('');
     }
-    if (isInitialSetup) {
+    if (isInitialSetup && isOpen) {
+      // Al abrir el modal de nuevo turno, sugerir SIEMPRE la fecha actual del sistema fresca.
       setDate(getOperationalDate(new Date()));
+      dateTouched.current = false;
     }
   }, [shift, isOpen, isEditable, isInitialSetup]);
 
-  const handleSave = async (e) => {
-    e.preventDefault();
+  // Si el modal queda abierto y la ventana recupera el foco / vuelve a estar visible (caso típico:
+  // la PC quedó prendida toda la noche), re-sincronizar la fecha sugerida con la actual del
+  // sistema, salvo que el usuario ya la haya cambiado a mano.
+  useEffect(() => {
+    if (!isOpen || !isInitialSetup) return;
+    const refresh = () => {
+      if (!dateTouched.current) setDate(getOperationalDate(new Date()));
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [isOpen, isInitialSetup]);
+
+  // Ejecuta el guardado real. Para un turno nuevo se llama SOLO después de confirmar la fecha.
+  const doSave = async () => {
     const fundAmount = parseFloat(amount);
-    if (isNaN(fundAmount) || fundAmount < 0) {
-      toast({
-        variant: "destructive",
-        title: "Monto inválido",
-        description: "Por favor, ingresa un fondo de caja válido (puede ser 0).",
-      });
-      return;
-    }
     setSaving(true);
     try {
       if (isInitialSetup) {
         await onFundSet(fundAmount, date);
         toast({
           title: `¡Nuevo turno iniciado!`,
-          description: `El fondo para el nuevo turno es ${fundAmount.toFixed(2)}.`,
+          description: `Fecha de caja ${formatDateForFirebase(date)} · Fondo ${fundAmount.toFixed(2)}.`,
           className: "bg-green-500 text-white",
         });
       } else {
@@ -56,6 +79,7 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
           className: "bg-green-500 text-white",
         });
       }
+      setConfirmOpen(false);
       if (onClose) {
         onClose();
       }
@@ -69,6 +93,28 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
       setSaving(false);
     }
   };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const fundAmount = parseFloat(amount);
+    if (isNaN(fundAmount) || fundAmount < 0) {
+      toast({
+        variant: "destructive",
+        title: "Monto inválido",
+        description: "Por favor, ingresa un fondo de caja válido (puede ser 0).",
+      });
+      return;
+    }
+    if (isInitialSetup) {
+      // Si el usuario no cambió la fecha manualmente, tomar la fecha actual del sistema fresca en
+      // este mismo instante (no la que quedó congelada al montar el modal). Luego obligar a
+      // confirmar la fecha de caja antes de crear el turno.
+      if (!dateTouched.current) setDate(getOperationalDate(new Date()));
+      setConfirmOpen(true);
+      return;
+    }
+    doSave();
+  };
   
   const handleOverlayClick = (e) => {
     if (!isInitialSetup && onClose) {
@@ -77,6 +123,7 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
   }
 
   return (
+    <>
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -106,10 +153,10 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
                 </p>
               </div>
 
-              <form onSubmit={handleSave} className="space-y-6">
+              <form onSubmit={handleSubmit} className="space-y-6">
                 {isInitialSetup && (
                   <div className="space-y-2">
-                    <Label htmlFor="shift-date" className="text-lg font-semibold text-gray-700">Fecha del Turno</Label>
+                    <Label htmlFor="shift-date" className="text-lg font-semibold text-gray-700">Fecha de caja</Label>
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
@@ -124,11 +171,14 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
                         <Calendar
                           mode="single"
                           selected={date}
-                          onSelect={setDate}
+                          onSelect={(d) => { if (d) { setDate(d); dateTouched.current = true; } }}
                           initialFocus
                         />
                       </PopoverContent>
                     </Popover>
+                    <p className="text-sm text-gray-500">
+                      Por defecto es la fecha actual del sistema. Cambiala solo si necesitás abrir el turno con otra fecha.
+                    </p>
                   </div>
                 )}
                 <div className="space-y-2">
@@ -165,6 +215,30 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
         </motion.div>
       )}
     </AnimatePresence>
+
+    {/* Confirmación obligatoria de la fecha de caja antes de crear un turno nuevo. */}
+    <AlertDialog open={confirmOpen} onOpenChange={(v) => { if (!v && !saving) setConfirmOpen(false); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Confirmar fecha de caja</AlertDialogTitle>
+          <AlertDialogDescription>
+            Vas a abrir un turno nuevo con fecha de caja{' '}
+            <strong>{date ? formatDateForFirebase(date) : ''}</strong>. ¿Es correcto?
+            Si no, tocá "Cambiar fecha" y elegí otra en el calendario.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <Button variant="outline" disabled={saving} onClick={() => setConfirmOpen(false)}>
+            Cambiar fecha
+          </Button>
+          <Button disabled={saving} onClick={doSave} className="bg-green-500 hover:bg-green-600 text-white">
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {saving ? 'Abriendo...' : 'Confirmar y abrir turno'}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }
 

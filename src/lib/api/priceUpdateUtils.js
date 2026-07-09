@@ -1,5 +1,5 @@
 import { getDatabase, ref, get } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 let departmentsCache = null;
 
@@ -7,7 +7,7 @@ export const fetchAndCacheDepartments = async (forceRefresh = false) => {
   if (departmentsCache && !forceRefresh) return departmentsCache;
   
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();
   const deptsRef = ref(db, `${LOCAL_ID}/DEPARTAMENTOS`);
   

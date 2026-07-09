@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, set, push, runTransaction, update } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 
 const ahora = () => {
   const now = new Date();
@@ -24,7 +24,7 @@ export const registrarComision = async ({
   comisionGenerada,
 }) => {
   checkLocalId();
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   const db = getDatabase();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);
@@ -70,7 +70,7 @@ export const registrarComision = async ({
  */
 export const registrarPagoComision = async (montoPago, responsable = 'Sistema') => {
   checkLocalId();
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   const db = getDatabase();
 
   const snap = await get(ref(db, `${localId}/COMISIONES/REGISTRO`));
@@ -159,7 +159,7 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema') 
  */
 export const cancelarComision = async (idVenta) => {
   checkLocalId();
-  const localId = getCurrentLocalId();
+  const localId = getCurrentDatabasePath();
   const db = getDatabase();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);

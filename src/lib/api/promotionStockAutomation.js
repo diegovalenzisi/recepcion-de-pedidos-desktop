@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, update, onValue, off } from 'firebase/database';
-import { getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { isArticleAvailable, isPromoAvailable, getGroupOptionIds } from './stockAvailability';
 
 const fetchProductGroupsArray = async (db, LOCAL_ID) => {
@@ -15,7 +15,7 @@ const fetchProductGroupsArray = async (db, LOCAL_ID) => {
  */
 export const checkAndUpdatePromotionStockStatus = async () => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     try {
@@ -109,7 +109,7 @@ export const checkAndUpdatePromotionStockStatus = async () => {
  */
 export const listenToPromotionStockChanges = (callback) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     // Listen to changes in stock transactions or articles 
@@ -141,7 +141,7 @@ export const listenToPromotionStockChanges = (callback) => {
  */
 export const getPromotionArticleStockStatus = async (promotionId) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     const result = {

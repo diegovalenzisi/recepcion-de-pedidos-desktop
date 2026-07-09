@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentLocalId, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
 import { getDatabase, ref, push, set, get, runTransaction } from 'firebase/database';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { openWhatsApp } from '@/lib/whatsapp/whatsappHandler';
@@ -6,7 +6,7 @@ import { findAccountByExactPaymentMethod } from '@/lib/api/accountsApi';
 
 export const savePrepayment = async (type, amount) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   if (!LOCAL_ID) throw new Error("Local ID no configurado");
 
   const db = getDatabase();
@@ -30,7 +30,7 @@ export const savePrepayment = async (type, amount) => {
 
 export const savePrepaymentForApp = async (appType, amount, currentShiftDate) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   if (!LOCAL_ID) throw new Error("Local ID no configurado");
 
   const db = getDatabase();
@@ -68,7 +68,7 @@ export const savePrepaymentForApp = async (appType, amount, currentShiftDate) =>
 
 export const fetchPrepayments = async (type) => {
   checkLocalId();
-  const LOCAL_ID = getCurrentLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
   if (!LOCAL_ID) return [];
 
   const db = getDatabase();
@@ -133,7 +133,7 @@ export const sendPrepaymentWhatsApp = async (order, phoneNumber, preference = 'w
     const orderId = order?.id || order?.numero || order?.orderNumber || '';
     
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     // Read the payment method strictly from paid/method

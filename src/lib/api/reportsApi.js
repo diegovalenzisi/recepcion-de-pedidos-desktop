@@ -1,10 +1,10 @@
 import { getDatabase, ref, get, query, orderByChild, equalTo, runTransaction } from 'firebase/database';
-import { checkLocalId, getCurrentLocalId } from '@/lib/firebase/core';
+import { checkLocalId, getCurrentDatabasePath } from '@/lib/firebase/core';
 import { formatDateForFirebase } from '@/lib/utils';
 
 const getReportRef = (shiftPath) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     
     // The shiftPath is expected to be like "DD-MM-YYYY/turnos/1"
@@ -67,7 +67,7 @@ export const updateShiftReport = async (shiftPath, updates) => {
 
 export const fetchDayReportOrders = async (date) => {
     checkLocalId();
-    const LOCAL_ID = getCurrentLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
     const formattedDate = formatDateForFirebase(date);
 
