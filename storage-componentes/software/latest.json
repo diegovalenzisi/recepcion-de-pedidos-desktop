@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.50",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.50%2FRecepcion-de-Pedidos-Setup-1.3.50.exe?alt=media",
-  "sha256": "d323437b25416e3d22c279fcc8beffd43ea82bdc0a87bc152a4b82045f3287ed",
-  "size": 120836968,
+  "latest": "1.3.51",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.51%2FRecepcion-de-Pedidos-Setup-1.3.51.exe?alt=media",
+  "sha256": "76b49be2f4b5d9fe1435e21137c360dc383b18134aa6d4f8316649255fd648c1",
+  "size": 120839885,
   "mandatory": false,
-  "releaseDate": "2026-07-08",
-  "notes": "Versión 1.3.50: rutas de Firebase configurables por local (Database y Storage) desde la pantalla inicial, guardadas en el registro central de rutas; el sistema usa databasePath como raíz real (con fallback al número de local) y storageBasePath como carpeta interna para las imágenes nuevas; migración y limpieza individual de imágenes de artículos. Además conserva los arreglos probados: al abrir turno la fecha de caja sugerida es siempre la actual del sistema y pide confirmación (no arrastra fecha vieja); se quitó el botón de facturación del pie de pantalla (arranca automática según configuración y se administra solo desde Configuración por DiegoL); y se corrige el mensaje de WhatsApp duplicado al salir el pedido."
+  "releaseDate": "2026-07-10",
+  "notes": "Versión 1.3.51: nueva sección \"Logo de App\" en Configuración → Configuración del local → Apps de pedidos, para subir, guardar y previsualizar el logo del local (se guarda en Firebase Storage por local, independiente del Icono App, que sigue funcionando igual). Además corrige el guardado de las Preferencias de Vista Cuadrilla, que se perdían al usar el botón general Guardar: ahora quedan persistidas al cerrar, reiniciar y volver a abrir la configuración."
 }
