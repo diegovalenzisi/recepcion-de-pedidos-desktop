@@ -1,0 +1,6 @@
+{
+  "version": "1.3.52",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.52.exe",
+  "releaseDate": "2026-07-10",
+  "notes": "Corrección de la regla de fecha para caja/turno. (1) Si hay un turno ABIERTO, la pantalla de caja usa la fecha de esa caja (displayDate sigue activeShift.date) y no cambia por pasar la medianoche: una caja del 09/07 sigue en 09/07 aunque sean las 04:00 del 10/07, y al cerrarla queda asociada al 09/07. (2) Si NO hay turno abierto, el modal Iniciar Nuevo Turno y la pantalla usan la fecha local real del sistema (getLocalTodayDate, con getFullYear/getMonth/getDate, sin toISOString ni corte de 2 AM): a las 00:28 del 10/07 sugiere 10-07, no 09-07. El usuario puede cambiar la fecha manualmente. No se modificó getOperationalDate global (ventas/backup/histórica) ni pedidos, facturación, stock, impresión ni autoupdate."
+}
