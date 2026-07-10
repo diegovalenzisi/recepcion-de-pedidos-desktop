@@ -15,13 +15,22 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
+import { formatDateForFirebase } from '@/lib/utils';
+
+// Fecha LOCAL actual del sistema (calendario), a medianoche local. Es el valor por defecto al
+// abrir "Iniciar Nuevo Turno". Usa getFullYear/getMonth/getDate (locales) — NO toISOString (que
+// puede correr el día por zona horaria) NI el corte de 2 AM de la fecha operativa: un turno nuevo
+// debe sugerir SIEMPRE el día actual del sistema (a las 00:28 del 10/07 → 10-07, no 09-07).
+const getLocalTodayDate = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+};
 
 function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitialSetup = false }) {
   const [amount, setAmount] = useState('');
-  // Capa 3: fecha de negocio (corte 2 AM), no calendario cruda. Un turno abierto entre 00:00 y
-  // 01:59 debe quedar bajo la fecha del día anterior, igual que ventas/backup/pantalla de Cajas.
-  const [date, setDate] = useState(() => getOperationalDate(new Date()));
+  // Valor por defecto: fecha LOCAL actual del sistema (calendario), no la fecha operativa con
+  // corte 2 AM. A las 00:28 del 10/07 debe sugerir 10-07 (no 09-07). El usuario puede cambiarla.
+  const [date, setDate] = useState(() => getLocalTodayDate());
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Solo pasa a true si el usuario elige una fecha manualmente en el calendario. Mientras sea
@@ -37,8 +46,8 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
       setAmount('');
     }
     if (isInitialSetup && isOpen) {
-      // Al abrir el modal de nuevo turno, sugerir SIEMPRE la fecha actual del sistema fresca.
-      setDate(getOperationalDate(new Date()));
+      // Al abrir el modal de nuevo turno, sugerir SIEMPRE la fecha local actual del sistema.
+      setDate(getLocalTodayDate());
       dateTouched.current = false;
     }
   }, [shift, isOpen, isEditable, isInitialSetup]);
@@ -49,7 +58,7 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
   useEffect(() => {
     if (!isOpen || !isInitialSetup) return;
     const refresh = () => {
-      if (!dateTouched.current) setDate(getOperationalDate(new Date()));
+      if (!dateTouched.current) setDate(getLocalTodayDate());
     };
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
@@ -106,10 +115,10 @@ function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitia
       return;
     }
     if (isInitialSetup) {
-      // Si el usuario no cambió la fecha manualmente, tomar la fecha actual del sistema fresca en
-      // este mismo instante (no la que quedó congelada al montar el modal). Luego obligar a
-      // confirmar la fecha de caja antes de crear el turno.
-      if (!dateTouched.current) setDate(getOperationalDate(new Date()));
+      // Si el usuario no cambió la fecha manualmente, tomar la fecha local actual del sistema
+      // fresca en este mismo instante (no la que quedó congelada al montar el modal). Luego
+      // obligar a confirmar la fecha de caja antes de crear el turno.
+      if (!dateTouched.current) setDate(getLocalTodayDate());
       setConfirmOpen(true);
       return;
     }
