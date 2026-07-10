@@ -15,16 +15,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { formatDateForFirebase } from '@/lib/utils';
-
-// Fecha LOCAL actual del sistema (calendario), a medianoche local. Es el valor por defecto al
-// abrir "Iniciar Nuevo Turno". Usa getFullYear/getMonth/getDate (locales) — NO toISOString (que
-// puede correr el día por zona horaria) NI el corte de 2 AM de la fecha operativa: un turno nuevo
-// debe sugerir SIEMPRE el día actual del sistema (a las 00:28 del 10/07 → 10-07, no 09-07).
-const getLocalTodayDate = () => {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-};
+import { formatDateForFirebase, getLocalTodayDate } from '@/lib/utils';
 
 function CashFundModal({ isOpen, onFundSet, shift, isEditable, onClose, isInitialSetup = false }) {
   const [amount, setAmount] = useState('');

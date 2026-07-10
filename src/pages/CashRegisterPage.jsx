@@ -23,12 +23,16 @@ import CashRegisterHeader from '@/components/cash/CashRegisterHeader.jsx';
 import CashRegisterSummary from '@/components/cash/CashRegisterSummary.jsx';
 import CashRegisterExpenses from '@/components/cash/CashRegisterExpenses.jsx';
 import CashRegisterSales from '@/components/cash/CashRegisterSales.jsx';
-import { getOperationalDate, formatDateForFirebase } from '@/lib/utils.js';
+import { formatDateForFirebase, parseDateString, getLocalTodayDate } from '@/lib/utils.js';
 import { useAsyncEffect } from '@/hooks/useAsyncEffect.js';
 import ErrorBoundary from '@/components/ErrorBoundary.jsx';
 
 function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, userPermissions, settings, isModal, onClose }) {
-  const [displayDate, setDisplayDate] = useState(() => getOperationalDate(new Date()));
+  // Fecha de la pantalla de caja: si hay un turno abierto, se usa la fecha de ESA caja; si no,
+  // la fecha local real del sistema. Ver el efecto de abajo (se mantiene sincronizada con activeShift).
+  const [displayDate, setDisplayDate] = useState(() => (
+    activeShift?.date ? parseDateString(activeShift.date) : getLocalTodayDate()
+  ));
   
   const [shiftsForDate, setShiftsForDate] = useState([]);
   const [selectedShift, setSelectedShift] = useState(null);
@@ -46,9 +50,14 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
   const canManageFund = userPermissions.cajas_gestionar_fondo;
   const canCloseShift = userPermissions.cajas_cerrar_turno;
 
+  // Regla de fecha de la pantalla de caja:
+  // - Si HAY un turno abierto, la pantalla usa la fecha de ESA caja (no cambia por pasar la
+  //   medianoche: una caja del 09/07 sigue en 09/07 aunque sean las 04:00 del 10/07).
+  // - Si NO hay turno abierto, usa la fecha local real del sistema (calendario).
+  // Se re-evalúa cuando cambia el turno activo (abrir/cerrar), no por el reloj.
   useEffect(() => {
-    setDisplayDate(getOperationalDate(new Date()));
-  }, []);
+    setDisplayDate(activeShift?.date ? parseDateString(activeShift.date) : getLocalTodayDate());
+  }, [activeShift]);
 
   useAsyncEffect(async (isMounted) => {
     if (!displayDate) return;

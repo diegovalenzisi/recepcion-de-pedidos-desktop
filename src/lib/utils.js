@@ -56,3 +56,12 @@ export function getOperationalDate(date = new Date()) {
   }
   return date;
 }
+
+// Fecha LOCAL actual del sistema (calendario), a medianoche local. Usa getFullYear/getMonth/
+// getDate (locales), SIN toISOString (que puede correr el día por zona horaria) y SIN el corte de
+// 2 AM de getOperationalDate. Se usa como valor por defecto al iniciar un turno nuevo y como fecha
+// de la pantalla de caja cuando NO hay un turno abierto.
+export function getLocalTodayDate() {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
