@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import { Calendar, ChevronLeft, ChevronRight, DollarSign, Lock, Edit, Shield, X, Users, ClipboardList } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, DollarSign, Lock, Edit, Shield, X, Users, ClipboardList, FileDown } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const CashRegisterHeader = ({
@@ -19,7 +19,8 @@ const CashRegisterHeader = ({
   onDateChange,
   displayDate,
   isModal,
-  onClose
+  onClose,
+  onExportSales
 }) => {
   const displayDateString = useMemo(() => {
     if (!displayDate) return 'Cargando fecha...';
@@ -59,6 +60,11 @@ const CashRegisterHeader = ({
             </Select>
         )}
         
+        <Button onClick={onExportSales} disabled={loading || !selectedShift} variant="outline" title="Exportar ventas a Excel">
+          <FileDown className="mr-2 h-4 w-4" />
+          Exportar ventas
+        </Button>
+
         {canManageFund && (
           <Button onClick={onFundModalOpen} disabled={!shiftIsActive || loading} variant="secondary">
             <Edit className="mr-2 h-4 w-4" />

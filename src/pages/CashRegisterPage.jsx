@@ -17,6 +17,7 @@ import CloseShiftModal from '@/components/cash/CloseShiftModal.jsx';
 import PartialCloseModal from '@/components/cash/PartialCloseModal.jsx';
 import CashFundModal from '@/components/cash/CashFundModal.jsx';
 import SafeModal from '@/components/cash/SafeModal.jsx';
+import ExportSalesModal from '@/components/cash/ExportSalesModal.jsx';
 import { useAuth } from '@/hooks/useAuth.jsx';
 import { Dialog, DialogContent } from '@/components/ui/dialog.jsx';
 import CashRegisterHeader from '@/components/cash/CashRegisterHeader.jsx';
@@ -43,6 +44,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
   const [isPartialCloseModalOpen, setPartialCloseModalOpen] = useState(false);
   const [isFundModalOpen, setFundModalOpen] = useState(false);
   const [isSafeModalOpen, setSafeModalOpen] = useState(false);
+  const [isExportModalOpen, setExportModalOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -276,6 +278,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
             displayDate={displayDate}
             isModal={isModal}
             onClose={onClose}
+            onExportSales={() => setExportModalOpen(true)}
           />
           <CardContent className="p-4 flex-grow flex flex-col md:flex-row gap-4">
             {!hasFullAccess && !canManageFund && !canCloseShift ? (
@@ -383,6 +386,13 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
         onClose={() => setSafeModalOpen(false)}
         shift={selectedShift}
       />
+      {isExportModalOpen && (
+        <ExportSalesModal
+          isOpen={isExportModalOpen}
+          onClose={() => setExportModalOpen(false)}
+          selectedShift={selectedShift}
+        />
+      )}
     </>
   );
 

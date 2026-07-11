@@ -219,6 +219,12 @@ const formatSale = (kind, saleId, sale) => {
             status: sale.status || 'COMPLETADO',
             CostoTotal: sale.CostoTotal,
             items: sale.items || [],
+            // Campos ADITIVOS de solo lectura para "Exportar ventas". No cambian ningún cálculo
+            // ni la tabla/resumen de caja (los consumidores existentes los ignoran).
+            fechaSistema: sale.date || sale.fechacaja || null,
+            fechacaja: sale.fechacaja || null,
+            turno: sale.turno ?? null,
+            entregaTipo: 'Mostrador',
         };
     }
     // DELIVERY: solo entregados con pago (igual que el flujo vivo)
@@ -239,6 +245,11 @@ const formatSale = (kind, saleId, sale) => {
             status: sale.status?.main || 'ENTREGADO',
             CostoTotal: sale.CostoTotal,
             items: sale.items || [],
+            // Campos ADITIVOS de solo lectura para "Exportar ventas" (no cambian cálculos ni la caja).
+            fechaSistema: sale.date || sale.fechacaja || null,
+            fechacaja: sale.fechacaja || null,
+            turno: sale.turno ?? null,
+            entregaTipo: sale.type === 'RETIRO' ? 'Retiro' : 'Delivery',
         };
     }
     return null;
