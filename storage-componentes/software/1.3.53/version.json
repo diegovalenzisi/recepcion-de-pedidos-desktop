@@ -1,0 +1,6 @@
+{
+  "version": "1.3.53",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.53.exe",
+  "releaseDate": "2026-07-11",
+  "notes": "Nueva función \"Exportar ventas\" en Caja: botón en el encabezado que genera un archivo .xlsx de una sola hoja \"Ventas\", una fila por venta, con las columnas Fecha de sistema, Fecha de caja, Turno, Hora, Número de pedido, Tipo de entrega (Mostrador/Delivery/Retiro), Medio de pago y Total. Permite exportar el turno seleccionado (actual o histórico) o un rango de fechas. El Excel tiene la primera fila congelada, filtros en los encabezados, anchos automáticos, fechas como fechas reales de Excel, hora HH:mm y el total como número con formato de moneda (se agregó la dependencia exceljs). No se modificó ninguna otra funcionalidad (cálculos de caja, cierres, ventas, stock, facturación, impresión ni autoupdate)."
+}
