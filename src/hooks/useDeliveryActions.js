@@ -2,7 +2,6 @@ import { useState, useCallback } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { updateOrder } from '@/lib/api/ordersApi';
 import { printCommand } from '@/lib/print.js';
-import { useAccounts } from '@/contexts/AccountsContext';
 
 const useDeliveryActions = ({ 
   selectedOrderId, 
@@ -29,7 +28,6 @@ const useDeliveryActions = ({
     delivererReturns: false, 
   });
   const [showDeliveredConfirmation, setShowDeliveredConfirmation] = useState(false);
-  const { favoriteAccount } = useAccounts();
 
   const setModalOpen = (modal, isOpen) => {
     setModalState(prev => ({ ...prev, [modal]: isOpen }));
@@ -212,54 +210,14 @@ const useDeliveryActions = ({
       case 'deliverer_returns':
         setModalOpen('delivererReturns', true);
         break;
-      case 'whatsapp':
-        setProcessingAction('whatsapp');
-        setProcessingOrderId(selectedOrderId);
-        if (selectedOrder?.client?.phone) {
-          const phone = String(selectedOrder.client.phone).replace(/\D/g, '');
-          const localName = settings?.nombreFantasia || 'nuestro local';
-          const clientName = selectedOrder.client.name || 'Cliente';
-          const orderId = selectedOrder.id || 'N/A';
-          const totalAmount = selectedOrder.payment.amount.toFixed(2);
-          
-          try {
-            const alias = favoriteAccount?.alias;
-            let message;
-            if (alias) {
-              message = `Hola {nombre del cliente}, te contactamos desde {nombre de fantasia} sobre tu pedido N° {numero de pedido}, te pedimos por favor que transfieras el valor de ${totalAmount} al Alias ${alias} y pasanos el comprobante por este medio. ¡Muchas Gracias!`;
-              message = message
-                .replace('{nombre del cliente}', clientName)
-                .replace('{nombre de fantasia}', localName)
-                .replace('{numero de pedido}', orderId)
-                .replace('{valor total}', totalAmount)
-                .replace('{alias}', alias);
-            } else {
-              message = settings?.web?.whatsappMessage || `Hola {nombre del cliente}, te contactamos desde {nombre de fantasia} sobre tu pedido N° {numero de pedido}.`;
-              message = message
-                .replace('{nombre del cliente}', clientName)
-                .replace('{nombre de fantasia}', localName)
-                .replace('{numero de pedido}', orderId);
-            }
-
-            const whatsappUrl = `whatsapp://send?phone=549${phone}&text=${encodeURIComponent(message)}`;
-            window.open(whatsappUrl, '_blank');
-
-          } catch (error) {
-            toast({ variant: 'destructive', title: 'Error al obtener alias', description: 'No se pudo obtener el alias para el mensaje.' });
-          } finally {
-            clearProcessingState();
-          }
-        } else {
-          toast({ variant: 'destructive', title: 'No se encontró el teléfono' });
-          clearProcessingState();
-        }
-        break;
+      // 'whatsapp' se maneja en DeliveryTab.jsx (intercepta la acción antes de llegar acá, con
+      // resolvePaymentWhatsAppMessage de paymentMessage.js), así que este hook nunca la recibe.
       case 'search':
           break;
       default:
         toast({ title: "Función no implementada", description: `🚧 La acción "${actionId}" aún no está disponible.` });
     }
-  }, [selectedOrderId, selectedOrder, orders, favoriteAccount, settings, toast, processingAction, clearProcessingState]);
+  }, [selectedOrderId, selectedOrder, orders, settings, toast, processingAction, clearProcessingState]);
 
   const handleOrderCreated = (newOrderId) => {
     setModalOpen('newOrder', false);

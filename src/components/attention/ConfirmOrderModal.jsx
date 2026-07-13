@@ -12,7 +12,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import PaymentMethodSlider from '@/components/attention/PaymentMethodSlider';
 import { QRCodeSVG } from 'qrcode.react';
-import { openWhatsAppWithPaymentMessage } from '@/lib/whatsapp/whatsappHandler';
+import { openWhatsAppWithMessage } from '@/lib/whatsapp/whatsappHandler';
+import { resolvePaymentWhatsAppMessage, isCashOnlyOrder, getOrderPaymentMethods } from '@/lib/whatsapp/paymentMessage';
+import { findAccountByExactPaymentMethod } from '@/lib/api/accountsApi';
 import { getCurrentLocalId } from '@/lib/firebase/core';
 import { saveInvoiceForCashPayment } from '@/lib/api/invoiceApi';
 import { formatInvoiceData } from '@/lib/api/ordersApi';
@@ -27,7 +29,8 @@ function ConfirmOrderModal({
   isEditingClientData = false,
   orderData,
   allowedPaymentMethods = [],
-  currentShift
+  currentShift,
+  settings
 }) {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -209,6 +212,9 @@ function ConfirmOrderModal({
     }
   }, [isOpen, resetState]);
 
+  // Misma función centralizada que usa el botón WhatsApp de Delivery (resolvePaymentWhatsAppMessage
+  // en paymentMessage.js): decide el mensaje de efectivo o electrónico según el medio de pago real
+  // del pedido, para no tener una lógica distinta en cada pantalla.
   const handleSendWhatsApp = async () => {
     if (!orderData || !orderData.id) return;
     const localId = getCurrentLocalId();
@@ -221,12 +227,33 @@ function ConfirmOrderModal({
     }
 
     try {
-       await openWhatsAppWithPaymentMessage(
-          orderData.id,
-          clientName,
-          phone,
-          localId
-       );
+       // Alias/titular solo hacen falta si el mensaje termina siendo el electrónico. Se busca la
+       // cuenta que coincide EXACTAMENTE con el medio de pago real del pedido (igual que antes),
+       // no una cuenta "favorita" genérica.
+       let alias = null;
+       let titular = null;
+       if (!isCashOnlyOrder(orderData)) {
+          const [electronicMethod] = getOrderPaymentMethods(orderData);
+          if (electronicMethod) {
+            const account = await findAccountByExactPaymentMethod(localId, electronicMethod);
+            if (account) {
+              alias = account.alias;
+              titular = account.aNombreDe;
+            }
+          }
+       }
+
+       const orderForMessage = { ...orderData, client: { ...orderData.client, name: clientName, phone } };
+       const message = resolvePaymentWhatsAppMessage({
+          order: orderForMessage,
+          templateElectronico: settings?.web?.whatsappMessage || '',
+          templateEfectivo: settings?.web?.whatsappMessageEfectivo || '',
+          alias,
+          titular,
+       });
+
+       const pref = settings?.whatsappPreference || 'web';
+       await openWhatsAppWithMessage(phone, message, pref);
     } catch (error) {
        console.error("Error in WhatsApp integration", error);
        toast({ variant: "destructive", title: "Error", description: "No se pudo enviar el mensaje." });

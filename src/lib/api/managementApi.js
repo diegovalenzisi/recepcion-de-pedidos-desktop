@@ -5,6 +5,7 @@ import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { calcularCostoPromo } from '@/lib/utils/promoCosting';
 import { deleteArticleImage, migrateArticleImageIfNeeded } from '@/lib/firebase/storage';
+import { getAvailableUnits } from '@/lib/api/stockAvailability';
 
 const getTabConfig = (tabId) => {
     const config = {
@@ -192,25 +193,30 @@ export const fetchOptionalGroups = async () => {
     }
 };
 
+// NOTA: sin callers en el código actual (verificado). Se corrige igualmente para no dejar el
+// mismo bug duplicado (para un artículo por receta, `article.stock` es un objeto truthy → el
+// cálculo anterior daba NaN) latente por si se vuelve a usar. No calcula grupos a elección
+// (mismo alcance que tenía originalmente); si se necesita, usar usePromotionMinimumStock, que sí
+// los contempla y es la versión reactiva/con listeners de este mismo cálculo.
 export const fetchPromotionMinimumStock = async (promotionId) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
     const db = getDatabase();
-    
+
     try {
         const promoRef = ref(db, `${LOCAL_ID}/ARTICULOS/${promotionId}`);
         const promoSnap = await get(promoRef);
-        
+
         if (!promoSnap.exists() || !promoSnap.val().isPromo) {
             throw new Error("Promotion not found or invalid.");
         }
-        
+
         const promotion = promoSnap.val();
         const promoItems = promotion.promoItems || [];
-        
+
         const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
         const mpRef = ref(db, `${LOCAL_ID}/MATERIA_PRIMA`);
-        
+
         const [artSnap, mpSnap] = await Promise.all([
             get(articlesRef),
             get(mpRef)
@@ -221,6 +227,7 @@ export const fetchPromotionMinimumStock = async (promotionId) => {
 
         let minStock = Infinity;
         let limitedBy = null;
+        let hasAnyItem = false;
         const details = [];
 
         for (const pItem of promoItems) {
@@ -234,54 +241,31 @@ export const fetchPromotionMinimumStock = async (promotionId) => {
 
             if (!article) {
                 minStock = 0;
+                hasAnyItem = true;
                 limitedBy = artId;
-                details.push({ id: artId, name: artId, stock: 0, required: qtyNeeded, type: 'article' });
+                details.push({ id: artId, name: artId, stock: 0, required: qtyNeeded, type: 'article', possible: 0 });
                 continue;
             }
 
-            let available = article.stock?.propio !== undefined ? article.stock.propio : (article.stock || 0);
+            // Disponibilidad real respetando propio/heredado/receta (misma función que usan
+            // la pantalla de Stock y usePromotionMinimumStock — ver stockAvailability.js).
+            const available = getAvailableUnits(artId, articlesData, mpData);
             const possiblePromosArt = Math.floor(available / qtyNeeded);
-            
-            details.push({ 
-                id: artId, name: article.nombre, stock: available, required: qtyNeeded, 
+
+            details.push({
+                id: artId, name: article.nombre, stock: available, required: qtyNeeded,
                 type: 'article', possible: possiblePromosArt
             });
 
-            if (possiblePromosArt < minStock) {
+            hasAnyItem = true;
+            if (limitedBy === null || possiblePromosArt < minStock) {
                 minStock = possiblePromosArt;
                 limitedBy = article.nombre;
             }
-
-            if (article.materiaPrima && Array.isArray(article.materiaPrima)) {
-                for (const mp of article.materiaPrima) {
-                    const mpId = mp.codigo || mp.id;
-                    const mpQtyNeeded = (mp.cantidad || 1) * qtyNeeded;
-                    const rawMat = mpData[mpId];
-                    
-                    if (!rawMat) continue;
-
-                    let mpAvailable = rawMat.stock || 0;
-                    if (rawMat.heredadoDe && articlesData[rawMat.heredadoDe]) {
-                        mpAvailable = articlesData[rawMat.heredadoDe].stock?.propio || 0;
-                    }
-
-                    const possiblePromosMp = Math.floor(mpAvailable / mpQtyNeeded);
-                    
-                    details.push({ 
-                        id: mpId, name: rawMat.nombre, stock: mpAvailable, required: mpQtyNeeded, 
-                        type: 'raw_material', possible: possiblePromosMp
-                    });
-
-                    if (possiblePromosMp < minStock) {
-                        minStock = possiblePromosMp;
-                        limitedBy = rawMat.nombre;
-                    }
-                }
-            }
         }
-        
+
         return {
-            minimumStock: minStock === Infinity ? 0 : minStock,
+            minimumStock: hasAnyItem ? minStock : 0,
             limitedBy,
             details
         };

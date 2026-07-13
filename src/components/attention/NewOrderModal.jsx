@@ -514,6 +514,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         onConfirm={handleFinalizeOrder}
         allowedPaymentMethods={allowedPaymentMethods}
         currentShift={currentShift}
+        settings={settings}
       />
     </>
   );

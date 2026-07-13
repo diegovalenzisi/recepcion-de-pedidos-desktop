@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.53",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.53%2FRecepcion-de-Pedidos-Setup-1.3.53.exe?alt=media",
-  "sha256": "3795c0e72fb132304638ff76915bb0c0b3ac0bd368231424dbb5f5b12d1de03e",
-  "size": 125178592,
+  "latest": "1.3.55",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.55%2FRecepcion-de-Pedidos-Setup-1.3.55.exe?alt=media",
+  "sha256": "63e6e2b87b22b3dbe933c8ac294f4445fb78fef7256f9c9e61d1d291648fce77",
+  "size": 125178590,
   "mandatory": false,
-  "releaseDate": "2026-07-11",
-  "notes": "Versión 1.3.53: nueva función \"Exportar ventas\" en Caja. Genera un Excel (.xlsx) con una hoja \"Ventas\", una fila por venta, con columnas: Fecha de sistema, Fecha de caja, Turno, Hora, Número de pedido, Tipo de entrega, Medio de pago y Total. Permite exportar el turno seleccionado (actual o histórico) o un rango de fechas. El archivo tiene la primera fila congelada, filtros en los encabezados, anchos automáticos, fechas reales, hora en formato HH:mm y el total como número con formato de moneda."
+  "releaseDate": "2026-07-12",
+  "notes": "Versión 1.3.55: corrige el cálculo de stock de promociones cuando los artículos componentes usan stock por receta (antes mostraban \"Stock 0\" aunque hubiera materia prima disponible); ahora la disponibilidad se calcula correctamente en la pantalla de Stock y en las promociones, respetando stock propio, heredado y por receta (incluida materia prima y recetas anidadas). Además, separa el mensaje de WhatsApp al notificar un pedido en dos plantillas editables desde Configuración → Configuración web: \"Mensaje WhatsApp para pagos electrónicos\" y \"Mensaje WhatsApp para pagos en efectivo\", eligiendo automáticamente la correcta según el medio de pago real del pedido (incluye la corrección para que, tras editar el medio de pago de un pedido ya creado, el mensaje elegido siempre refleje el medio de pago actual y no uno anterior)."
 }

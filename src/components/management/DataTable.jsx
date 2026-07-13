@@ -5,9 +5,10 @@ import { Package, Edit, Trash2, ImageOff, Link2, BookText, Copy, PlusCircle, Min
 import { Switch } from '@/components/ui/switch';
 import { useParentArticleStock } from '@/hooks/useParentArticleStock.js';
 import { normalizarStock, normalizarCosto } from '@/lib/api/ventaUtils';
+import { getAvailableUnits } from '@/lib/api/stockAvailability';
 import StockStatusBadge from './StockStatusBadge';
 
-const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess, gruposOpcionalesMap }) => {
+const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDuplicate, allData, onToggleStatus, onToggleControlStock, onTachoStockChange, canModifyTachoStock, hasFullAccess, gruposOpcionalesMap, articlesById, materiaPrimaById }) => {
 
   const heredadoDeId = (item.stock?.stockType === 'heredado' || item.stock?.heredadoDe) ? item.stock?.heredadoDe : null;
   const { stock: parentStock, loading: parentLoading, parentExists } = useParentArticleStock(heredadoDeId);
@@ -68,25 +69,26 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
             </span>
           </div>
         );
-      case 'receta':
-        if (!receta || !allData['materia-prima']) {
+      case 'receta': {
+        if (!receta) {
              return <span className="text-xs text-gray-500">N/A</span>;
         }
-        const possibleUnits = Object.entries(receta).map(([mpCodigo, cantidad]) => {
-            const mp = allData['materia-prima'].find(m => m.codigo === mpCodigo);
-            return mp && cantidad > 0 ? Math.floor(mp.stock / cantidad) : Infinity;
-        });
-        const calculatedStock = Math.min(...possibleUnits);
+        // Misma función que usa el cálculo de disponibilidad de promociones
+        // (usePromotionMinimumStock): única fuente de verdad para "cuántas unidades se pueden
+        // fabricar", resolviendo materia prima, artículos anidados y recetas anidadas.
+        const calculatedStock = getAvailableUnits(item.codigo, articlesById, materiaPrimaById);
+        const isUnlimited = calculatedStock === Infinity;
         const rStockMin = item.stockMinimo || 0;
-        const recipeStockStatus = calculatedStock <= 0 ? 'red' : calculatedStock <= rStockMin ? 'amber' : 'green';
+        const recipeStockStatus = isUnlimited ? 'green' : calculatedStock <= 0 ? 'red' : calculatedStock <= rStockMin ? 'amber' : 'green';
         return (
           <div className='flex items-center gap-2' title="Stock por receta">
             <BookText size={14} className="text-purple-500"/>
             <span className={`px-2 py-1 rounded-full text-xs font-medium bg-${recipeStockStatus}-100 text-${recipeStockStatus}-800`}>
-             {isFinite(calculatedStock) ? calculatedStock : 0} u. (Mín: {rStockMin})
+             {isUnlimited ? 'Ilimitado' : calculatedStock} u. (Mín: {rStockMin})
             </span>
           </div>
         );
+      }
       default:
         const defaultStockValue = propio || 0;
         const defStockMin = item.stockMinimo || 0;
@@ -338,6 +340,22 @@ const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, 
     return map;
   }, [allData['grupos-opcionales']]);
 
+  // Índices codigo→artículo/materia-prima construidos UNA sola vez (no por fila ni por render).
+  // getAvailableUnits (stockAvailability.js) espera objetos { [codigo]: item }, igual que los
+  // datos crudos de Firebase; allData.articulos/'materia-prima' son arrays, así que se indexan
+  // acá para no repetir esta conversión en cada fila de la pestaña Artículos.
+  const articlesById = React.useMemo(() => {
+    const map = {};
+    (allData.articulos || []).forEach(a => { if (a && a.codigo != null) map[a.codigo] = a; });
+    return map;
+  }, [allData.articulos]);
+
+  const materiaPrimaById = React.useMemo(() => {
+    const map = {};
+    (allData['materia-prima'] || []).forEach(m => { if (m && m.codigo != null) map[m.codigo] = m; });
+    return map;
+  }, [allData['materia-prima']]);
+
   const headers = {
     articulos: ['Foto', 'Código', 'Nombre', 'Departamento', 'Valor', 'Costo Total', 'Stock', 'Control Stock', 'Activo', 'Acciones'],
     'materia-prima': ['Código', 'Nombre', 'Unidad', 'Stock', 'Mínimo', 'Costo Unit.', 'Acciones'],
@@ -374,7 +392,7 @@ const DataTable = React.memo(({ activeTab, data, onEdit, onDelete, onDuplicate, 
           <AnimatePresence>
             {data.length > 0 ? (
               data.map((item, index) => (
-                <TableRow key={item.codigo} item={item} index={index} activeTab={activeTab} onEdit={onEdit} onDelete={onDelete} onDuplicate={onDuplicate} allData={allData} onToggleStatus={onToggleStatus} onToggleControlStock={onToggleControlStock} onTachoStockChange={onTachoStockChange} canModifyTachoStock={canModifyTachoStock} hasFullAccess={hasFullAccess} gruposOpcionalesMap={gruposOpcionalesMap} />
+                <TableRow key={item.codigo} item={item} index={index} activeTab={activeTab} onEdit={onEdit} onDelete={onDelete} onDuplicate={onDuplicate} allData={allData} onToggleStatus={onToggleStatus} onToggleControlStock={onToggleControlStock} onTachoStockChange={onTachoStockChange} canModifyTachoStock={canModifyTachoStock} hasFullAccess={hasFullAccess} gruposOpcionalesMap={gruposOpcionalesMap} articlesById={articlesById} materiaPrimaById={materiaPrimaById} />
               ))
             ) : (
               <motion.tr

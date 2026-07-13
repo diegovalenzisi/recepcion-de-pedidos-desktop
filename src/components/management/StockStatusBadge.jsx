@@ -30,7 +30,16 @@ const StockStatusBadge = ({ outOfStockCount = 0, lowStockCount = 0, onClick, ite
       );
     }
 
-    const statusColor = minimumStock > 10 ? 'green' : minimumStock >= 5 ? 'amber' : 'red';
+    // Un componente sin control de stock (controlStock === false) puede hacer que la
+    // disponibilidad calculada sea Infinity ("ilimitado"). Infinity nunca debe mostrarse
+    // literalmente como texto: se representa como "Ilimitado"/∞ en vez de un número o de "0".
+    const isUnlimited = minimumStock === Infinity;
+    // fmt: normalizarStock(Infinity) da 0 (Number.isFinite(Infinity) es false), así que Infinity
+    // se resuelve ANTES de pasar por normalizarStock, que queda como red de seguridad solo para
+    // el resto de los valores (ya numéricos siempre, tras el fix de getAvailableUnits).
+    const fmt = (n) => (n === Infinity ? '∞' : normalizarStock(n));
+
+    const statusColor = isUnlimited ? 'green' : minimumStock > 10 ? 'green' : minimumStock >= 5 ? 'amber' : 'red';
 
     return (
       <TooltipProvider>
@@ -39,7 +48,8 @@ const StockStatusBadge = ({ outOfStockCount = 0, lowStockCount = 0, onClick, ite
             <div className='flex items-center gap-2 cursor-help'>
               <Package size={14} className={`text-${statusColor}-500`} />
               <span className={`px-2 py-1 rounded-full text-xs font-medium bg-${statusColor}-100 text-${statusColor}-800`}>
-                {minimumStock} (limitado por: {limitedBy || 'N/A'})
+                {isUnlimited ? 'Ilimitado' : minimumStock}
+                {!isUnlimited && ` (limitado por: ${limitedBy || 'N/A'})`}
               </span>
             </div>
           </TooltipTrigger>
@@ -49,11 +59,8 @@ const StockStatusBadge = ({ outOfStockCount = 0, lowStockCount = 0, onClick, ite
               {details && details.length > 0 ? (
                 details.map((d, i) => (
                   <div key={i} className="flex justify-between text-xs gap-4">
-                    <span className="truncate max-w-[150px]">{d.name} ({d.type === 'article' ? 'Art' : 'MP'})</span>
-                    {/* d.stock puede llegar como objeto { stockType, receta } en artículos por
-                        receta; normalizarStock garantiza un número y evita el React #31 (renderizar
-                        un objeto como texto). */}
-                    <span className="font-mono">{normalizarStock(d.stock)} / {d.required} = {d.possible}</span>
+                    <span className="truncate max-w-[150px]">{d.name} ({d.type === 'article' ? 'Art' : d.type === 'group' ? 'Grupo' : 'MP'})</span>
+                    <span className="font-mono">{fmt(d.stock)} / {d.required} = {fmt(d.possible)}</span>
                   </div>
                 ))
               ) : (

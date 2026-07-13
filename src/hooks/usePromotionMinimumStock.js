@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getDatabase, ref, onValue, get } from 'firebase/database';
 import { getCurrentLocalId } from '@/lib/firebase/core';
-import { normalizarStock } from '@/lib/api/ventaUtils';
+import { getAvailableUnits } from '@/lib/api/stockAvailability';
 
 export const usePromotionMinimumStock = (promotion) => {
     const [state, setState] = useState({
@@ -37,8 +37,15 @@ export const usePromotionMinimumStock = (promotion) => {
                 const articlesRef = ref(db, `${localId}/ARTICULOS`);
                 const mpRef = ref(db, `${localId}/MATERIA_PRIMA`);
                 
+                // minStock empieza en Infinity como sentinela de "todavía no evaluado". Con
+                // artículos sin control de stock (controlStock === false), un componente puede
+                // legítimamente valer Infinity ("ilimitado"), así que ya no alcanza con comparar
+                // `< minStock` para decidir si se procesó algo: Infinity < Infinity es false, y
+                // el sentinela quedaría indistinguible de un resultado real ilimitado. `hasAnyItem`
+                // resuelve esa ambigüedad explícitamente.
                 let minStock = Infinity;
                 let limitedBy = null;
+                let hasAnyItem = false;
                 const details = [];
 
                 const [artSnap, mpSnap, grpSnap] = await Promise.all([
@@ -65,18 +72,23 @@ export const usePromotionMinimumStock = (promotion) => {
 
                         if (allowedIds.length === 0) {
                             minStock = 0;
+                            hasAnyItem = true;
                             limitedBy = group?.nombre || pItem.nombre || pItem.grupoId;
                             details.push({ id: pItem.grupoId, name: limitedBy, stock: 0, required: pItem.minSeleccion || 1, type: 'group', possible: 0 });
                             continue;
                         }
 
-                        // Sumar stock disponible de todos los artículos permitidos del grupo
+                        // Sumar stock disponible REAL (propio, heredado o receta, con materia
+                        // prima y recetas anidadas) de todos los artículos permitidos del grupo.
+                        // Un artículo sin control de stock aporta Infinity, lo cual vuelve
+                        // Infinity la suma del grupo entero — correcto: si alguna opción del
+                        // grupo es ilimitada, el grupo no debe limitar la promo.
                         let totalGroupStock = 0;
                         for (const artId of allowedIds) {
                             const art = articlesData[artId];
                             if (!art) continue;
-                            const artStock = art.stock?.propio !== undefined ? Number(art.stock.propio) : 0;
-                            totalGroupStock += Math.max(0, artStock);
+                            const artAvailable = getAvailableUnits(artId, articlesData, mpData);
+                            totalGroupStock += Math.max(0, artAvailable);
                         }
 
                         // Cantidad requerida por venta de promo (minSeleccion o maxSeleccion o cantidad)
@@ -95,7 +107,8 @@ export const usePromotionMinimumStock = (promotion) => {
                             possible: possiblePromos
                         });
 
-                        if (possiblePromos < minStock) {
+                        hasAnyItem = true;
+                        if (limitedBy === null || possiblePromos < minStock) {
                             minStock = possiblePromos;
                             limitedBy = groupName;
                         }
@@ -108,77 +121,46 @@ export const usePromotionMinimumStock = (promotion) => {
 
                     if (!article) {
                         minStock = 0;
+                        hasAnyItem = true;
                         limitedBy = artId;
-                        details.push({ id: artId, name: artId, stock: 0, required: qtyNeeded, type: 'article' });
+                        details.push({ id: artId, name: artId, stock: 0, required: qtyNeeded, type: 'article', possible: 0 });
                         continue;
                     }
 
-                    // Check article stock. normalizarStock devuelve SIEMPRE un número:
-                    // para artículos por receta/heredado stock es un objeto { stockType, receta }
-                    // y antes se propagaba tal cual a details.stock (causaba React #31 al renderizar)
-                    // y NaN en possible. Ahora queda como número seguro.
-                    let available = normalizarStock(article.stock);
+                    // Disponibilidad REAL del artículo, respetando su tipo de stock: propio,
+                    // heredado o receta (incluyendo materia prima y recetas anidadas). Antes se
+                    // usaba normalizarStock(article.stock), que para un artículo por receta
+                    // devolvía 0 porque el objeto de stock no tiene campo `propio` — causa raíz
+                    // del bug "Stock 0" en promociones con artículos por receta. getAvailableUnits
+                    // es la única fuente de verdad, compartida con la pantalla de Stock (DataTable).
+                    const available = getAvailableUnits(artId, articlesData, mpData);
                     const possiblePromosArt = Math.floor(available / qtyNeeded);
-                    
-                    details.push({ 
-                        id: artId, 
-                        name: article.nombre, 
-                        stock: available, 
-                        required: qtyNeeded, 
+
+                    details.push({
+                        id: artId,
+                        name: article.nombre,
+                        stock: available,
+                        required: qtyNeeded,
                         type: 'article',
                         possible: possiblePromosArt
                     });
 
-                    if (possiblePromosArt < minStock) {
+                    hasAnyItem = true;
+                    if (limitedBy === null || possiblePromosArt < minStock) {
                         minStock = possiblePromosArt;
                         limitedBy = article.nombre;
-                    }
-
-                    // Check raw materials if any
-                    if (article.materiaPrima && Array.isArray(article.materiaPrima)) {
-                        for (const mp of article.materiaPrima) {
-                            const mpId = mp.codigo || mp.id;
-                            const mpQtyNeeded = (mp.cantidad || 1) * qtyNeeded;
-                            const rawMat = mpData[mpId];
-                            
-                            if (!rawMat) {
-                                minStock = 0;
-                                limitedBy = mpId;
-                                details.push({ id: mpId, name: mpId, stock: 0, required: mpQtyNeeded, type: 'raw_material' });
-                                continue;
-                            }
-
-                            let mpAvailable = rawMat.stock || 0;
-                            // Handle inheritance if needed (simplified for this context)
-                            if (rawMat.heredadoDe) {
-                                const parent = articlesData[rawMat.heredadoDe];
-                                if (parent) {
-                                    mpAvailable = parent.stock?.propio || 0;
-                                }
-                            }
-
-                            const possiblePromosMp = Math.floor(mpAvailable / mpQtyNeeded);
-                            
-                            details.push({ 
-                                id: mpId, 
-                                name: rawMat.nombre, 
-                                stock: mpAvailable, 
-                                required: mpQtyNeeded, 
-                                type: 'raw_material',
-                                possible: possiblePromosMp
-                            });
-
-                            if (possiblePromosMp < minStock) {
-                                minStock = possiblePromosMp;
-                                limitedBy = rawMat.nombre;
-                            }
-                        }
                     }
                 }
 
                 if (active) {
+                    // minStock === Infinity solo debe convertirse a 0 si NUNCA se procesó ningún
+                    // ítem (no debería pasar con promoItems.length > 0, pero se deja como red de
+                    // seguridad). Si SÍ se procesaron ítems y el resultado es Infinity, es porque
+                    // todos los componentes son genuinamente ilimitados (controlStock === false)
+                    // — debe conservarse como Infinity para que la UI lo muestre como "ilimitado",
+                    // no como "sin stock".
                     setState({
-                        minimumStock: minStock === Infinity ? 0 : minStock,
+                        minimumStock: hasAnyItem ? minStock : 0,
                         limitedBy: limitedBy,
                         details: details,
                         loading: false,
