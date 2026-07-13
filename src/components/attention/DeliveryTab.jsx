@@ -22,7 +22,7 @@ import { fetchOptionalGroups } from '@/lib/api/managementApi';
 import { fetchAccounts, fetchFavoriteAccountInfo } from '@/lib/api/accountsApi';
 import { fetchEmployees, fetchCategories } from '@/lib/api/hrApi';
 import { openWhatsApp } from '@/lib/whatsapp/whatsappHandler';
-import { buildPaymentWhatsAppMessage } from '@/lib/whatsapp/paymentMessage';
+import { resolvePaymentWhatsAppMessage } from '@/lib/whatsapp/paymentMessage';
 import DeliveryActionBar from '@/components/attention/delivery/DeliveryActionBar';
 import DeliveryOrderTable from '@/components/attention/delivery/DeliveryOrderTable';
 import DeliveryGridView from '@/components/attention/delivery/DeliveryGridView';
@@ -563,13 +563,17 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
           return;
         }
 
-        // El texto sale de Configuración → Configuración web → Mensaje de WhatsApp
-        // (settings.web.whatsappMessage). Si está vacío, el helper usa el fallback.
-        // Alias y titular salen de la cuenta favorita (CUENTAS: alias / aNombreDe).
+        // El texto sale de Configuración → Configuración web → Mensaje WhatsApp para pagos
+        // electrónicos/efectivo (settings.web.whatsappMessage / whatsappMessageEfectivo). La
+        // plantilla se elige según el medio de pago real del pedido (ver resolvePaymentWhatsAppMessage,
+        // única función usada también desde Atención/Pedidos para no duplicar esta lógica).
+        // Alias y titular (solo se usan si el mensaje resuelto es el electrónico) salen de la
+        // cuenta favorita (CUENTAS: alias / aNombreDe).
         const { alias, titular } = await fetchFavoriteAccountInfo();
-        const message = buildPaymentWhatsAppMessage({
+        const message = resolvePaymentWhatsAppMessage({
           order: selectedOrder,
-          template: settings?.web?.whatsappMessage || '',
+          templateElectronico: settings?.web?.whatsappMessage || '',
+          templateEfectivo: settings?.web?.whatsappMessageEfectivo || '',
           alias,
           titular,
         });

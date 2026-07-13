@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch';
 import HoursSettingsModal from '@/components/settings/HoursSettingsModal';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { uploadWebImage, deleteWebImage } from '@/lib/firebase/storage';
+import { DEFAULT_WHATSAPP_MESSAGE, DEFAULT_WHATSAPP_MESSAGE_EFECTIVO } from '@/lib/whatsapp/paymentMessage';
 
 // Helper for image compression
 const compressImage = (file) => {
@@ -377,17 +378,39 @@ function WebSettings({ settings, onSettingsChange, onSave, saving }) {
                     <div className="space-y-2">
                         <Label htmlFor="whatsappMessage" className="flex items-center text-gray-700 font-semibold">
                             <MessageSquare className="mr-2 h-5 w-5 text-cyan-500" />
-                            Mensaje de WhatsApp
+                            Mensaje WhatsApp para pagos electrónicos
                         </Label>
                         <Textarea
                             id="whatsappMessage"
                             value={settings.web?.whatsappMessage || ''}
                             onChange={handleChange}
-                            placeholder="Ej: ¡Hola! Tu pedido de {nombre_local} está en camino."
+                            placeholder={DEFAULT_WHATSAPP_MESSAGE}
+                            className="bg-gray-50"
+                            rows={5}
+                        />
+                        <p className="text-xs text-gray-500">
+                            Se usa cuando el pedido se paga con Transferencia, Mercado Pago, tarjeta, QR u otro medio electrónico.
+                            Variables disponibles: {'{cliente}'}, {'{numero}'}, {'{total}'}, {'{aliasFavorita}'}, {'{titularCuenta}'}.
+                            Si se deja vacío, se usa el mensaje predeterminado actual.
+                        </p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="whatsappMessageEfectivo" className="flex items-center text-gray-700 font-semibold">
+                            <MessageSquare className="mr-2 h-5 w-5 text-cyan-500" />
+                            Mensaje WhatsApp para pagos en efectivo
+                        </Label>
+                        <Textarea
+                            id="whatsappMessageEfectivo"
+                            value={settings.web?.whatsappMessageEfectivo || ''}
+                            onChange={handleChange}
+                            placeholder={DEFAULT_WHATSAPP_MESSAGE_EFECTIVO}
                             className="bg-gray-50"
                             rows={3}
                         />
-                        <p className="text-xs text-gray-500">Este mensaje se usará al abrir el chat de WhatsApp con un cliente.</p>
+                        <p className="text-xs text-gray-500">
+                            Se usa cuando el pedido se paga en efectivo. Variables disponibles: {'{cliente}'}, {'{numero}'}.
+                            Si se deja vacío, se usa el mensaje predeterminado actual.
+                        </p>
                     </div>
                     <div className="space-y-2">
                         <Label htmlFor="assignDelivererMessage" className="flex items-center text-gray-700 font-semibold">

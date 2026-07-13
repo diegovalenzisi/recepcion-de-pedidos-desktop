@@ -1,8 +1,3 @@
-import { toast } from '@/components/ui/use-toast';
-import { generatePaymentMethodMessage } from './paymentMethodMessageFormatter';
-import { getDatabase, ref, get } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
-
 // En Electron se usa shell.openExternal vía IPC.
 // En el navegador se usa window.open como fallback.
 const openUrl = (url) => {
@@ -56,42 +51,5 @@ export const openWhatsAppWithMessage = async (phoneNumber, messagePromiseOrStrin
     }
   } catch (error) {
     console.error("Error formatting WhatsApp message:", error);
-  }
-};
-
-export const openWhatsAppWithPaymentMessage = async (orderId, clientName, clientPhone, localId, preference = 'web') => {
-  try {
-    if (!clientPhone) {
-      toast({
-        variant: "destructive",
-        title: "Sin teléfono",
-        description: "El cliente no tiene un teléfono registrado."
-      });
-      return;
-    }
-
-    const currentLocalId = localId || getCurrentLocalId();
-    const db = getDatabase();
-
-    let exactPaymentMethod = null;
-    try {
-      const methodRef = ref(db, `${currentLocalId}/PEDIDOS/${orderId}/paid/method`);
-      const methodSnap = await get(methodRef);
-      if (methodSnap.exists()) {
-        exactPaymentMethod = methodSnap.val();
-      }
-    } catch (e) {
-      console.error("Could not fetch exact payment method:", e);
-    }
-
-    const message = await generatePaymentMethodMessage(orderId, clientName, currentLocalId, exactPaymentMethod);
-    await openWhatsAppWithMessage(clientPhone, message, preference);
-  } catch (error) {
-    console.error("Error generating payment message:", error);
-    toast({
-      variant: "destructive",
-      title: "Error",
-      description: "No se pudo generar el mensaje de WhatsApp."
-    });
   }
 };
