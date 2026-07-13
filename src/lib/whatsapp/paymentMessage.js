@@ -108,16 +108,37 @@ export const isCashPaymentMethod = (methodName) => {
   return normalized.includes('efectivo') || normalized === 'cash';
 };
 
-// Extrae los medios de pago REALES de un pedido. Prioridad (pagos múltiples):
-//   1) order.payment.payments (array [{method, amount}]) si existe y no está vacío — pago dividido.
-//   2) order.payment.method (string único) — caso normal.
-//   3) [] si no hay ninguno configurado (pedido sin medio de pago).
+// Extrae los medios de pago REALES y ACTUALES de un pedido.
+//
+// order.payment.method es el ÚNICO campo que TODOS los flujos de edición mantienen al día
+// (incluida la edición de un solo método desde el detalle del pedido — OrderDetailModal.jsx vía
+// DeliveryTab.jsx:handleConfirmClientUpdate — que solo toca `.method` y nunca lee/escribe/limpia
+// `.payments`). order.payment.payments (array) puede quedar con datos VIEJOS de una edición
+// anterior o de la creación del pedido, porque nada lo limpia al pasar a un método único.
+//
+// El array SOLO es la fuente vigente cuando el pedido está realmente en pago dividido: la única
+// escritura que pone `payment.payments` en sincro real es useDeliveryActions.js (handleDelivered),
+// y esa misma escritura SIEMPRE fija `payment.method = 'Pago Dividido'` en el mismo update atómico
+// (ver useDeliveryActions.js). Por eso ese string es la señal confiable de "el array es actual";
+// fuera de ese caso, method manda siempre — así no se mezcla el pago histórico con el actual.
+//
+// Prioridad:
+//   1) 'Pago Dividido' en payment.method + payment.payments no vacío → pago dividido vigente.
+//   2) payment.method (string único) — caso normal, incluye después de cualquier edición.
+//   3) payment.payments como último fallback, solo si payment.method no existe en absoluto.
+//   4) [] si no hay ningún dato de pago.
 export const getOrderPaymentMethods = (order) => {
   const payment = order?.payment || {};
-  if (Array.isArray(payment.payments) && payment.payments.length > 0) {
-    return payment.payments.map((p) => p?.method).filter(Boolean);
+  const singleMethod = payment.method != null ? String(payment.method) : '';
+  const paymentsArray = Array.isArray(payment.payments)
+    ? payment.payments.map((p) => p?.method).filter(Boolean)
+    : [];
+
+  if (singleMethod === 'Pago Dividido' && paymentsArray.length > 0) {
+    return paymentsArray;
   }
-  if (payment.method) return [String(payment.method)];
+  if (singleMethod) return [singleMethod];
+  if (paymentsArray.length > 0) return paymentsArray;
   return [];
 };
 
