@@ -1,9 +1,9 @@
 {
   "latest": "1.3.56",
   "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.56%2FRecepcion-de-Pedidos-Setup-1.3.56.exe?alt=media",
-  "sha256": "4debd2d5788a5d258f179ff27aa04f1373642fc5e6b6c8c31a9f7b62897bb1c5",
-  "size": 125178065,
+  "sha256": "069db857470378c093c3c19d6d7dddc6b23248825d7f657a435a8feaa2558d83",
+  "size": 125177290,
   "mandatory": false,
   "releaseDate": "2026-07-16",
-  "notes": "Versión 1.3.56: corrige el aviso de comisión pendiente que aparece al entrar al local. Antes mostraba el total histórico acumulado (RESUMEN_CUENTA/TOTALES), sin descontar pagos registrados por otras vías, mostrando un monto muy superior al real (ej. Centenario: avisaba $51.086 en vez de $3.254). Ahora el aviso usa exactamente el mismo cálculo y la misma fuente que el indicador \"Comisión a Pagar\" del pie de pantalla (COMISIONES/REGISTRO menos COMISIONES/PAGOS), por lo que ambos siempre muestran el mismo saldo pendiente real."
+  "notes": "Versión 1.3.56: corrige el saldo de comisión pendiente mostrado en el aviso al entrar al local y en el panel Configuración del Local → Pago de Comisiones, para que siempre coincidan con el indicador del pie de pantalla. Antes ambos podían leer un ledger histórico desincronizado (ej. Centenario: $51.086 en el aviso, $0 en el panel, en vez de $3.254 real)."
 }
