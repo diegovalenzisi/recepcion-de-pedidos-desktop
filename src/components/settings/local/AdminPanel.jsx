@@ -16,24 +16,20 @@ import { Separator } from '@/components/ui/separator';
 import { processCommissionPayment } from '@/lib/api/settingsApi.js';
 import { useCommissionBalance } from '@/hooks/useCommissionTotal.js';
 
-const AdminPanel = ({ localId, settings, onSettingsChange, applySettings }) => {
+const AdminPanel = ({ settings, onSettingsChange, applySettings }) => {
   // Misma fuente y mismo cálculo que el footer y el aviso al entrar (useCommissionBalance,
   // que envuelve COMISIONES/REGISTRO − COMISIONES/PAGOS). Ya NO se usa fetchCommissionTotals
   // (RESUMEN_CUENTA/TOTALES + PAGOS_COMISIONES), el ledger viejo que podía desincronizarse
   // — ver diagnóstico de Centenario. Solo lectura: no cambia cómo se registra un pago
   // (processCommissionPayment sigue igual, sin tocar).
   //
-  // No se gatea con el prop `localId`: AdminPanel nunca lo recibe (SettingsPage.jsx ->
-  // LocalSettings.jsx no lo pasa), así que `!!localId` siempre daba false y el hook
-  // devolvía pending:0 en la app compilada aunque el footer (que usa su propio localId
-  // en App.jsx) mostraba el valor correcto. useCommissionBalance() ya resuelve el local
-  // activo internamente (getCurrentLocalId), por eso se llama sin argumento.
+  // Antes recibía un prop `localId` que nunca llegaba (SettingsPage.jsx -> LocalSettings.jsx
+  // no lo pasaba), así que `!!localId` siempre daba false y el hook devolvía pending:0 en
+  // la app compilada aunque el footer (que usa su propio localId en App.jsx) mostraba el
+  // valor correcto. useCommissionBalance() ya resuelve el local activo internamente
+  // (getCurrentLocalId), por eso se llama sin argumento y sin depender de ese prop.
   const commissionBalance = useCommissionBalance();
   const { totalGenerated, totalPaid, pending } = commissionBalance;
-
-  // Debug temporal para verificar en la app compilada (F12 -> Console) que el panel
-  // recibe el mismo valor que el footer. Sacar una vez confirmado.
-  console.log('[COMMISSION PANEL]', { totalGenerated, totalPaid, pendingCommission: pending, localId });
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
