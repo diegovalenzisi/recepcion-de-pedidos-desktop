@@ -75,7 +75,7 @@ const isRegistroValido = (reg) => {
  *   - COMISIONES/REGISTRO → totalGenerated
  *   - COMISIONES/PAGOS    → totalPaid
  */
-export const useCommissionBalance = (isActive) => {
+export const useCommissionBalance = (isActive = true) => {
   const [state, setState] = useState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: true });
 
   useEffect(() => {

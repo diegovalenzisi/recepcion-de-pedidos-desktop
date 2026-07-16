@@ -22,14 +22,25 @@ const AdminPanel = ({ localId, settings, onSettingsChange, applySettings }) => {
   // (RESUMEN_CUENTA/TOTALES + PAGOS_COMISIONES), el ledger viejo que podía desincronizarse
   // — ver diagnóstico de Centenario. Solo lectura: no cambia cómo se registra un pago
   // (processCommissionPayment sigue igual, sin tocar).
-  const { totalGenerated, totalPaid, pending } = useCommissionBalance(!!localId);
+  //
+  // No se gatea con el prop `localId`: AdminPanel nunca lo recibe (SettingsPage.jsx ->
+  // LocalSettings.jsx no lo pasa), así que `!!localId` siempre daba false y el hook
+  // devolvía pending:0 en la app compilada aunque el footer (que usa su propio localId
+  // en App.jsx) mostraba el valor correcto. useCommissionBalance() ya resuelve el local
+  // activo internamente (getCurrentLocalId), por eso se llama sin argumento.
+  const commissionBalance = useCommissionBalance();
+  const { totalGenerated, totalPaid, pending } = commissionBalance;
+
+  // Debug temporal para verificar en la app compilada (F12 -> Console) que el panel
+  // recibe el mismo valor que el footer. Sacar una vez confirmado.
+  console.log('[COMMISSION PANEL]', { totalGenerated, totalPaid, pendingCommission: pending, localId });
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      
+
       <div className="mb-6">
         <h2 className="text-2xl font-bold tracking-tight mb-2">Panel de Administración</h2>
-        <p className="text-muted-foreground">Configuraciones avanzadas y herramientas del sistema para {localId}</p>
+        <p className="text-muted-foreground">Configuraciones avanzadas y herramientas del sistema</p>
       </div>
 
       <SystemHealthPanel />
