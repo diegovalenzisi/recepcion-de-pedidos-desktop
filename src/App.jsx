@@ -183,13 +183,18 @@ function AppContent() {
   } = stockStatus;
   
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
-  const { showModal: showAlarmModal, dismiss: dismissAlarm, pendingAmount: commissionAlarmAmount } = useCommissionAlarm(
-    settings?.alarmaPago,
-    !!user
-  );
 
-  // Badge de comisión pendiente (tiempo real)
+  // Badge de comisión pendiente (tiempo real) — única fuente de verdad para el saldo de
+  // comisión a pagar, compartida entre el indicador del footer y el aviso al entrar al local.
   const commissionPending = useCommissionTotal(!!user && !!localId);
+
+  // El aviso usa exactamente el mismo saldo (commissionPending) que el indicador de abajo,
+  // en vez de calcularlo por su cuenta, para que ambos muestren siempre el mismo número.
+  const { showModal: showAlarmModal, dismiss: dismissAlarm } = useCommissionAlarm(
+    settings?.alarmaPago,
+    !!user,
+    commissionPending
+  );
   const formatCommission = (v) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(v || 0);
 
@@ -733,7 +738,7 @@ function AppContent() {
       />
       <CommissionAlarmModal
         isOpen={showAlarmModal}
-        alarmAmount={commissionAlarmAmount}
+        alarmAmount={commissionPending}
         onAccept={dismissAlarm}
       />
       <Toaster />

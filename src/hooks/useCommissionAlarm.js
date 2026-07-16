@@ -1,20 +1,29 @@
 import { useState, useEffect, useRef } from 'react';
-import { getDatabase, ref, onValue, off } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
 
 /**
- * Monitorea TotalComisionAPagar vs alarmaPago.
- * Muestra el modal cuando TotalComisionAPagar >= alarmaPago.
- * - Por sesión: si el usuario acepta, no vuelve a aparecer HASTA que
- *   la comisión baje del límite y luego vuelva a superarlo.
+ * Monitorea el saldo de comisión PENDIENTE vs alarmaPago y decide si mostrar el aviso.
+ *
+ * IMPORTANTE: este hook YA NO calcula el saldo por su cuenta. Recibe `pendingCommission`
+ * ya calculado por useCommissionTotal (COMISIONES/REGISTRO − COMISIONES/PAGOS), la MISMA
+ * fuente que usa el indicador "Comisión a Pagar" del footer — así el aviso y el footer
+ * muestran siempre exactamente el mismo número (ver App.jsx).
+ *
+ * Antes leía RESUMEN_CUENTA/TOTALES/TotalComisionAPagar, un campo que se reacumula en cada
+ * venta y solo se descuenta si el pago pasa por processCommissionPayment (panel Admin); los
+ * pagos registrados por otras vías (p. ej. aprobados desde dlvsistemas, que sí actualizan
+ * COMISIONES/PAGOS) nunca lo decrementaban, dejando ese campo "atascado" en el acumulado
+ * histórico — causa del aviso mostrando un monto muy superior al saldo real (ej. Centenario:
+ * avisaba 51086 en vez de 3254).
+ *
+ * - Por sesión: si el usuario acepta, no vuelve a aparecer HASTA que la comisión baje del
+ *   límite y luego vuelva a superarlo.
  * - Al reiniciar la app: los refs se resetean → modal aparece de nuevo si aplica.
  * No guarda nada en Firebase; el "aceptado" es solo en memoria.
  */
-export const useCommissionAlarm = (alarmaPago, isActive) => {
-  const [showModal, setShowModal]   = useState(false);
-  const [pendingAmount, setPendingAmount] = useState(0);
-  const dismissedRef  = useRef(false);
-  const wasAboveRef   = useRef(false);
+export const useCommissionAlarm = (alarmaPago, isActive, pendingCommission) => {
+  const [showModal, setShowModal] = useState(false);
+  const dismissedRef = useRef(false);
+  const wasAboveRef  = useRef(false);
 
   useEffect(() => {
     const alarmLimit = Number(alarmaPago) || 0;
@@ -24,42 +33,24 @@ export const useCommissionAlarm = (alarmaPago, isActive) => {
       return;
     }
 
-    const db = getDatabase();
-    const localId = getCurrentLocalId();
-    if (!localId) return;
+    // pendingCommission ya viene clampeado a >= 0 desde useCommissionTotal.
+    const aPagar = Number(pendingCommission) || 0;
 
-    const totalsRef = ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`);
-
-    const listener = onValue(
-      totalsRef,
-      (snapshot) => {
-        const val  = snapshot.val();
-        // Usar TotalComisionAPagar; caer en totalCommission por compatibilidad
-        const aPagar = val?.TotalComisionAPagar ?? val?.totalCommission ?? 0;
-        setPendingAmount(aPagar);
-
-        if (aPagar >= alarmLimit) {
-          wasAboveRef.current = true;
-          if (!dismissedRef.current) setShowModal(true);
-        } else {
-          // Bajó del límite: resetear para que vuelva a avisar la próxima vez
-          if (wasAboveRef.current) dismissedRef.current = false;
-          wasAboveRef.current = false;
-          setShowModal(false);
-        }
-      },
-      (error) => {
-        console.error('[commission-alarm] Error al leer totales:', error);
-      }
-    );
-
-    return () => off(totalsRef, 'value', listener);
-  }, [alarmaPago, isActive]);
+    if (aPagar >= alarmLimit) {
+      wasAboveRef.current = true;
+      if (!dismissedRef.current) setShowModal(true);
+    } else {
+      // Bajó del límite: resetear para que vuelva a avisar la próxima vez que lo supere.
+      if (wasAboveRef.current) dismissedRef.current = false;
+      wasAboveRef.current = false;
+      setShowModal(false);
+    }
+  }, [alarmaPago, isActive, pendingCommission]);
 
   const dismiss = () => {
     dismissedRef.current = true;
     setShowModal(false);
   };
 
-  return { showModal, dismiss, pendingAmount };
+  return { showModal, dismiss };
 };
