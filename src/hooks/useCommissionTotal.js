@@ -6,7 +6,9 @@ import { getCurrentLocalId } from '@/lib/firebase/core';
  * Saldo de comisión a pagar = suma de comisiones generadas válidas
  *                             − suma de pagos de comisión aprobados.
  *
- * Fuentes (NO se usa COMISIONES/TOTALES/totalAcumulado ni RESUMEN_CUENTA):
+ * Fuentes (NO se usa COMISIONES/TOTALES/totalAcumulado, RESUMEN_CUENTA ni
+ * PAGOS_COMISIONES — ese último es un ledger viejo, independiente, que puede
+ * quedar desincronizado de COMISIONES/PAGOS; ver diagnóstico de Centenario):
  *   - COMISIONES/REGISTRO  → cada venta con comisionGenerada y estado
  *   - COMISIONES/PAGOS     → cada pago con montoPago y estado
  *
@@ -21,6 +23,14 @@ import { getCurrentLocalId } from '@/lib/firebase/core';
  *            (rechazado / pendiente / cancelado / etc.).
  *            Pagos locales sin estado se consideran aprobados.
  *   - El saldo nunca es negativo: si PAGOS supera REGISTRO, muestra 0.
+ *
+ * Dos exports, misma fuente y mismo cálculo (sin duplicar la fórmula):
+ *   - useCommissionTotal(isActive)   → número simple (saldo pendiente). Usado
+ *     por el footer y el aviso al entrar (App.jsx).
+ *   - useCommissionBalance(isActive) → { totalGenerated, totalPaid, pending,
+ *     loading }. Usado donde además del pendiente hace falta mostrar el
+ *     acumulado y lo pagado por separado (panel Configuración → Pago de
+ *     Comisiones).
  */
 
 // Estados de PAGOS que NO se descuentan
@@ -53,26 +63,51 @@ const isRegistroValido = (reg) => {
   return !CANCELLED_REGISTRO.has(estado);
 };
 
-export const useCommissionTotal = (isActive) => {
-  const [pending, setPending] = useState(0);
+/**
+ * Fuente ÚNICA y compartida del balance de comisión. Devuelve las tres cifras
+ * (generado, pagado, pendiente) en tiempo real, para que cualquier pantalla que
+ * necesite mostrar más de un número (ej. el panel de Configuración → Pago de
+ * Comisiones, que muestra "Total Comisión Acumulada" y "Total pagos realizados"
+ * por separado, además del pendiente) no tenga que reimplementar la suma.
+ *
+ * NO usa RESUMEN_CUENTA/TOTALES ni PAGOS_COMISIONES (ledger viejo, desconectado
+ * de COMISIONES/REGISTRO — ver diagnóstico de Centenario). Única fuente:
+ *   - COMISIONES/REGISTRO → totalGenerated
+ *   - COMISIONES/PAGOS    → totalPaid
+ */
+export const useCommissionBalance = (isActive) => {
+  const [state, setState] = useState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: true });
 
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive) {
+      setState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: false });
+      return;
+    }
     const localId = getCurrentLocalId();
-    if (!localId) return;
+    if (!localId) {
+      setState((s) => ({ ...s, loading: false }));
+      return;
+    }
 
     const db = getDatabase();
     const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO`);
     const pagosRef = ref(db, `${localId}/COMISIONES/PAGOS`);
 
-    // Se guardan las dos sumas por separado y se recalcula el saldo cada vez
+    // Se guardan las dos sumas por separado y se recalcula el balance cada vez
     // que cualquiera de los dos nodos cambia (tiempo real).
     let sumRegistro = 0;
     let sumPagos = 0;
+    let registroLoaded = false;
+    let pagosLoaded = false;
 
     const recompute = () => {
-      const saldo = sumRegistro - sumPagos;
-      setPending(saldo > 0 ? saldo : 0); // nunca negativo
+      const pending = sumRegistro - sumPagos;
+      setState({
+        totalGenerated: sumRegistro,
+        totalPaid: sumPagos,
+        pending: pending > 0 ? pending : 0, // nunca negativo
+        loading: !(registroLoaded && pagosLoaded),
+      });
     };
 
     const regListener = onValue(
@@ -86,9 +121,10 @@ export const useCommissionTotal = (isActive) => {
           }
         });
         sumRegistro = total;
+        registroLoaded = true;
         recompute();
       },
-      () => {}
+      () => { registroLoaded = true; recompute(); }
     );
 
     const pagosListener = onValue(
@@ -102,9 +138,10 @@ export const useCommissionTotal = (isActive) => {
           }
         });
         sumPagos = total;
+        pagosLoaded = true;
         recompute();
       },
-      () => {}
+      () => { pagosLoaded = true; recompute(); }
     );
 
     return () => {
@@ -113,5 +150,10 @@ export const useCommissionTotal = (isActive) => {
     };
   }, [isActive]);
 
-  return pending;
+  return state;
 };
+
+// Compatibilidad: el footer y el aviso al entrar (App.jsx) solo necesitan el saldo
+// pendiente como número simple. Envoltorio fino sobre useCommissionBalance — misma
+// fuente, mismo cálculo, sin duplicar la fórmula.
+export const useCommissionTotal = (isActive) => useCommissionBalance(isActive).pending;

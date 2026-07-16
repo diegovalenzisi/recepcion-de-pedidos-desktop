@@ -21,10 +21,12 @@ const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value || 0);
 
 /**
- * accountTotals:
- *   totalCommission  — Total Comisión Acumulada (bruto histórico = aPagar + pagado)
- *   totalPagado      — Total pagos realizados
- *   aPagar           — TotalComisionAPagar (neto pendiente = totalCommission - pagado)
+ * accountTotals (provisto por AdminPanel.jsx vía useCommissionBalance — misma fuente y
+ * mismo cálculo que el footer y el aviso al entrar: COMISIONES/REGISTRO − COMISIONES/PAGOS,
+ * NO RESUMEN_CUENTA/TOTALES ni PAGOS_COMISIONES):
+ *   totalCommission  — Total Comisión Acumulada (suma de comisionGenerada válida)
+ *   totalPagado      — Total pagos realizados (suma de montoPago aprobado)
+ *   aPagar           — Comisión pendiente (totalCommission − totalPagado, nunca negativo)
  */
 const CommissionPaymentManager = ({
   accountTotals = { totalCommission: 0, totalPagado: 0, aPagar: 0 },
@@ -105,7 +107,6 @@ const CommissionPaymentManager = ({
         <div className="space-y-1 md:col-span-2">
           <Label htmlFor="aPagar" className="text-sm font-medium text-orange-700 flex items-center gap-1">
             Comisión pendiente de pago
-            <span className="text-xs text-gray-500 font-normal">(= TotalComisionAPagar en Firebase)</span>
           </Label>
           <Input
             id="aPagar"
