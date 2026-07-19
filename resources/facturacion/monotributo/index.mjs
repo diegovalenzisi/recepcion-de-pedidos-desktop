@@ -345,6 +345,7 @@ let tlsPaused = false;
 const PAUSA_MS = 2000;
 
 function enqueue(snapshot) {
+  console.log(`[Facturación] Pedido detectado: ${snapshot.key}`);
   queue.push(snapshot);
   console.log(`🧃 Pedido encolado: ${snapshot.key}. En cola: ${queue.length}`);
   if (!processing && !tlsPaused) processNext();
@@ -440,4 +441,5 @@ async function procesarSnapshot(snapshot) {
 // Listener principal
 // ---------------------------------------------------------------------------
 
+console.log(`[Facturación] Listener iniciado: ${process.env.FIREBASE_PATH}`);
 ref.on('child_added', (snapshot) => enqueue(snapshot));

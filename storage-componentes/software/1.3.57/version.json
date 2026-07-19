@@ -1,0 +1,6 @@
+{
+  "version": "1.3.57",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.57.exe",
+  "releaseDate": "2026-07-19",
+  "notes": "Corrige la facturación automática que no arrancaba sola en Canadá (y en cualquier local cuyo firebaseDb quedara guardado con el esquema en mayúsculas, ej. HTTPS://...). La verificación de ownership del proceso principal elegía el módulo http/https comparando texto (url.startsWith('https')), sensible a mayúsculas/minúsculas; con un esquema en mayúsculas Node tiraba ERR_INVALID_PROTOCOL y el motor nunca arrancaba solo al iniciar la app, solo al entrar manualmente a Configuración o refrescar. Ahora se usa el parser estándar de Node (new URL().protocol) en una utilidad compartida (electron/lib/firebaseHttpTransport.js), aplicada también en los otros dos lugares del código con el mismo patrón. Se corrigió además el dato de Canadá en Firebase (HTTPS:// -> https://), aunque el código ya funciona con cualquier casing. No se modificó cómo se procesan los pedidos, la cola de facturación, ni otros locales."
+}

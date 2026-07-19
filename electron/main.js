@@ -494,6 +494,7 @@ async function evaluateAutoStart(key, dir, fields, label) {
   }
 
   // Verificación remota de ownership — la autoridad final.
+  console.log('[Facturación AutoStart] Consultando ownership');
   const { ok: ownerCheckOk, owner, code: ownerCheckCode } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA);
   if (!ownerCheckOk) {
     console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (código=${ownerCheckCode || 'ERROR_DE_RED'}) — por seguridad, no se inicia el motor.`);
@@ -503,6 +504,7 @@ async function evaluateAutoStart(key, dir, fields, label) {
     console.log(`[AFIP AUTOSTART] ${label}: OWNER_NO_COINCIDE — Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.`);
     return { start: false, ownershipMismatch: true };
   }
+  console.log(`[Facturación AutoStart] Ownership confirmado (machineId=${MACHINE_ID})`);
 
   return { start: true };
 }
@@ -530,6 +532,7 @@ async function autoStartFacturacion() {
       const { start, ownershipMismatch } = await evaluateAutoStart('ri', riDir, ri, label);
       if (start) {
         console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
+        console.log('[Facturación AutoStart] Iniciando proceso');
         syncFacturacionEngine(riDir, 'responsable_inscripto');
         const ok = spawnFacturacionProc('ri', riDir);
         console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
@@ -547,6 +550,7 @@ async function autoStartFacturacion() {
         const { start, ownershipMismatch } = await evaluateAutoStart(key, dir, c, label);
         if (start) {
           console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
+          console.log('[Facturación AutoStart] Iniciando proceso');
           syncFacturacionEngine(dir, 'monotributo');
           const ok = spawnFacturacionProc(key, dir);
           console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
