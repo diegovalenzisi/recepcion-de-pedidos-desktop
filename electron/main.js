@@ -12,6 +12,7 @@ const { spawn, execSync } = require('child_process');
 const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync } = require('fs');
 const https = require('https');
 const http  = require('http');
+const { resolveRequestTransport, normalizeFirebaseDatabaseURL, classifyTransportError } = require('./lib/firebaseHttpTransport');
 
 const isDev = !app.isPackaged;
 const BACKEND_PORT = 3001;
@@ -344,36 +345,95 @@ function stopAllFacturacion() {
   Object.keys(facturacionProcs).forEach(stopFacturacionProc);
 }
 
+// Registra un fallo de la verificación remota de ownership con el código de
+// causa clasificado (URL_INVALIDA / PROTOCOLO_NO_SOPORTADO / ERROR_DE_RED /
+// PERMISSION_DENIED) — nunca un genérico "sin conexión" que hubiera ocultado
+// el bug real de Canadá (esquema HTTPS:// en mayúsculas). No incluye tokens,
+// claves ni credenciales — solo identificadores públicos de la cuenta.
+function logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message }) {
+  console.error('[Facturación AutoStart] Error consultando ownership', {
+    localId: getActiveLocalId(),
+    firebaseDb,
+    cuit,
+    ptoVta,
+    code,
+    message,
+  });
+}
+
 // Lee el "dueño de facturación" desde el RTDB propio de la cuenta (mismo Firebase
 // que usa el motor, path FACTURACION_OWNERS/{cuit}_{ptoVta}). NUNCA asume ownership
 // en caso de error/timeout — devuelve { ok:false } y el caller debe tratarlo como
 // "no confirmado" (no arrancar). Esto evita que dos PCs se crean dueñas por estar
 // sin conexión (regla de seguridad explícita del usuario).
+//
+// El transporte (http vs https) se resuelve con resolveRequestTransport(), que
+// parsea la URL con el parser estándar de Node (new URL) en vez de comparar
+// texto — un firebaseDb guardado como "HTTPS://..." (mayúsculas) ya no elige
+// el módulo equivocado ni tira ERR_INVALID_PROTOCOL.
 function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta) {
   return new Promise((resolve) => {
-    if (!firebaseDb || !cuit || !ptoVta) { resolve({ ok: false, owner: null }); return; }
+    if (!firebaseDb || !cuit || !ptoVta) {
+      resolve({ ok: false, owner: null, code: 'URL_INVALIDA' });
+      return;
+    }
     const sanitize = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
     const key = `${sanitize(cuit)}_${sanitize(ptoVta)}`;
-    const url = `${String(firebaseDb).replace(/\/+$/, '')}/FACTURACION_OWNERS/${key}.json`;
+
+    let transport;
+    try {
+      const base = normalizeFirebaseDatabaseURL(firebaseDb);
+      transport = resolveRequestTransport(`${base}/FACTURACION_OWNERS/${key}.json`);
+    } catch (e) {
+      const code = e.code || 'URL_INVALIDA';
+      logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message: e.message });
+      resolve({ ok: false, owner: null, code });
+      return;
+    }
+
     let settled = false;
     const done = (val) => { if (!settled) { settled = true; resolve(val); } };
     try {
-      const mod = url.startsWith('https') ? https : http;
-      const req = mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 6000 }, (res) => {
-        if (res.statusCode !== 200) { done({ ok: false, owner: null }); return; }
-        let data = '';
-        res.on('data', (c) => { data += c; });
-        res.on('end', () => {
-          try {
-            const parsed = data ? JSON.parse(data) : null;
-            done({ ok: true, owner: parsed || null });
-          } catch { done({ ok: false, owner: null }); }
-        });
+      const req = transport.module.get(
+        transport.url,
+        { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 6000 },
+        (res) => {
+          if (res.statusCode === 401 || res.statusCode === 403) {
+            logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'PERMISSION_DENIED', message: `HTTP ${res.statusCode}` });
+            done({ ok: false, owner: null, code: 'PERMISSION_DENIED' });
+            return;
+          }
+          if (res.statusCode !== 200) {
+            logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'ERROR_DE_RED', message: `HTTP ${res.statusCode}` });
+            done({ ok: false, owner: null, code: 'ERROR_DE_RED' });
+            return;
+          }
+          let data = '';
+          res.on('data', (c) => { data += c; });
+          res.on('end', () => {
+            try {
+              const parsed = data ? JSON.parse(data) : null;
+              done({ ok: true, owner: parsed || null });
+            } catch (e) {
+              logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'ERROR_DE_RED', message: `respuesta inválida: ${e.message}` });
+              done({ ok: false, owner: null, code: 'ERROR_DE_RED' });
+            }
+          });
+        }
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'ERROR_DE_RED', message: 'timeout' });
+        done({ ok: false, owner: null, code: 'ERROR_DE_RED' });
       });
-      req.on('timeout', () => { req.destroy(); done({ ok: false, owner: null }); });
-      req.on('error', () => done({ ok: false, owner: null }));
-    } catch {
-      done({ ok: false, owner: null });
+      req.on('error', (e) => {
+        logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'ERROR_DE_RED', message: e.message });
+        done({ ok: false, owner: null, code: 'ERROR_DE_RED' });
+      });
+    } catch (e) {
+      const code = classifyTransportError(e);
+      logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message: e.message });
+      done({ ok: false, owner: null, code });
     }
   });
 }
@@ -434,13 +494,13 @@ async function evaluateAutoStart(key, dir, fields, label) {
   }
 
   // Verificación remota de ownership — la autoridad final.
-  const { ok: ownerCheckOk, owner } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA);
+  const { ok: ownerCheckOk, owner, code: ownerCheckCode } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA);
   if (!ownerCheckOk) {
-    console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (sin conexión o error) — por seguridad, no se inicia el motor.`);
+    console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (código=${ownerCheckCode || 'ERROR_DE_RED'}) — por seguridad, no se inicia el motor.`);
     return { start: false };
   }
   if (!owner || owner.machineId !== MACHINE_ID) {
-    console.log('Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.');
+    console.log(`[AFIP AUTOSTART] ${label}: OWNER_NO_COINCIDE — Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.`);
     return { start: false, ownershipMismatch: true };
   }
 
@@ -1141,8 +1201,11 @@ function checkForUpdates() {
 
   const doGet = (url, redirects = 0) => {
     if (redirects > 5) return;
-    const mod = url.startsWith('https') ? https : http;
-    mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 10000 }, (res) => {
+    let transport;
+    try {
+      transport = resolveRequestTransport(url);
+    } catch { /* URL inválida — silencioso, igual que un error de red acá */ return; }
+    transport.module.get(transport.url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 10000 }, (res) => {
       if ([301, 302, 307].includes(res.statusCode) && res.headers.location) {
         doGet(res.headers.location, redirects + 1);
         return;
@@ -1248,8 +1311,14 @@ function setupIPC() {
 
       const doGet = (url, redirects = 0) => {
         if (redirects > 5) { done({ hasUpdate: false, error: 'too-many-redirects', currentVersion }); return; }
-        const mod = url.startsWith('https') ? https : http;
-        const req = mod.get(url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 8000 }, (res) => {
+        let transport;
+        try {
+          transport = resolveRequestTransport(url);
+        } catch (e) {
+          done({ hasUpdate: false, error: classifyTransportError(e), currentVersion });
+          return;
+        }
+        const req = transport.module.get(transport.url, { headers: { 'User-Agent': 'recepcion-de-pedidos-desktop' }, timeout: 8000 }, (res) => {
           if ([301, 302, 307].includes(res.statusCode) && res.headers.location) {
             doGet(res.headers.location, redirects + 1);
             return;

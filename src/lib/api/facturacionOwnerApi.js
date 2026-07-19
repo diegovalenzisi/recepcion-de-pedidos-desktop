@@ -12,12 +12,23 @@
  * del ya inicializado por la app.
  */
 
+import { normalizeFirebaseDatabaseURL } from '@/lib/utils/firebaseUrl';
+
 const sanitizeKey = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
 
 export const ownerKeyFor = (cuit, ptoVta) => `${sanitizeKey(cuit)}_${sanitizeKey(ptoVta)}`;
 
+// Normaliza el esquema/host de firebaseDb (misma utilidad que usa el guardado
+// en FacturacionManager.jsx y el proceso principal) antes de armar la URL —
+// defensivo: fetch() ya es insensible a mayúsculas en el esquema, pero así
+// esta función nunca depende de esa particularidad del navegador.
 const ownerUrl = (firebaseDb, cuit, ptoVta) => {
-  const base = String(firebaseDb || '').replace(/\/+$/, '');
+  let base;
+  try {
+    base = normalizeFirebaseDatabaseURL(firebaseDb);
+  } catch {
+    base = String(firebaseDb || '').replace(/\/+$/, '');
+  }
   return `${base}/FACTURACION_OWNERS/${ownerKeyFor(cuit, ptoVta)}.json`;
 };
 

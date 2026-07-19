@@ -15,6 +15,7 @@ import { getCurrentLocalId } from '@/lib/firebase/core';
 import { uploadAfipFile } from '@/lib/firebase/storage';
 import { saveAfipConfigToFirebase, fetchAfipConfigFromFirebase } from '@/lib/api/afipConfigApi';
 import { useFacturacionOwnership } from '@/hooks/useFacturacionOwnership';
+import { normalizeFirebaseDatabaseURL } from '@/lib/utils/firebaseUrl';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -1026,10 +1027,34 @@ const FacturacionManager = () => {
   // ---------------------------------------------------------------------------
   // Guardar una cuenta (local + Storage + Firebase)
   // ---------------------------------------------------------------------------
-  const saveAccount = async (tipo, cuentaId, fields) => {
+  const saveAccount = async (tipo, cuentaId, rawFields) => {
     const f = fAPI();
     if (!f) return;
     const saveKey = cuentaId || 'ri';
+
+    // Normalizar firebaseDb ANTES de escribir nada (disco local + Firebase):
+    // recorta espacios y corrige el esquema (ej. "HTTPS://..." -> "https://...")
+    // para que .env, el chequeo de ownership del proceso principal y el motor
+    // reciban siempre una URL bien formada. Si el campo viene con datos pero
+    // no es una URL http/https válida, se corta el guardado con un error
+    // claro en vez de persistir un valor que rompería el arranque automático
+    // (causa raíz del bug de facturación de Canadá — ver electron/main.js,
+    // fetchFacturacionOwnerRemote).
+    let fields = rawFields;
+    if (rawFields.firebaseDb) {
+      try {
+        const normalized = normalizeFirebaseDatabaseURL(rawFields.firebaseDb);
+        fields = { ...rawFields, firebaseDb: normalized };
+      } catch (e) {
+        toast({
+          variant: 'destructive',
+          title: 'URL de Firebase inválida',
+          description: `"${rawFields.firebaseDb}" no es una URL http/https válida: ${e.message}`,
+        });
+        return;
+      }
+    }
+
     setSavingKey(saveKey);
     try {
       const localId = getCurrentLocalId();
