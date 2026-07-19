@@ -1,8 +1,8 @@
 {
   "latest": "1.3.57",
   "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.57%2FRecepcion-de-Pedidos-Setup-1.3.57.exe?alt=media",
-  "sha256": "805c446fe19d40ba1b00663ca2c5df97dc109b33694d30f4b7b18d71f978b075",
-  "size": 125188706,
+  "sha256": "8c07707fc651e22ac9f8f38ccbcc8c5b63e8b880de352220ed5fb4a7208231dd",
+  "size": 125181258,
   "mandatory": false,
   "releaseDate": "2026-07-19",
   "notes": "Versión 1.3.57: corrige la facturación automática que no arrancaba sola en Canadá al iniciar la app (esquema HTTPS:// en mayúsculas guardado en la configuración rompía la verificación de ownership del proceso principal). Ver notas completas en storage-componentes/software/1.3.57/version.json."

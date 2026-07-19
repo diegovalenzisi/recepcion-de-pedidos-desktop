@@ -28,6 +28,8 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/**/__tests__/**",
+      "!electron/**/*.test.js",
       "package.json"
     ],
     "extraResources": [
