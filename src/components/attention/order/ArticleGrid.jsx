@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef, memo } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
-import { getCachedImage } from '@/lib/cache/imageCache';
+import { useArticleImage } from '@/hooks/useArticleImage';
 
 // Memoized ArticleCard to prevent unnecessary re-renders when parent state changes
 const ArticleCard = memo(({ article, onArticleClick, isCompact }) => {
-  // Si la imagen ya fue vista/cacheada (memoria o localStorage), arrancar en "cargada"
-  // para no mostrar el skeleton ni el parpadeo al volver a montar la tarjeta (cambio de
-  // departamento). Solo afecta el estado inicial; onLoad sigue marcando la carga real.
-  const [imgLoaded, setImgLoaded] = useState(() => !!getCachedImage(article.foto));
+  // Imagen con caché local (stale-while-revalidate): muestra la copia local al
+  // instante (dlvimg://) o la remota/placeholder mientras se resuelve, y se
+  // actualiza sola si Firebase tiene una versión nueva. Ver useArticleImage.
+  const { src: imageSrc, onError: onImageError } = useArticleImage(article);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const imgRef = useRef(null);
 
   const cardPadding = isCompact ? "p-2" : "p-3";
@@ -38,14 +39,15 @@ const ArticleCard = memo(({ article, onArticleClick, isCompact }) => {
         {!imgLoaded && (
           <Skeleton className="absolute inset-0 w-full h-full rounded-lg" />
         )}
-        <img 
+        <img
           ref={imgRef}
           alt={article.nombre}
-          className={`w-full h-full object-cover rounded-lg transition-opacity duration-300 ${imgLoaded ? 'opacity-100' : 'opacity-0'}`} 
-          src={article.foto || "https://via.placeholder.com/150"} 
+          className={`w-full h-full object-cover rounded-lg transition-opacity duration-300 ${imgLoaded ? 'opacity-100' : 'opacity-0'}`}
+          src={imageSrc}
           loading={isPriorityItem ? "eager" : "lazy"}
           decoding="async"
           onLoad={() => setImgLoaded(true)}
+          onError={() => { onImageError(); setImgLoaded(true); }}
         />
       </div>
       

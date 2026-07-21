@@ -17,6 +17,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { getOperationalDate, formatDateToDDMMAAAA } from '@/lib/utils';
 import { savePrepaymentForApp } from '@/lib/api/prepaymentApi';
 import { preloadImage } from '@/lib/cache/imageCache';
+import { warmArticleImages, sweepArticleImageOrphans } from '@/lib/cache/articleImageCache';
 import { useStockVerification } from '@/hooks/useStockVerification';
 import { usePromotionStockAutomation } from '@/hooks/usePromotionStockAutomation';
 
@@ -140,14 +141,15 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         preloadImage(priorityArticle.foto).catch(e => console.warn("Failed to preload priority image", e));
       }
 
-      // Fase A: precarga liviana en segundo plano de las imágenes de todos los artículos,
-      // para que al alternar entre departamentos ya estén en la caché del navegador y no
-      // reaparezca el skeleton. Fire-and-forget: no bloquea la pantalla ni espera a que
-      // terminen. El navegador limita la concurrencia por host, así que no satura la red.
-      fetchedArticles
-        .map(a => a && a.foto)
-        .filter(Boolean)
-        .forEach(url => { preloadImage(url).catch(() => {}); });
+      // Precalentado del caché LOCAL de imágenes con concurrencia limitada
+      // (requisito 20): NO dispara metadata+descargas de todo el catálogo a la
+      // vez. Las tarjetas visibles resuelven por su cuenta al montarse y se
+      // deduplican con esto. Fire-and-forget: no bloquea la pantalla.
+      warmArticleImages(fetchedArticles, { concurrency: 4 }).catch(() => {});
+
+      // Limpieza de huérfanos: SOLO acá, con el catálogo completo y confirmado
+      // recién cargado (requisito 16/17). Nunca por render ni por artículo.
+      sweepArticleImageOrphans(fetchedArticles).catch(() => {});
 
     } catch (err) {
       setError('No se pudieron cargar los datos. Inténtelo de nuevo.');

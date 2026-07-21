@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Package, Edit, Trash2, ImageOff, Link2, BookText, Copy, PlusCircle, MinusCircle } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useParentArticleStock } from '@/hooks/useParentArticleStock.js';
+import { useArticleImage } from '@/hooks/useArticleImage';
 import { normalizarStock, normalizarCosto } from '@/lib/api/ventaUtils';
 import { getAvailableUnits } from '@/lib/api/stockAvailability';
 import StockStatusBadge from './StockStatusBadge';
@@ -12,6 +13,8 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
 
   const heredadoDeId = (item.stock?.stockType === 'heredado' || item.stock?.heredadoDe) ? item.stock?.heredadoDe : null;
   const { stock: parentStock, loading: parentLoading, parentExists } = useParentArticleStock(heredadoDeId);
+  // Miniatura con caché local (misma lógica que la grilla de pedidos).
+  const { src: thumbSrc, onError: onThumbError } = useArticleImage(item);
 
   const getStockDisplay = () => {
     if (activeTab !== 'articulos') return null;
@@ -113,7 +116,7 @@ const TableRow = React.memo(({ item, index, activeTab, onEdit, onDelete, onDupli
         <>
           <td className="py-2 px-4 whitespace-nowrap">
             {item.foto ? (
-              <img src={item.foto} alt={item.nombre} className="h-10 w-10 rounded-md object-cover bg-gray-200" />
+              <img src={thumbSrc} alt={item.nombre} className="h-10 w-10 rounded-md object-cover bg-gray-200" onError={onThumbError} />
             ) : (
               <div className="h-10 w-10 rounded-md bg-gray-100 flex items-center justify-center">
                 <ImageOff size={20} className="text-gray-400" />

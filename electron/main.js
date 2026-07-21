@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, dialog, utilityProcess, Menu, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, utilityProcess, Menu, globalShortcut, protocol } = require('electron');
 
 // Permite que speechSynthesis y audio funcionen sin gesto de usuario al arranque.
 // Necesario para anunciar pagos pendientes al iniciar la app (Firebase listener + seenIds vacío).
@@ -13,8 +13,132 @@ const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStre
 const https = require('https');
 const http  = require('http');
 const { resolveRequestTransport, normalizeFirebaseDatabaseURL, classifyTransportError } = require('./lib/firebaseHttpTransport');
+const { createImageCacheService } = require('./lib/imageCacheService');
 
 const isDev = !app.isPackaged;
+
+// ---------------------------------------------------------------------------
+// Caché local de imágenes de artículos — esquema privilegiado dlvimg://
+// El registro del esquema DEBE ocurrir antes de app.ready (por eso está en el
+// top-level del módulo). Privilegios mínimos para poder cargar imágenes desde
+// <img src> en un contexto seguro: standard + secure + stream. No se habilita
+// fetch/CORS (no hace falta para <img>).
+// ---------------------------------------------------------------------------
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'dlvimg', privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false, stream: true } },
+]);
+
+let imageCacheService = null; // se instancia en app.whenReady (necesita userData)
+
+// httpGet para el servicio de caché: descarga con guardia de tamaño máximo,
+// sigue redirects (Firebase puede responder 302), y NUNCA bufferea más de
+// maxBytes (aborta la conexión si se excede). Reusa resolveRequestTransport
+// para elegir http/https por el parser estándar (nunca por texto).
+function dlvimgHttpGet(rawUrl, { maxBytes = 10 * 1024 * 1024, redirectsLeft = 4 } = {}) {
+  return new Promise((resolve, reject) => {
+    let transport;
+    try {
+      transport = resolveRequestTransport(rawUrl);
+    } catch (e) { reject(e); return; }
+    const req = transport.module.get(transport.url, (res) => {
+      const status = res.statusCode || 0;
+      // Redirect
+      if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) { reject(new Error('demasiados redirects')); return; }
+        const nextUrl = new URL(res.headers.location, transport.url).toString();
+        resolve(dlvimgHttpGet(nextUrl, { maxBytes, redirectsLeft: redirectsLeft - 1 }));
+        return;
+      }
+      const chunks = [];
+      let total = 0;
+      let aborted = false;
+      res.on('data', (chunk) => {
+        if (aborted) return;
+        total += chunk.length;
+        if (total > maxBytes) { // no bufferear de más
+          aborted = true;
+          req.destroy();
+          resolve({ status, buffer: Buffer.concat(chunks), contentType: res.headers['content-type'], headers: res.headers, truncated: true });
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        if (aborted) return;
+        resolve({ status, buffer: Buffer.concat(chunks), contentType: res.headers['content-type'], headers: res.headers });
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(new Error('timeout descargando imagen')); });
+  });
+}
+
+// Registra el handler del protocolo dlvimg:// y los IPC del caché de imágenes.
+// Debe llamarse DESPUÉS de app.ready.
+function setupImageCacheIPC() {
+  if (!imageCacheService) {
+    imageCacheService = createImageCacheService({
+      root: path.join(app.getPath('userData'), 'cache', 'article-images'),
+      httpGet: dlvimgHttpGet,
+      logger: { warn: (...a) => console.warn(...a), error: (...a) => console.error(...a), info: () => {} },
+    });
+  }
+
+  // Sirve SOLO archivos registrados en el manifiesto, dentro de la carpeta del
+  // local. resolveProtocolPath rechaza traversal / keys / locales inválidos.
+  protocol.handle('dlvimg', async (request) => {
+    try {
+      // dlvimg://{localId}/{key}
+      const u = new URL(request.url);
+      const localId = u.hostname;
+      const key = u.pathname.replace(/^\/+/, '');
+      const { path: filePath, contentType } = await imageCacheService.resolveProtocolPath(localId, key);
+      const data = await require('fs').promises.readFile(filePath);
+      return new Response(data, { status: 200, headers: { 'content-type': contentType, 'cache-control': 'no-cache' } });
+    } catch (e) {
+      // Nunca exponer detalles de ruta: solo un 404 controlado.
+      return new Response('', { status: 404 });
+    }
+  });
+
+  ipcMain.handle('image-cache:resolve-local', async (_e, { localId, bucket, objectPath }) => {
+    try {
+      const r = await imageCacheService.resolveLocal(localId, bucket, objectPath);
+      return { ok: true, key: r.key, cached: r.cached, protocolUrl: r.protocolUrl || null, entry: r.entry || null };
+    } catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
+  ipcMain.handle('image-cache:should-check', async (_e, { entry, force }) => {
+    try { return { ok: true, should: imageCacheService.shouldCheckMetadata(entry, { force }) }; }
+    catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
+  ipcMain.handle('image-cache:record-check', async (_e, { localId, bucket, objectPath, remoteMeta, downloadUrl }) => {
+    try { const r = await imageCacheService.recordMetadataCheck(localId, bucket, objectPath, remoteMeta, downloadUrl); return { ok: true, ...r }; }
+    catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
+  ipcMain.handle('image-cache:download', async (_e, { localId, bucket, objectPath, url, remoteMeta }) => {
+    try {
+      const r = await imageCacheService.download(localId, bucket, objectPath, { url, remoteMeta });
+      return { ok: true, protocolUrl: r.protocolUrl, key: r.key };
+    } catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
+  ipcMain.handle('image-cache:sweep', async (_e, { localId, validRefs, catalogComplete }) => {
+    try {
+      // El main calcula las keys (sha1 de bucket+objectPath) para no duplicar el
+      // hashing en el renderer y garantizar que coincidan exactamente.
+      const keys = new Set();
+      for (const r of (validRefs || [])) {
+        try { keys.add(imageCacheService.makeStableKey(r.bucket, r.objectPath)); } catch { /* ref inválida: se ignora */ }
+      }
+      const res = await imageCacheService.sweepOrphans(localId, keys, { catalogComplete });
+      return { ok: true, ...res };
+    } catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+}
 const BACKEND_PORT = 3001;
 
 // Node GENERAL — para uso futuro (no AFIP)
@@ -2863,6 +2987,7 @@ app.whenReady().then(() => {
   initMachineId();
   Menu.setApplicationMenu(null);
   setupIPC();
+  setupImageCacheIPC();
   // Reparar backend.env (del local activo) con private_key malformada ANTES de iniciar el backend
   const _bootLocal = getActiveLocalId();
   if (_bootLocal) {
