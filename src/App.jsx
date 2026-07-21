@@ -6,7 +6,9 @@ import { useToast } from '@/components/ui/use-toast';
 import { Settings, HeartHandshake, Loader2, Warehouse, CreditCard, Archive, Users as UsersIcon, LogOut, Receipt, FileText, FileSpreadsheet, Smartphone, PieChart, DatabaseZap, Globe } from 'lucide-react';
 import { permissionsList } from '@/config/permissions.js';
 import { useAuth } from '@/hooks/useAuth.jsx';
-import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp, getFirebaseUrl, getLocationSpecificDatabaseURL, getLocationSpecificProjectId } from '@/lib/firebase/core.js';
+import { getLocalId, setLocalId as saveLocalId, setFirebaseLocalId, initializeFirebaseApp, ensureFirebaseAppSync, getCurrentDatabaseOrThrow, markFirebaseSwitching, markFirebaseReady, markFirebaseError, getFirebaseUrl, getLocationSpecificDatabaseURL, getLocationSpecificProjectId } from '@/lib/firebase/core.js';
+import { ref, onValue, off } from 'firebase/database';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness.js';
 import { fetchSettings, listenToChanges } from '@/lib/api/settingsApi.js';
 import { checkOpenShift, createNewShift } from '@/lib/api/cash/index.js';
 import UpdateNotification from '@/components/UpdateNotification.jsx';
@@ -23,7 +25,17 @@ import VoicePaymentAlertWidget from '@/components/VoicePaymentAlertWidget.jsx';
 import { useStockStatus, StockStatusContext } from '@/hooks/useStockStatus.js';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OutOfStockModal from '@/components/management/OutOfStockModal.jsx';
-import { clearCache } from '@/lib/cache/cacheManager.js';
+import { clearSafeLocalCache } from '@/lib/cache/cacheManager.js';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import ErrorBoundary from '@/components/ErrorBoundary.jsx';
 import { perfMonitor } from '@/lib/performanceMonitor';
 import InstallPrompt from '@/components/InstallPrompt.jsx';
@@ -123,9 +135,53 @@ const LoadingFallback = () => (
     </div>
 );
 
+// Se muestra durante un cambio de local EN VIVO (ya hubo una carga exitosa
+// antes) — distinto del spinner genérico de LoadingFallback, que es para la
+// primera carga. Mientras esta pantalla está activa, Firebase está entre
+// "borrar la app del local anterior" y "crear/confirmar la del nuevo": ningún
+// listener ni acción de usuario puede leer/escribir (getCurrentDatabaseOrThrow
+// lo rechaza), así que no tiene sentido mostrar la app operativa todavía.
+const SwitchingLocalScreen = () => (
+    <div className="flex flex-col items-center justify-center h-screen w-full bg-background gap-4">
+        <Loader2 className="h-16 w-16 animate-spin text-primary" />
+        <p className="text-lg font-medium text-muted-foreground">Cambiando de local…</p>
+    </div>
+);
+
+// Pantalla recuperable si initializeFirebaseApp() falla (sin red, config
+// inválida, etc.) — nunca se deja la app a medio cargar ni se muestra la UI
+// operativa sin Firebase listo.
+const FirebaseRetryScreen = ({ message, onRetry }) => (
+    <div className="flex flex-col items-center justify-center h-screen w-full bg-background gap-4 px-6 text-center">
+        <p className="text-lg font-semibold text-red-600">No se pudo conectar con el local</p>
+        <p className="text-sm text-muted-foreground max-w-md">{message}</p>
+        <button
+          onClick={onRetry}
+          className="mt-2 px-5 py-2.5 rounded-md bg-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity"
+        >
+          Reintentar
+        </button>
+    </div>
+);
+
+// sessionStorage (no localStorage): flag de un solo uso para mostrar el aviso
+// de éxito DESPUÉS del window.location.reload() que dispara "Limpiar Caché
+// Local". Vive en sessionStorage porque solo importa para este reinicio, en
+// esta pestaña/ventana — no debe sobrevivir a un cierre real de la app.
+const CACHE_CLEAR_SUCCESS_FLAG = 'cacheClearSuccess';
+
 function AppContent() {
   const [localId, setLocalId] = useState(() => getLocalId());
   const [loading, setLoading] = useState(true);
+  // Estado central de Firebase (ver core.js): switching/ready/error. Distinto
+  // de `loading` -- éste último abarca TODA la carga inicial (settings,
+  // turno, etc.), firebaseReadiness es específicamente "¿la app/database del
+  // local actual están listas para usarse?".
+  const firebaseReadiness = useFirebaseReadiness();
+  const hasBeenReadyOnceRef = useRef(false);
+  useEffect(() => {
+    if (firebaseReadiness.ready) hasBeenReadyOnceRef.current = true;
+  }, [firebaseReadiness.ready]);
   const [font, setFont] = useState('font-sans');
   const [settings, setSettings] = useState(null);
   const [needsNewShift, setNeedsNewShift] = useState(false);
@@ -165,11 +221,13 @@ function AppContent() {
   } = useMpBackendStatus();
 
   const [clearingCache, setClearingCache] = useState(false);
-  
+  const [clearCacheConfirmOpen, setClearCacheConfirmOpen] = useState(false);
+  const [checkingConnection, setCheckingConnection] = useState(false);
+
   // ÚNICA instancia de useStockStatus en toda la app. Se comparte por contexto
   // (StockStatusContext) para que StockPage NO vuelva a montar el hook ni duplique
   // los listeners de ARTICULOS/MATERIA_PRIMA.
-  const stockStatus = useStockStatus();
+  const stockStatus = useStockStatus(localId);
   const {
     hasOutOfStock,
     hasLowStock,
@@ -385,6 +443,21 @@ function AppContent() {
     return () => perfMonitor.endTimer('app-load');
   }, []);
 
+  // Aviso de éxito de "Limpiar Caché Local" — se muestra una sola vez, en el
+  // primer render DESPUÉS del reinicio que dispara ese botón (el toast de antes
+  // del reload se pierde con la página; este se lee de sessionStorage y se borra
+  // al mostrarse, así no vuelve a aparecer en reinicios posteriores).
+  useEffect(() => {
+    if (sessionStorage.getItem(CACHE_CLEAR_SUCCESS_FLAG) === '1') {
+      sessionStorage.removeItem(CACHE_CLEAR_SUCCESS_FLAG);
+      toast({
+        title: 'Aplicación actualizada',
+        description: 'Se borraron los archivos temporales y se reinició la aplicación. No se vieron afectados los pedidos ni la configuración.',
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const applySettings = useCallback((newSettings) => {
     if (!newSettings) return;
     setSettings(prevSettings => ({ ...prevSettings, ...newSettings }));
@@ -409,10 +482,26 @@ function AppContent() {
         return;
     }
     setLoading(true);
+    // Marca el inicio de la ventana de "cambiando de local": desde acá hasta
+    // markFirebaseReady()/markFirebaseError(), getCurrentDatabaseOrThrow()
+    // (usado por los listeners persistentes y por acciones como "Actualizar
+    // aplicación") rechaza cualquier lectura/escritura — nunca contra el
+    // local anterior ni contra uno a medio inicializar.
+    markFirebaseSwitching();
     try {
         perfMonitor.startTimer('initial-data-load');
         setFirebaseLocalId(id);
         setAccountsLocalId(id);
+        // Crear la app Firebase '[DEFAULT]' PRIMERO, de forma sincrónica, antes de
+        // cualquier await no relacionado con Firebase (IPC de Electron, etc.). Antes
+        // initializeFirebaseApp() (async) se llamaba último, después de dos awaits de
+        // IPC — dejaba una ventana real en la que localId ya estaba seteado pero la
+        // app default todavía no existía: cualquier componente montado en ese momento
+        // (ej. LocalStatusIndicator, que escucha .info/connected sin esperar a
+        // "loading") podía llamar getDatabase() y explotar con "No Firebase App
+        // '[DEFAULT]' has been created". ensureFirebaseAppSync() es sincrónico
+        // (initializeApp() en sí no requiere await) y cierra esa ventana por completo.
+        ensureFirebaseAppSync(id);
         // Fija el local activo en el proceso principal ANTES de cualquier lectura de
         // facturación por local (así main lee/escribe userData/facturacion/locales/{id}).
         try { await window.electronAPI?.setActiveLocal?.(id); } catch { /* no-electron o error transitorio */ }
@@ -426,13 +515,23 @@ function AppContent() {
             paymentsPath: `${id}/PAGOS_CONFIRMADOS`,
           });
         } catch { /* no-electron o error transitorio */ }
-        await initializeFirebaseApp();
+        // Sigue existiendo: maneja además el caso de CAMBIAR de local (borra la app
+        // anterior si la config difiere). Con la app ya creada arriba, acá normalmente
+        // solo la devuelve sin trabajo adicional.
+        const app = await initializeFirebaseApp();
+        if (!app) {
+          // Pantalla de Reintentar (ver render más abajo) — no sigue con
+          // settings/turno de una Firebase que no terminó de inicializar.
+          markFirebaseError(new Error('No se pudo inicializar Firebase para este local. Verificá la conexión e intentá de nuevo.'));
+          return;
+        }
+        markFirebaseReady();
 
         const fetchedSettings = await fetchSettings();
         if (fetchedSettings) {
           applySettings(fetchedSettings);
         }
-        
+
         const shiftData = await checkOpenShift();
         setCurrentShift(shiftData);
         setNeedsNewShift(!shiftData);
@@ -456,7 +555,11 @@ function AppContent() {
   }, [localId, loadInitialData]);
 
   useEffect(() => {
-    if (localId && user) {
+    // firebaseReadiness.ready en las deps: al cambiar de local esto pasa por
+    // false (se desuscribe YA, antes de que la app vieja se borre) y vuelve a
+    // true recién cuando el nuevo local está confirmado (se suscribe de
+    // nuevo ahí, nunca contra el local anterior).
+    if (localId && user && firebaseReadiness.ready) {
         const unsubscribe = listenToChanges('CONFIGURACION', (newSettings) => {
             if (newSettings) {
                 applySettings(newSettings);
@@ -464,7 +567,7 @@ function AppContent() {
         });
         return () => unsubscribe();
     }
-  }, [localId, user, applySettings]);
+  }, [localId, user, applySettings, firebaseReadiness.ready]);
 
   const handleSetupComplete = (newLocalId, localName) => {
     saveLocalId(newLocalId);
@@ -494,11 +597,85 @@ function AppContent() {
     setNeedsNewShift(!newShift);
   };
 
+  // Confirma la conexión REAL con Firebase antes de recargar. navigator.onLine
+  // no alcanza (puede dar true con la red local activa aunque RTDB no responda
+  // — ej. wifi conectado pero sin salida a internet, o el servidor caído), así
+  // que además se pregunta el estado real vía .info/connected. Este proyecto
+  // no tiene un contador de escrituras pendientes (se buscó explícitamente:
+  // no existe ninguna cola de "operaciones offline" — las escrituras van
+  // directo al SDK de RTDB, que las retiene en memoria mientras no hay red);
+  // no se inventa uno acá. Ante cualquier duda (sin red, sin respuesta del
+  // servidor, o sin poder determinar el estado) se cancela.
+  const checkFirebaseReallyConnected = () => new Promise((resolve) => {
+    let db;
+    try {
+      // getCurrentDatabaseOrThrow() usa la app/database del local ACTUAL
+      // (nunca la de un local anterior) y falla rápido si Firebase está
+      // cambiando de local o todavía no está listo.
+      db = getCurrentDatabaseOrThrow();
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const connectedRef = ref(db, '.info/connected');
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      off(connectedRef, 'value', listener);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => finish(false), 4000);
+    const listener = onValue(
+      connectedRef,
+      (snap) => { clearTimeout(timer); finish(snap.val() === true); },
+      () => { clearTimeout(timer); finish(false); }
+    );
+  });
+
+  // Pide confirmación antes de actualizar. Se cancela (sin abrir el diálogo)
+  // si no se puede confirmar la conexión real con el servidor.
+  const requestClearCache = async () => {
+    if (!navigator.onLine) {
+      toast({
+        variant: 'destructive',
+        title: 'Sin conexión',
+        description: 'No se pudo confirmar la conexión con el servidor. Para evitar perder cambios pendientes, la actualización fue cancelada.',
+      });
+      return;
+    }
+    setCheckingConnection(true);
+    const reallyConnected = await checkFirebaseReallyConnected();
+    setCheckingConnection(false);
+    if (!reallyConnected) {
+      toast({
+        variant: 'destructive',
+        title: 'Sin conexión',
+        description: 'No se pudo confirmar la conexión con el servidor. Para evitar perder cambios pendientes, la actualización fue cancelada.',
+      });
+      return;
+    }
+    setClearCacheConfirmOpen(true);
+  };
+
+  // Borra SOLO datos temporales reconstruibles (ver clearSafeLocalCache) y reinicia.
+  // No toca localId, configuración del local, sesión, pedidos ni facturación.
   const handleClearCache = async () => {
+    setClearCacheConfirmOpen(false);
     setClearingCache(true);
-    await clearCache();
-    toast({ title: 'Caché limpiada', description: 'La memoria caché local ha sido vaciada.' });
-    setClearingCache(false);
+    try {
+      await clearSafeLocalCache();
+      // Se lee una sola vez después del reinicio (ver useEffect más abajo) para
+      // mostrar el mensaje de éxito ya con la app recargada, no antes de perderla.
+      sessionStorage.setItem(CACHE_CLEAR_SUCCESS_FLAG, '1');
+    } catch (error) {
+      console.error('Error al limpiar la caché local:', error);
+      setClearingCache(false);
+      toast({ variant: 'destructive', title: 'Error', description: 'No se pudo actualizar la aplicación. Probá de nuevo.' });
+      return;
+    }
     window.location.reload();
   };
   
@@ -521,7 +698,24 @@ function AppContent() {
     );
   }
 
-  if (loading || authLoading) {
+  // Firebase falló al inicializar (sin red, config inválida, etc.): pantalla
+  // recuperable con Reintentar — nunca se sigue a una UI operativa a medias.
+  if (firebaseReadiness.error && localId) {
+    return (
+      <FirebaseRetryScreen
+        message={firebaseReadiness.error}
+        onRetry={() => loadInitialData(localId)}
+      />
+    );
+  }
+
+  if (loading || authLoading || (localId && firebaseReadiness.switching)) {
+    // "Cambiando de local…" solo si ya hubo una carga exitosa antes (esto es
+    // un cambio en vivo); si no, es la primera carga y alcanza con el spinner
+    // genérico — mostrar "cambiando de local" ahí sería confuso/incorrecto.
+    if (hasBeenReadyOnceRef.current) {
+      return <SwitchingLocalScreen />;
+    }
     return <LoadingFallback />;
   }
 
@@ -641,13 +835,28 @@ function AppContent() {
                         refreshBackend={refreshMpBackend}
                     />
                     <button
-                        onClick={handleClearCache}
-                        disabled={clearingCache}
+                        onClick={requestClearCache}
+                        disabled={clearingCache || checkingConnection}
                         className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
-                        title="Limpiar Caché Local"
+                        title="Borra archivos temporales y vuelve a descargar la versión actual."
                     >
-                        {clearingCache ? <Loader2 size={16} className="animate-spin"/> : <DatabaseZap size={16} />}
+                        {(clearingCache || checkingConnection) ? <Loader2 size={16} className="animate-spin"/> : <DatabaseZap size={16} />}
                     </button>
+                    <AlertDialog open={clearCacheConfirmOpen} onOpenChange={setClearCacheConfirmOpen}>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>¿Actualizar aplicación?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Se eliminarán archivos temporales y se volverá a cargar la aplicación.
+                            No se eliminarán pedidos, usuarios ni configuraciones.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                          <AlertDialogAction onClick={handleClearCache}>Actualizar y reiniciar</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                     <button
                       onClick={logout}
                       className="px-3 py-2 text-sm font-medium flex items-center space-x-1.5 rounded-md transition-colors duration-200 text-gray-600 hover:bg-red-500/20 hover:text-red-600 flex-shrink-0"

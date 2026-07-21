@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { getDatabase, ref, onValue, get } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { ref, onValue, get } from 'firebase/database';
+import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 // Cache to prevent excessive reads for the same parentId across multiple rows
 const stockCache = {};
@@ -12,14 +13,14 @@ const stockCache = {};
  */
 export const fetchParentArticleStock = async (parentId) => {
     if (!parentId) return { stock: null, parentExists: false };
-    
+
     try {
         const localId = getCurrentLocalId();
         if (!localId) return { stock: null, parentExists: false };
-        
-        const db = getDatabase();
+
+        const db = getCurrentDatabaseOrThrow(localId);
         const parentRef = ref(db, `${localId}/ARTICULOS/${parentId}`);
-        
+
         const snapshot = await get(parentRef);
         if (snapshot.exists()) {
             const data = snapshot.val();
@@ -44,6 +45,10 @@ export const useParentArticleStock = (parentId) => {
         error: null,
         parentExists: stockCache[parentId]?.exists !== undefined ? stockCache[parentId].exists : false
     });
+    // firebaseReady en las deps del efecto: se desuscribe apenas empieza un
+    // cambio de local (antes de que la app vieja se borre) y solo vuelve a
+    // suscribirse cuando el nuevo local está confirmado.
+    const { ready: firebaseReady } = useFirebaseReadiness();
 
     useEffect(() => {
         if (!parentId) {
@@ -52,12 +57,18 @@ export const useParentArticleStock = (parentId) => {
         }
 
         const localId = getCurrentLocalId();
-        if (!localId) {
-            setState(s => ({ ...s, loading: false, error: 'No local ID configured' }));
+        if (!localId || !firebaseReady) {
+            setState(s => ({ ...s, loading: false, error: !localId ? 'No local ID configured' : null }));
             return;
         }
 
-        const db = getDatabase();
+        let db;
+        try {
+            db = getCurrentDatabaseOrThrow(localId);
+        } catch (e) {
+            setState(s => ({ ...s, loading: false, error: e.message }));
+            return;
+        }
         const parentRef = ref(db, `${localId}/ARTICULOS/${parentId}`);
 
         const unsubscribe = onValue(parentRef, (snapshot) => {
@@ -89,7 +100,7 @@ export const useParentArticleStock = (parentId) => {
         });
 
         return () => unsubscribe();
-    }, [parentId]);
+    }, [parentId, firebaseReady]);
 
     return state;
 };

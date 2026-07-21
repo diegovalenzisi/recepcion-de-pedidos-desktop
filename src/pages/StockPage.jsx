@@ -25,6 +25,7 @@ import {
   listenToManagementData
 } from '@/lib/api/managementApi.js';
 import { allTabsConfig } from '@/components/management/stockTabsConfig.js';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 /**
  * Detecta el tipo de stock de un artículo con compatibilidad hacia atrás.
@@ -78,6 +79,7 @@ function StockPage({ userPermissions, userRole }) {
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
   const [mainView, setMainView] = useState('stock'); // 'stock' or 'automation'
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   const { 
     outOfStockCount, lowStockCount,
@@ -109,6 +111,10 @@ function StockPage({ userPermissions, userRole }) {
   }, [visibleTabs, activeTab]);
 
   useEffect(() => {
+    if (!firebaseReady) {
+        return undefined;
+    }
+
     setIsLoading(true);
     const unsubs = allTabsConfig.map(tab => {
         return listenToManagementData(tab.id, (updatedData) => {
@@ -131,7 +137,7 @@ function StockPage({ userPermissions, userRole }) {
     return () => {
         unsubs.forEach(unsub => unsub());
     };
-  }, [toast]);
+  }, [toast, firebaseReady]);
 
   const hasFullAccessToCurrentTab = useMemo(() => {
       if (userRole === 'dueño' || userPermissions.stock) return true;

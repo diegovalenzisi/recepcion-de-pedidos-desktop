@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, set, push, runTransaction, update } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 
 const ahora = () => {
   const now = new Date();
@@ -25,7 +25,8 @@ export const registrarComision = async ({
 }) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const db = getDatabase();
+  const op = beginFirebaseOperation(localId);
+  const db = op.getDatabaseOrAbort();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);
 
@@ -38,7 +39,7 @@ export const registrarComision = async ({
   console.log(`[COMISION] idVenta=${idVenta} yaExiste=false genera=true comision=${comisionGenerada}`);
 
   // Incrementar total acumulado histórico en forma atómica
-  const totalRef = ref(db, `${localId}/COMISIONES/TOTALES/totalAcumulado`);
+  const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   const { committed, snapshot: totalSnap } = await runTransaction(totalRef, (current) => {
     return (current || 0) + comisionGenerada;
   });
@@ -47,7 +48,9 @@ export const registrarComision = async ({
 
   const { fecha, hora } = ahora();
 
-  await set(registroRef, {
+  // Revalida antes del set() definitivo: la transacción de arriba fue un await real.
+  const freshRegistroRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO/${idVenta}`);
+  await set(freshRegistroRef, {
     idVenta: String(idVenta),
     fecha,
     hora,
@@ -71,7 +74,8 @@ export const registrarComision = async ({
 export const registrarPagoComision = async (montoPago, responsable = 'Sistema') => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const db = getDatabase();
+  const op = beginFirebaseOperation(localId);
+  const db = op.getDatabaseOrAbort();
 
   const snap = await get(ref(db, `${localId}/COMISIONES/REGISTRO`));
   if (!snap.exists()) return;
@@ -139,11 +143,17 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema') 
 
   if (registrosPagados.length === 0) return;
 
+  // Revalida antes de las dos escrituras definitivas: el get() de arriba fue
+  // un await real. Se reutiliza nuevoPagoRef (su key ya se usó en `updates`
+  // más arriba) pero re-derivada sobre una database revalidada.
+  const freshDb = op.getDatabaseOrAbort();
+  const freshPagoRef = ref(freshDb, `${localId}/COMISIONES/PAGOS/${idPagoComision}`);
+
   // Aplicar todas las actualizaciones de estado en un solo write atómico
-  await update(ref(db), updates);
+  await update(ref(freshDb), updates);
 
   // Guardar registro del pago
-  await set(nuevoPagoRef, {
+  await set(freshPagoRef, {
     fechaPago,
     horaPago,
     montoPago,
@@ -160,7 +170,8 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema') 
 export const cancelarComision = async (idVenta) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const db = getDatabase();
+  const op = beginFirebaseOperation(localId);
+  const db = op.getDatabaseOrAbort();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);
   const snap = await get(registroRef);
@@ -174,14 +185,15 @@ export const cancelarComision = async (idVenta) => {
 
   const comisionGenerada = registro.comisionGenerada || 0;
 
-  // Descontar del total acumulado
-  const totalRef = ref(db, `${localId}/COMISIONES/TOTALES/totalAcumulado`);
+  // Descontar del total acumulado. Revalida antes: el get() de arriba fue un await real.
+  const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   await runTransaction(totalRef, (current) => {
     return Math.max(0, (current || 0) - comisionGenerada);
   });
 
   const { fecha, hora } = ahora();
-  await update(registroRef, {
+  const freshRegistroRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO/${idVenta}`);
+  await update(freshRegistroRef, {
     estado: 'cancelada',
     fechaCancelacion: fecha,
     horaCancelacion: hora,

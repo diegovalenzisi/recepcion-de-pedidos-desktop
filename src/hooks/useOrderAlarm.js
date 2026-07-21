@@ -2,8 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useToast } from '@/components/ui/use-toast';
 import { listenToOrders, updateOrder } from '@/lib/api/ordersApi';
 import { fetchAudioSetting, fetchOrderSoundVolume } from '@/lib/api/settingsApi';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 export const useOrderAlarm = (isUserLoggedIn) => {
+  const { ready: firebaseReady } = useFirebaseReadiness();
   const [alarmingOrderIds, setAlarmingOrderIds] = useState([]);
   const audioRef = useRef(null);
   const alarmIntervalRef = useRef(null);
@@ -86,7 +88,7 @@ export const useOrderAlarm = (isUserLoggedIn) => {
   }, [stopAlarm, toast]);
 
   useEffect(() => {
-    if (!isUserLoggedIn) return;
+    if (!isUserLoggedIn || !firebaseReady) return;
 
     const unsubscribe = listenToOrders((fetchedOrders) => {
       // FIX: Added optional chaining and existence checks to prevent "Cannot read properties of undefined"
@@ -112,7 +114,7 @@ export const useOrderAlarm = (isUserLoggedIn) => {
     });
 
     return () => unsubscribe();
-  }, [isUserLoggedIn, toast]);
+  }, [isUserLoggedIn, toast, firebaseReady]);
 
   useEffect(() => {
     if (alarmingOrderIds.length > 0) {

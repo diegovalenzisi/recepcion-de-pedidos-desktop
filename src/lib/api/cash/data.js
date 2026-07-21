@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, get, query, orderByChild, equalTo, onValue, off } from 'firebase/database';
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase, parseDateString } from '@/lib/utils';
 
 export const getLatestCashRegisterDate = async () => {
@@ -376,9 +376,16 @@ export const listenToCashData = (shift, callback) => {
     if (!shift || !shift.id || !shift.date) return () => {};
 
     checkLocalId();
-    const db = getDatabase();
+    let db;
+    try {
+        db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+        console.warn('[listenToCashData] Firebase todavía no está listo, no se suscribe:', e.message);
+        return () => {};
+    }
     const localId = getCurrentDatabasePath();
-    
+
+
     const cajaPath = `${localId}/CAJAS/${shift.date}/turnos/${shift.id}`;
     console.log(`[CAJA] Fecha usada: ${shift.date}`);
     console.log(`[CAJA] Leyendo ruta: ${cajaPath}`);
@@ -398,7 +405,13 @@ export const listenToSales = (shift, callback) => {
     if (!shift || !shift.id || !shift.date) return () => {};
 
     checkLocalId();
-    const db = getDatabase();
+    let db;
+    try {
+        db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+        console.warn('[listenToSales] Firebase todavía no está listo, no se suscribe:', e.message);
+        return () => {};
+    }
     const localId = getCurrentDatabasePath();
 
     console.log(`[data.js] Listening to sales data for Shift: ${shift.id}, Date: ${shift.date}`);

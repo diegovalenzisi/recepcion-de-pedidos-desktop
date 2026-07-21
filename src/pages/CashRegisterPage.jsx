@@ -27,6 +27,7 @@ import CashRegisterSales from '@/components/cash/CashRegisterSales.jsx';
 import { formatDateForFirebase, parseDateString, getLocalTodayDate } from '@/lib/utils.js';
 import { useAsyncEffect } from '@/hooks/useAsyncEffect.js';
 import ErrorBoundary from '@/components/ErrorBoundary.jsx';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, userPermissions, settings, isModal, onClose }) {
   // Fecha de la pantalla de caja: si hay un turno abierto, se usa la fecha de ESA caja; si no,
@@ -47,6 +48,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
   const [isExportModalOpen, setExportModalOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   const hasFullAccess = userPermissions.cajas;
   const canManageFund = userPermissions.cajas_gestionar_fondo;
@@ -103,7 +105,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
     setCashData(null);
     setSales([]);
 
-    if (!selectedShift) {
+    if (!selectedShift || !firebaseReady) {
         setLoading(false);
         return;
     }
@@ -155,7 +157,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
         cashUnsub();
         salesUnsub();
     };
-  }, [selectedShift, toast]);
+  }, [selectedShift, toast, firebaseReady]);
 
   const handleShiftClosed = (newShift) => {
     onShiftChange(newShift);

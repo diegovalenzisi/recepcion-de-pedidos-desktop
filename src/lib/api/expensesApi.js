@@ -1,11 +1,11 @@
 import { getDatabase, ref, get, set, push, remove, runTransaction, onValue } from 'firebase/database';
-import { getFirebaseUrl, checkLocalId, getCurrentDatabasePath } from '@/lib/firebase/core';
+import { getFirebaseUrl, checkLocalId, getCurrentDatabasePath, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { format } from 'date-fns';
 
 const getShiftExpensesRef = (shiftDate, shiftId, path = '') => {
-    const db = getDatabase();
     const localId = getCurrentDatabasePath();
     if (!localId) throw new Error("Local ID no está configurado.");
+    const db = getCurrentDatabaseOrThrow(localId);
     return ref(db, `${localId}/CAJAS/${shiftDate}/turnos/${shiftId}/gastos/${path}`);
 };
 
@@ -25,26 +25,30 @@ export const addExpenseToShift = async (shift, expenseData) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
     if (!shift || !shift.id || !shift.date) {
         throw new Error("Datos del turno inválidos.");
     }
 
     const expenseId = await getNextExpenseId(db, LOCAL_ID);
-    
+
     // Create a copy to modify
     const cleanExpenseData = { ...expenseData };
     // Ensure 'fecha' is not part of the object saved to the database.
     delete cleanExpenseData.fecha;
 
-    const expenseWithId = { 
+    const expenseWithId = {
         ...cleanExpenseData,
-        id: expenseId, 
+        id: expenseId,
         fechaCaja: shift.date,
         empleado: expenseData.empleado || 'No especificado'
     };
 
+    // Revalida antes del PUT definitivo: getNextExpenseId() de arriba hizo su
+    // propia transacción (await real).
+    op.getDatabaseOrAbort();
     const expensePath = `${API_URL}/${LOCAL_ID}/CAJAS/${shift.date}/turnos/${shift.id}/gastos/${expenseId}.json`;
 
     const response = await fetch(expensePath, {
@@ -83,7 +87,14 @@ export const listenToShiftExpenses = (shift, callback) => {
         callback([]);
         return () => {};
     }
-    const expensesRef = getShiftExpensesRef(shift.date, shift.id);
+    let expensesRef;
+    try {
+        expensesRef = getShiftExpensesRef(shift.date, shift.id);
+    } catch (e) {
+        console.warn('[listenToShiftExpenses] Firebase todavía no está listo, no se suscribe:', e.message);
+        callback([]);
+        return () => {};
+    }
     const unsubscribe = onValue(expensesRef, (snapshot) => {
         const expensesData = snapshot.val();
         if (expensesData) {

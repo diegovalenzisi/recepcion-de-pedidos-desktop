@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 import {
   listenToPaymentConfirmations,
   markPaymentAsAnnounced,
@@ -83,6 +84,7 @@ const selectBestSpanishVoice = () => {
 };
 
 export const useVoicePaymentAlerts = (isUserLoggedIn, activePaymentPath = null) => {
+  const { ready: firebaseReady } = useFirebaseReadiness();
   const [isEnabled, setIsEnabled]             = useState(getStoredEnabledPreference);
   const [isSoundUnlocked, setIsSoundUnlocked] = useState(getStoredUnlocked);
   const [lastAnnouncedPayment, setLastAnnouncedPayment] = useState(null);
@@ -241,7 +243,7 @@ export const useVoicePaymentAlerts = (isUserLoggedIn, activePaymentPath = null) 
   // cuando cambia isEnabled/isSoundUnlocked/selectedVoiceURI.
 
   useEffect(() => {
-    if (!isUserLoggedIn) {
+    if (!isUserLoggedIn || !firebaseReady) {
       setWatcherStatus('inactivo');
       return;
     }
@@ -301,7 +303,7 @@ export const useVoicePaymentAlerts = (isUserLoggedIn, activePaymentPath = null) 
       unsubscribe();
       setWatcherStatus('inactivo');
     };
-  }, [isUserLoggedIn, activePaymentPath]); // ← processQueue FUERA de deps
+  }, [isUserLoggedIn, activePaymentPath, firebaseReady]); // ← processQueue FUERA de deps
 
   // ── Watchdog: detecta cola atascada cada 15s ───────────────────────────────
 

@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, runTransaction, update, push, set } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
@@ -186,7 +186,12 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
 
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    // Un solo "op" para todo el procesamiento de stock: hay varios await
+    // reales (lock, lecturas de artículos/materia prima, reporte) antes de
+    // las transacciones de stock, y más awaits (esas mismas transacciones)
+    // antes del push de cada movimiento y del markTransactionAsCompleted final.
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
     if (referenceId) {
         const lockAcquired = await acquireTransactionLock(db, LOCAL_ID, referenceId);
@@ -233,7 +238,9 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
         });
 
         if (Object.keys(impactMap).length > 0) {
-            await saveProcessReport(db, LOCAL_ID, impactMap, articlesData, materiaPrimaData, source, referenceId);
+            // Revalida antes del set() del reporte: el Promise.all(get) de
+            // arriba fue un await real.
+            await saveProcessReport(op.getDatabaseOrAbort(), LOCAL_ID, impactMap, articlesData, materiaPrimaData, source, referenceId);
         }
 
         const updatePromises = [];
@@ -241,14 +248,17 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
         const validationPromises = [];
         const operationalDate = getOperationalDate(new Date());
 
+        // Revalida antes de empezar las transacciones de stock: arriba hubo
+        // varios await reales (lock, lecturas, reporte).
+        const stockDb = op.getDatabaseOrAbort();
         for (const id in impactMap) {
             const { quantity, type } = impactMap[id];
-            
+
             const path = type === 'ARTICULO'
-                ? `${LOCAL_ID}/ARTICULOS/${id}/stock/propio` 
+                ? `${LOCAL_ID}/ARTICULOS/${id}/stock/propio`
                 : `${LOCAL_ID}/MATERIA_PRIMA/${id}/stock`;
-            
-            const itemRef = ref(db, path);
+
+            const itemRef = ref(stockDb, path);
             const amountToReduce = quantity;
 
             const transactionPromise = runTransaction(itemRef, (currentStock) => {
@@ -294,7 +304,9 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
                         motivo: source,
                         referenceId: referenceId
                     };
-                    const transactionsRef = ref(db, `${LOCAL_ID}/TRANSACCIONES_STOCK`);
+                    // Revalida antes del push() definitivo: la transacción de
+                    // stock de arriba fue un await real.
+                    const transactionsRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/TRANSACCIONES_STOCK`);
                     await push(transactionsRef, transaction);
                 }
             });
@@ -312,7 +324,8 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
         }
 
         if (referenceId) {
-            await markTransactionAsCompleted(db, LOCAL_ID, referenceId);
+            // Revalida antes del update() final del lock: arriba hubo varios await reales.
+            await markTransactionAsCompleted(op.getDatabaseOrAbort(), LOCAL_ID, referenceId);
         }
 
         return { success: true };

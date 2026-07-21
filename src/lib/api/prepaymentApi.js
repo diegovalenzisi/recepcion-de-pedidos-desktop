@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, push, set, get, runTransaction } from 'firebase/database';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { openWhatsApp } from '@/lib/whatsapp/whatsappHandler';
@@ -33,11 +33,12 @@ export const savePrepaymentForApp = async (appType, amount, currentShiftDate) =>
   const LOCAL_ID = getCurrentDatabasePath();
   if (!LOCAL_ID) throw new Error("Local ID no configurado");
 
-  const db = getDatabase();
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
   const dbType = `PREPAGO_${appType.toUpperCase()}`;
-  
+
   if (!currentShiftDate) throw new Error("currentShiftDate (DDMMAAAA) es requerido");
-  
+
   const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/${dbType}_${currentShiftDate}`);
   const { committed, snapshot } = await runTransaction(counterRef, (currentValue) => {
     return (currentValue || 0) + 1;
@@ -46,9 +47,10 @@ export const savePrepaymentForApp = async (appType, amount, currentShiftDate) =>
   if (!committed) {
     throw new Error("No se pudo generar el número de prepago.");
   }
-  
+
   const numero = snapshot.val();
-  const prepaymentsRef = ref(db, `${LOCAL_ID}/${dbType}/${currentShiftDate}/${numero}`);
+  // Revalida antes del set() definitivo: la transacción de arriba fue un await real.
+  const prepaymentsRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/${dbType}/${currentShiftDate}/${numero}`);
   
   const now = new Date();
   const hours = String(now.getHours()).padStart(2, '0');

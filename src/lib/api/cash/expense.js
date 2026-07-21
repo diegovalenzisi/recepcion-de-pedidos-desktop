@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, runTransaction } from 'firebase/database';
 
 const getNextExpenseId = async (db, localId) => {
@@ -17,19 +17,23 @@ export const addExpenseToShift = async (shift, expenseData) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
     if (!shift || !shift.id || !shift.date) {
         throw new Error("Datos del turno inválidos.");
     }
 
     const expenseId = await getNextExpenseId(db, LOCAL_ID);
-    const expenseWithId = { 
-        ...expenseData, 
+    const expenseWithId = {
+        ...expenseData,
         id: expenseId,
         fechaCaja: shift.date,
     };
 
+    // Revalida antes del PUT definitivo: getNextExpenseId() de arriba hizo su
+    // propia transacción (await real).
+    op.getDatabaseOrAbort();
     const expensePath = `${API_URL}/${LOCAL_ID}/CAJAS/${shift.date}/turnos/${shift.id}/gastos/${expenseId}.json`;
 
     const response = await fetch(expensePath, {

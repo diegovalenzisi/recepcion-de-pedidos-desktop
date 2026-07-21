@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
-import { 
-  getLastDelivererMessage, 
-  listenToDelivererMessage, 
-  saveLastDelivererMessage, 
-  updateDelivererMessage, 
-  deleteDelivererMessage 
+import {
+  getLastDelivererMessage,
+  listenToDelivererMessage,
+  saveLastDelivererMessage,
+  updateDelivererMessage,
+  deleteDelivererMessage
 } from '@/lib/api/whatsappMessageApi';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 export function useWhatsAppMessageStorage(delivererId) {
   const [messageData, setMessageData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
-    if (!delivererId) {
+    if (!delivererId || !firebaseReady) {
       setMessageData(null);
       setLoading(false);
       return;
@@ -26,7 +28,7 @@ export function useWhatsAppMessageStorage(delivererId) {
     });
 
     return () => unsubscribe();
-  }, [delivererId]);
+  }, [delivererId, firebaseReady]);
 
   const saveMessage = useCallback(async (text) => {
     if (!delivererId) return;

@@ -40,6 +40,7 @@ import {
   listenToRemitos
 } from '@/lib/api/providersApi';
 import { format } from 'date-fns';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 function ProvidersPage() {
   const [providers, setProviders] = useState([]);
@@ -57,8 +58,10 @@ function ProvidersPage() {
   const [remitoToDelete, setRemitoToDelete] = useState(null);
   
   const { toast } = useToast();
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
+    if (!firebaseReady) return;
     setLoading(true);
     const unsubscribe = listenToProviders((updatedProviders) => {
       setProviders(updatedProviders);
@@ -66,10 +69,10 @@ function ProvidersPage() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [firebaseReady]);
 
   useEffect(() => {
-    if (selectedProvider) {
+    if (selectedProvider && firebaseReady) {
       setRemitosLoading(true);
       const unsubscribe = listenToRemitos(selectedProvider.id, (updatedRemitos) => {
         setRemitos(updatedRemitos);
@@ -80,7 +83,7 @@ function ProvidersPage() {
     } else {
       setRemitos([]);
     }
-  }, [selectedProvider]);
+  }, [selectedProvider, firebaseReady]);
 
   const handleAddProvider = () => {
     setEditingProvider(null);

@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, update, onValue, off } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { isArticleAvailable, isPromoAvailable, getGroupOptionIds } from './stockAvailability';
 
 const fetchProductGroupsArray = async (db, LOCAL_ID) => {
@@ -16,8 +16,9 @@ const fetchProductGroupsArray = async (db, LOCAL_ID) => {
 export const checkAndUpdatePromotionStockStatus = async () => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
-    
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
+
     try {
         const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
         const snapshot = await get(articlesRef);
@@ -92,7 +93,9 @@ export const checkAndUpdatePromotionStockStatus = async () => {
         }
 
         if (Object.keys(updates).length > 0) {
-            await update(ref(db), updates);
+            // Revalida antes del update() definitivo: arriba hubo varios await
+            // reales (lectura de artículos, materia prima, grupos de productos).
+            await update(ref(op.getDatabaseOrAbort()), updates);
         }
 
         return summary;
@@ -110,9 +113,15 @@ export const checkAndUpdatePromotionStockStatus = async () => {
 export const listenToPromotionStockChanges = (callback) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
-    
-    // Listen to changes in stock transactions or articles 
+    let db;
+    try {
+        db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+        console.warn('[listenToPromotionStockChanges] Firebase todavía no está listo, no se suscribe:', e.message);
+        return () => {};
+    }
+
+    // Listen to changes in stock transactions or articles
     // We listen to the root of articles since we need to check stock
     const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
     

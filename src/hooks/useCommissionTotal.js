@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { getDatabase, ref, onValue, off } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { ref, onValue, off } from 'firebase/database';
+import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 /**
  * Saldo de comisión a pagar = suma de comisiones generadas válidas
@@ -77,10 +78,18 @@ const isRegistroValido = (reg) => {
  */
 export const useCommissionBalance = (isActive = true) => {
   const [state, setState] = useState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: true });
+  // firebaseReady en las deps del efecto de abajo: antes este hook solo
+  // reaccionaba a `isActive` (típicamente !!user && !!localId), que NO
+  // cambia de valor al cambiar de local A a B (ambos son localId truthy) —
+  // los listeners de COMISIONES/REGISTRO y COMISIONES/PAGOS del local
+  // ANTERIOR quedaban activos para siempre. Con firebaseReady, el efecto se
+  // desmonta apenas empieza el cambio (ready pasa a false) y se vuelve a
+  // montar recién cuando el nuevo local está confirmado.
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
-    if (!isActive) {
-      setState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: false });
+    if (!isActive || !firebaseReady) {
+      setState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: !isActive ? false : true });
       return;
     }
     const localId = getCurrentLocalId();
@@ -89,7 +98,14 @@ export const useCommissionBalance = (isActive = true) => {
       return;
     }
 
-    const db = getDatabase();
+    let db;
+    try {
+      db = getCurrentDatabaseOrThrow(localId);
+    } catch (e) {
+      console.warn('[useCommissionBalance] Firebase todavía no está listo:', e.message);
+      setState((s) => ({ ...s, loading: false }));
+      return;
+    }
     const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO`);
     const pagosRef = ref(db, `${localId}/COMISIONES/PAGOS`);
 
@@ -148,7 +164,7 @@ export const useCommissionBalance = (isActive = true) => {
       off(registroRef, 'value', regListener);
       off(pagosRef, 'value', pagosListener);
     };
-  }, [isActive]);
+  }, [isActive, firebaseReady]);
 
   return state;
 };

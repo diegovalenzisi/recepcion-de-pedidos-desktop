@@ -1,5 +1,5 @@
 
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, update } from 'firebase/database';
 import { formatDateForFirebase } from '@/lib/utils';
 
@@ -44,6 +44,11 @@ export const createNewShift = async (initialFund, date) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
+    // Las URLs REST (API_URL/LOCAL_ID) se capturan como strings acá y NO se
+    // revalidan solas — a diferencia del SDK, un fetch() con la URL vieja
+    // escribiría igual en el local viejo aunque ya se haya cambiado a otro.
+    // beginFirebaseOperation()/getDatabaseOrAbort() cierra ese hueco.
+    const op = beginFirebaseOperation(LOCAL_ID);
     const allShiftsUrl = `${API_URL}/${LOCAL_ID}/CONTADORES/turnos.json`;
 
     let lastShiftNumber = 0;
@@ -58,6 +63,7 @@ export const createNewShift = async (initialFund, date) => {
 
     const newShiftNumber = lastShiftNumber + 1;
 
+    op.getDatabaseOrAbort();
     const counterUpdateUrl = `${API_URL}/${LOCAL_ID}/CONTADORES/turnos.json`;
     await fetch(counterUpdateUrl, { method: 'PUT', body: JSON.stringify(newShiftNumber) });
 
@@ -71,24 +77,27 @@ export const createNewShift = async (initialFund, date) => {
         gastos: {},
     };
 
+    op.getDatabaseOrAbort();
     const newShiftUrl = `${API_URL}/${LOCAL_ID}/CAJAS/${dateString}/turnos/${newShiftNumber}.json`;
     await fetch(newShiftUrl, { method: 'PUT', body: JSON.stringify(newShift) });
-    
+
     return { ...newShift, date: dateString };
 };
 
 const BATCH_SIZE = 25;
 
-const backupAndClearOrders = async (shift, progressCallback) => {
+const backupAndClearOrders = async (shift, progressCallback, op) => {
     checkLocalId();
-    const db = getDatabase();
     const LOCAL_ID = getCurrentDatabasePath();
 
     const [day, month, year] = shift.date.split('-');
     const backupBasePath = `${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shift.id}`;
-    
+
     const processInBatches = async (path, type, progressPrefix) => {
-        const dataRef = ref(db, `${LOCAL_ID}/${path}`);
+        // op.getDatabaseOrAbort() SIEMPRE, no solo la primera vez: cada batch
+        // tiene su propio await previo (progressCallback + el get() inicial
+        // del lote anterior), así que se revalida en cada iteración.
+        const dataRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/${path}`);
         const snapshot = await get(dataRef);
         if (!snapshot.exists()) return;
 
@@ -101,7 +110,7 @@ const backupAndClearOrders = async (shift, progressCallback) => {
                 itemsToProcess.push({ id, ...item });
             }
         }
-        
+
         if (itemsToProcess.length === 0) return;
 
         const totalBatches = Math.ceil(itemsToProcess.length / BATCH_SIZE);
@@ -110,7 +119,7 @@ const backupAndClearOrders = async (shift, progressCallback) => {
             progressCallback(`${progressPrefix} (lote ${i + 1} de ${totalBatches})...`);
             const batch = itemsToProcess.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
             const updates = {};
-            
+
             batch.forEach(item => {
                 let statusFolder;
                 const status = item.status?.main || item.status;
@@ -125,9 +134,14 @@ const backupAndClearOrders = async (shift, progressCallback) => {
                     updates[`${LOCAL_ID}/${path}/${item.id}`] = null;
                 }
             });
-            
+
             if (Object.keys(updates).length > 0) {
-                await update(ref(db), updates);
+                // Revalida ANTES de cada lote: si el local cambió entre lotes,
+                // se aborta acá en vez de seguir respaldando/borrando contra el
+                // local equivocado. Los lotes YA commiteados quedan como están
+                // (se escribieron correctamente contra el local activo en ese
+                // momento) — ver documentación de closeShift().
+                await update(ref(op.getDatabaseOrAbort()), updates);
             }
         }
     };
@@ -136,13 +150,12 @@ const backupAndClearOrders = async (shift, progressCallback) => {
     await processInBatches('MOSTRADOR', 'MOSTRADOR', 'Respaldando ventas de mostrador');
 };
 
-const backupShiftData = async (shift, closingPayload, progressCallback) => {
+const backupShiftData = async (shift, closingPayload, progressCallback, op) => {
     checkLocalId();
-    const db = getDatabase();
     const LOCAL_ID = getCurrentDatabasePath();
     const dateString = shift.date || formatDateForFirebase(new Date());
 
-    const shiftRef = ref(db, `${LOCAL_ID}/CAJAS/${dateString}/turnos/${shift.id}`);
+    const shiftRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/CAJAS/${dateString}/turnos/${shift.id}`);
     const snapshot = await get(shiftRef);
 
     if (!snapshot.exists()) {
@@ -154,15 +167,28 @@ const backupShiftData = async (shift, closingPayload, progressCallback) => {
 
     const [day, month, year] = dateString.split('-');
     const backupPath = `${LOCAL_ID}/BACKUP/${year}/${month}/${day}/TURNO/${shift.id}/CAJA`;
-    const backupRef = ref(db, backupPath);
+
+    // Revalida antes de las dos escrituras definitivas (backup + remove del
+    // turno vivo): el get() de arriba fue un await real.
+    const freshDb = op.getDatabaseOrAbort();
+    const backupRef = ref(freshDb, backupPath);
+    const freshShiftRef = ref(freshDb, `${LOCAL_ID}/CAJAS/${dateString}/turnos/${shift.id}`);
 
     await set(backupRef, shiftDataToBackup);
-    await remove(shiftRef);
+    await remove(freshShiftRef);
 };
 
 export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible, progressCallback) => {
     checkLocalId();
-    const dateString = shift.date || formatDateForFirebase(new Date()); 
+    // Un solo "op" para TODO el cierre (múltiples lotes + backup del turno):
+    // captura el local/generación acá y se revalida en cada escritura. Si el
+    // local cambia a mitad de un cierre, los lotes ya escritos quedan como
+    // están (eran correctos para el local activo en ese instante) y los que
+    // faltaban se abortan con un error controlado en vez de escribir contra
+    // el local nuevo — un cierre de caja NUNCA debe terminar a medias en dos
+    // locales distintos sin que el usuario se entere.
+    const op = beginFirebaseOperation();
+    const dateString = shift.date || formatDateForFirebase(new Date());
 
     progressCallback('Calculando totales...');
     const totalsByPaymentMethod = sales.reduce((acc, sale) => {
@@ -222,10 +248,10 @@ export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible
     };
 
     progressCallback('Respaldando y limpiando pedidos...');
-    await backupAndClearOrders(shift, progressCallback);
+    await backupAndClearOrders(shift, progressCallback, op);
 
     progressCallback('Respaldando datos del turno...');
-    await backupShiftData(shift, closingPayload, progressCallback);
-    
+    await backupShiftData(shift, closingPayload, progressCallback, op);
+
     progressCallback('Cierre completado.');
 };

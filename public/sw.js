@@ -12,18 +12,24 @@ self.addEventListener('message', (event) => {
   }
 });
 
+// Prefijo "dlv-" en los nombres de cache: identifica estos caches como
+// propios de la app frente a cualquier otro que pudiera existir en el mismo
+// origen, y permite que el botón "Actualizar aplicación" (cacheManager.js,
+// clearSafeLocalCache) los encuentre por prefijo en vez de por nombre exacto
+// -- si el nombre cambia acá en el futuro (ej. se agrega una versión), la
+// limpieza lo sigue encontrando solo con mantener el mismo prefijo.
 if (workbox) {
   workbox.routing.registerRoute(
     ({ request }) => request.destination === 'document',
     new workbox.strategies.NetworkFirst({
-      cacheName: 'html-cache',
+      cacheName: 'dlv-html-cache',
     })
   );
 
   workbox.routing.registerRoute(
     ({ request }) => request.destination === 'script' || request.destination === 'style',
     new workbox.strategies.StaleWhileRevalidate({
-      cacheName: 'static-resources',
+      cacheName: 'dlv-static-resources',
     })
   );
 }

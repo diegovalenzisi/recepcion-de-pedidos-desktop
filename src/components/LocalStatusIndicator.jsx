@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { getDatabase, ref, onValue, off } from 'firebase/database';
+import { ref, onValue, off } from 'firebase/database';
 import { saveSettings } from '@/lib/api/settingsApi';
 import { toast } from '@/components/ui/use-toast';
+import { getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 const dayMapping = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
 
@@ -9,9 +11,23 @@ const LocalStatusIndicator = ({ settings }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isManualClose, setIsManualClose] = useState(false);
   const [isConnected, setIsConnected] = useState(true);
+  // Este componente solo se monta cuando App.jsx ya salió de la pantalla de
+  // "Cambiando de local…"/carga (ver App.jsx), así que firebaseReady ya
+  // debería ser true al montar — se lee igual, de forma defensiva, y en las
+  // deps del efecto para re-suscribirse si de todos modos cambiara en vivo.
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
-    const db = getDatabase();
+    if (!firebaseReady) return;
+    // getCurrentDatabaseOrThrow() (nunca getDatabase() a secas): nunca
+    // devuelve la database de otro local ni de una app a medio inicializar.
+    let db;
+    try {
+      db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+      console.warn('[LocalStatusIndicator] Firebase todavía no está listo:', e.message);
+      return;
+    }
     const connectedRef = ref(db, '.info/connected');
 
     const listener = onValue(connectedRef, (snap) => {
@@ -20,7 +36,7 @@ const LocalStatusIndicator = ({ settings }) => {
     });
 
     return () => off(connectedRef, 'value', listener);
-  }, []);
+  }, [firebaseReady]);
 
   const checkStatus = useCallback(async () => {
     if (!settings) {

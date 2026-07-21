@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
-import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
@@ -109,7 +109,7 @@ export const listenToOrders = (callback, errorCallback) => {
   try {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    const db = getCurrentDatabaseOrThrow();
     const ordersRef = ref(db, `${LOCAL_ID}/PEDIDOS`);
 
     const unsubscribe = onValue(ordersRef, (snapshot) => {
@@ -258,7 +258,12 @@ const saveMostradorDeposit = async (db, localId, shift, orderId, deposit, client
 export const saveOrder = async (orderData, shift) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
+  // beginFirebaseOperation() captura local+generación ACÁ, antes de getNextOrderId()
+  // (que hace su propia transacción, un await real). getDatabaseOrAbort(), llamado
+  // justo antes del set() definitivo más abajo, revalida que el local no haya
+  // cambiado en el medio — si cambió, aborta con FirebaseNotReadyError en vez de
+  // guardar el pedido en el local viejo (o con datos pensados para otro local).
+  const op = beginFirebaseOperation(LOCAL_ID);
   try {
     const newOrderId = await getNextOrderId();
 
@@ -309,7 +314,8 @@ export const saveOrder = async (orderData, shift) => {
     }
 
     const dataToSave = { ...finalOrderData };
-    
+
+    const db = op.getDatabaseOrAbort();
     const orderRef = ref(db, `${LOCAL_ID}/PEDIDOS/${newOrderId}`);
     await set(orderRef, dataToSave);
     
@@ -339,7 +345,8 @@ const getFacturacionNodeForPayment = (paymentMethod) => {
 export const saveFacturacionForPayments = async (orderId, orderData, saleType) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
     const paymentDetails = orderData.payment?.payments || [];
     const mainPaymentMethod = orderData.payment?.method;
@@ -375,7 +382,10 @@ export const saveFacturacionForPayments = async (orderId, orderData, saleType) =
             if (facturacionNode) {
                 try {
                     const finalOrderId = getPrefixedOrderId(orderId);
-                    const facturacionRef = ref(db, `${LOCAL_ID}/${facturacionNode}/${finalOrderId}`);
+                    // Revalida: fetchFavoriteAccount() de arriba fue un await real —
+                    // el local pudo haber cambiado mientras esperaba.
+                    const freshDb = op.getDatabaseOrAbort();
+                    const facturacionRef = ref(freshDb, `${LOCAL_ID}/${facturacionNode}/${finalOrderId}`);
                     const totalToSave = typeof orderData.payment.total === 'number' ? orderData.payment.total : 0;
                     await set(facturacionRef, { ...facturaData, total: totalToSave });
                 } catch (error) {
@@ -383,7 +393,7 @@ export const saveFacturacionForPayments = async (orderId, orderData, saleType) =
                 }
             }
         }
-        return; 
+        return;
     }
 
     if (paymentDetails.length > 0) {
@@ -434,7 +444,12 @@ const sanitizeUpdatePayload = (payload) => {
 export const updateOrder = async (orderId, dataToUpdate, currentShift = null) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
+  // beginFirebaseOperation() captura local+generación acá. Entre esta línea y el
+  // update() definitivo más abajo hay varios await reales (lectura del pedido,
+  // checkOpenShift(), saveMostradorDeposit()) — getDatabaseOrAbort() revalida
+  // justo antes de escribir.
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
   const orderRef = ref(db, `${LOCAL_ID}/PEDIDOS/${orderId}`);
 
   try {
@@ -503,10 +518,15 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
     }
     
     const sanitizedPayload = sanitizeUpdatePayload(updatePayload);
-    
-    await update(orderRef, sanitizedPayload);
 
-    const orderSnapshot = await get(orderRef);
+    // Revalida justo antes del update() definitivo: si el local cambió durante
+    // los awaits de arriba, aborta acá en vez de escribir el cambio de estado
+    // en el local equivocado.
+    const freshDb = op.getDatabaseOrAbort();
+    const freshOrderRef = ref(freshDb, `${LOCAL_ID}/PEDIDOS/${orderId}`);
+    await update(freshOrderRef, sanitizedPayload);
+
+    const orderSnapshot = await get(freshOrderRef);
     const orderData = orderSnapshot.val();
     
     let stockResult = null;

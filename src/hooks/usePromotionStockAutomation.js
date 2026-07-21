@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { checkAndUpdatePromotionStockStatus, listenToPromotionStockChanges } from '@/lib/api/promotionStockAutomation';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 export const usePromotionStockAutomation = (isActive = true) => {
+    const { ready: firebaseReady } = useFirebaseReadiness();
     const [isChecking, setIsChecking] = useState(false);
     const [error, setError] = useState(null);
     const [summary, setSummary] = useState(null);
@@ -24,10 +26,10 @@ export const usePromotionStockAutomation = (isActive = true) => {
     }, [isActive]);
 
     useEffect(() => {
-        if (isActive) {
+        if (isActive && firebaseReady) {
             // Initial check
             checkPromotions();
-            
+
             // Set up real-time listener for ongoing changes
             const unsubscribe = listenToPromotionStockChanges((newSummary) => {
                 setSummary(newSummary);
@@ -37,7 +39,7 @@ export const usePromotionStockAutomation = (isActive = true) => {
                 if (unsubscribe) unsubscribe();
             };
         }
-    }, [isActive, checkPromotions]);
+    }, [isActive, firebaseReady, checkPromotions]);
 
     return {
         isChecking,

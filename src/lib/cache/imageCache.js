@@ -1,5 +1,7 @@
 const memoryCache = new Map();
-const CACHE_KEY_PREFIX = 'imageCache_metadata_';
+// Exportado para que clearSafeLocalCache() (cacheManager.js) pueda borrar
+// estos metadatos como parte de la limpieza segura, sin duplicar el prefijo.
+export const CACHE_KEY_PREFIX = 'imageCache_metadata_';
 const CACHE_EXPIRATION_DAYS = 7;
 
 export const cacheImage = (url) => {

@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, set, runTransaction, update } from "firebase/database";
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { fetchSalesPercentage } from '@/lib/api/settingsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { registrarComision } from '@/lib/api/comisionesApi';
@@ -12,13 +12,15 @@ export const recalcularTotalComisionAPagar = async () => {
   try {
     const localId = getCurrentDatabasePath();
     if (!localId) return;
-    const db = getDatabase();
+    const op = beginFirebaseOperation(localId);
+    const db = op.getDatabaseOrAbort();
     const snap = await get(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`));
     if (!snap.exists()) return;
     const totals = snap.val();
     const calc = Math.max(0, totals.totalCommission || 0);
     if (calc !== totals.TotalComisionAPagar) {
-      await update(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`), { TotalComisionAPagar: calc });
+      // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+      await update(ref(op.getDatabaseOrAbort(), `${localId}/RESUMEN_CUENTA/TOTALES`), { TotalComisionAPagar: calc });
       console.log('[comisiones] TotalComisionAPagar recalculado:', calc);
     }
   } catch (e) {
@@ -80,7 +82,7 @@ export const fetchAccountSummary = async () => {
 export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) => {
     checkLocalId();
     const localId = getCurrentDatabasePath();
-    const db = getDatabase();
+    const op = beginFirebaseOperation(localId);
 
     try {
         const percentage = await fetchSalesPercentage();
@@ -99,8 +101,11 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
         const today = operationalDate.toISOString().split('T')[0]; // YYYY-MM-DD
 
 
-        const saleRef = ref(db, `${localId}/RESUMEN_CUENTA/${today}/${numeroPedido}`);
-        const totalsRef = ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`);
+        // Revalida antes de las escrituras definitivas: fetchSalesPercentage()
+        // de arriba fue un await real.
+        const freshDb = op.getDatabaseOrAbort();
+        const saleRef = ref(freshDb, `${localId}/RESUMEN_CUENTA/${today}/${numeroPedido}`);
+        const totalsRef = ref(freshDb, `${localId}/RESUMEN_CUENTA/TOTALES`);
 
         const saleData = {
             comision: commission,
@@ -158,7 +163,7 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
 export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }) => {
     checkLocalId();
     const localId = getCurrentDatabasePath();
-    const db = getDatabase();
+    const op = beginFirebaseOperation(localId);
 
     try {
         const percentage = await fetchSalesPercentage();
@@ -168,8 +173,10 @@ export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }
         let commission = (saleValue * parseFloat(percentage)) / 100;
         if (isNaN(commission)) commission = 0;
 
+        // Revalida antes de las escrituras definitivas: fetchSalesPercentage()
+        // de arriba fue un await real.
         // Decrementar TOTALES atomicamente (nunca dejar en negativo)
-        const totalsRef = ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`);
+        const totalsRef = ref(op.getDatabaseOrAbort(), `${localId}/RESUMEN_CUENTA/TOTALES`);
         await runTransaction(totalsRef, (currentTotals) => {
             if (!currentTotals) return { totalSales: 0, totalCommission: 0, TotalComisionAPagar: 0 };
             currentTotals.totalSales = Math.max(0, (currentTotals.totalSales || 0) - saleValue);
@@ -180,7 +187,7 @@ export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }
 
         // Eliminar el registro diario usando la fecha operacional de la venta
         if (dateKey) {
-            const saleRef = ref(db, `${localId}/RESUMEN_CUENTA/${dateKey}/${numeroPedido}`);
+            const saleRef = ref(op.getDatabaseOrAbort(), `${localId}/RESUMEN_CUENTA/${dateKey}/${numeroPedido}`);
             await set(saleRef, null);
         }
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, createContext, useContext } from 'react';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 import { ref, onValue } from 'firebase/database';
-import { getDatabase } from 'firebase/database';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 // Valor por defecto con la forma completa para que cualquier consumidor funcione
 // aunque (por error) quede fuera del provider, sin romper la UI.
@@ -20,7 +20,13 @@ const STOCK_STATUS_DEFAULT = {
 export const StockStatusContext = createContext(STOCK_STATUS_DEFAULT);
 export const useStockStatusContext = () => useContext(StockStatusContext);
 
-export const useStockStatus = () => {
+// localIdProp: opcional. Si se pasa (App.jsx lo hace, con su estado localId
+// reactivo), el efecto se vuelve a ejecutar cuando CAMBIA de local en vivo
+// (sin recargar la app) — antes el efecto corría una sola vez ([] de
+// dependencias) y dejaba los listeners de ARTICULOS/MATERIA_PRIMA del local
+// ANTERIOR activos para siempre tras un cambio de local. Si no se pasa,
+// cae a getCurrentLocalId() (comportamiento previo) para no romper otros usos.
+export const useStockStatus = (localIdProp) => {
   const [hasOutOfStock, setHasOutOfStock] = useState(false);
   const [hasLowStock, setHasLowStock] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,17 +44,28 @@ export const useStockStatus = () => {
   
   const [lastUpdated, setLastUpdated] = useState(null);
   const [localId, setLocalId] = useState(null);
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
-    const currentId = getCurrentLocalId();
+    const currentId = localIdProp ?? getCurrentLocalId();
     setLocalId(currentId);
-    
-    if (!currentId) {
+
+    if (!currentId || !firebaseReady) {
       setIsLoading(false);
       return;
     }
 
-    const db = getDatabase();
+    // Nunca getDatabase() a secas: getCurrentDatabaseOrThrow() exige que la
+    // app '[DEFAULT]' del local pedido exista y coincida (ver core.js) en
+    // vez de asumirlo.
+    let db;
+    try {
+      db = getCurrentDatabaseOrThrow(currentId);
+    } catch (e) {
+      console.warn('[useStockStatus] Firebase todavía no está listo:', e.message);
+      setIsLoading(false);
+      return;
+    }
     const articulosRef = ref(db, `${currentId}/ARTICULOS`);
     // El único nodo real de materia prima es MATERIA_PRIMA (ver managementApi/stockApi).
     // Se eliminaron los listeners a MATERIA-PRIMA y materia-prima: no existen en Firebase
@@ -192,7 +209,7 @@ export const useStockStatus = () => {
       unsubscribeArt();
       unsubscribeRaw();
     };
-  }, []);
+  }, [localIdProp, firebaseReady]);
 
   return { 
     hasOutOfStock, hasLowStock,

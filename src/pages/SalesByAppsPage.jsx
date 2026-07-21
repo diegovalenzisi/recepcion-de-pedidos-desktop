@@ -4,8 +4,9 @@ import { Helmet } from 'react-helmet';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getOperationalDate, formatDateToDDMMAAAA } from '@/lib/utils';
 import { Loader2, Smartphone, TrendingUp, Layers, Receipt } from 'lucide-react';
-import { getDatabase, ref, onValue } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { ref, onValue } from 'firebase/database';
+import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 const SalesByAppsPage = () => {
   const [loading, setLoading] = useState(true);
@@ -20,14 +21,23 @@ const SalesByAppsPage = () => {
     rappiAccumulatedCount: 0
   });
 
+  const { ready: firebaseReady } = useFirebaseReadiness();
+
   useEffect(() => {
     const LOCAL_ID = getCurrentLocalId();
-    if (!LOCAL_ID) {
+    if (!LOCAL_ID || !firebaseReady) {
       setLoading(false);
       return;
     }
 
-    const db = getDatabase();
+    let db;
+    try {
+      db = getCurrentDatabaseOrThrow(LOCAL_ID);
+    } catch (e) {
+      console.warn('[SalesByAppsPage] Firebase todavía no está listo:', e.message);
+      setLoading(false);
+      return;
+    }
     const todayDDMMAAAA = formatDateToDDMMAAAA(getOperationalDate(new Date()));
     
     let pyLoaded = false;
@@ -140,7 +150,7 @@ const SalesByAppsPage = () => {
       unsubPy();
       unsubRp();
     };
-  }, []);
+  }, [firebaseReady]);
 
   if (loading) {
     return (

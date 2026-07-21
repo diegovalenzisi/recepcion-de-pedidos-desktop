@@ -10,25 +10,31 @@ import { Loader2, AlertTriangle, CheckCircle2, RotateCcw, Package, Clock } from 
 import { fetchAffectedArticles, manualOverrideDelivery } from '@/lib/api/stockDeliveryAutomation';
 import { listenToManagementData } from '@/lib/api/managementApi';
 import { normalizarStock } from '@/lib/api/ventaUtils';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 const StockDeliveryAutomationStatus = ({ departments = [] }) => {
   const [affectedArticles, setAffectedArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [overriding, setOverriding] = useState(null);
   const { toast } = useToast();
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   useEffect(() => {
+    if (!firebaseReady) {
+      return undefined;
+    }
+
     loadAffectedArticles();
-    
+
     // Listen to real-time article updates
     const unsubscribe = listenToManagementData('articulos', () => {
       loadAffectedArticles();
     }, (error) => {
       console.error('Error listening to articles:', error);
     });
-    
+
     return () => unsubscribe();
-  }, []);
+  }, [firebaseReady]);
 
   const loadAffectedArticles = async () => {
     setLoading(true);

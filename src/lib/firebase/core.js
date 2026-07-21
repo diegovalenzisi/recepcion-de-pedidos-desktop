@@ -1,4 +1,6 @@
-import { initializeApp, getApps, deleteApp, getApp } from 'firebase/app';
+import { initializeApp, getApps, deleteApp } from 'firebase/app';
+import { getDatabase } from 'firebase/database';
+import { isFirebaseSwitching, isFirebaseReady, getFirebaseGeneration, FirebaseNotReadyError } from './readiness.js';
 
 const BASE_URL_DEFAULT    = "https://achava3703-default-rtdb.firebaseio.com";
 const BASE_URL_TEMPERLEY  = "https://bdtemperley-default-rtdb.firebaseio.com";
@@ -167,6 +169,82 @@ let currentStorageBucket = null;
 // antes que la default, y getApps()[0] devolvería esa por error.
 const getDefaultAppOrNull = () => getApps().find((a) => a.name === '[DEFAULT]') || null;
 
+// Compartida entre ensureFirebaseAppSync() e initializeFirebaseApp() — antes
+// solo la primera validaba esto, así que un config incompleto (ej. apiKey
+// vacío por un override guardado a medias) podía ser rechazado por una pero
+// aceptado por la otra, dependiendo de cuál se llamara. Un firebaseConfig
+// técnicamente "completo" pero con apiKey vacío no falla en initializeApp()
+// (no valida credenciales al crear el objeto) — solo se notaría más tarde,
+// al intentar conectar. Se corta acá, antes de crear la app.
+const isCompleteFirebaseConfig = (firebaseConfig) =>
+  !!(firebaseConfig.databaseURL && firebaseConfig.apiKey && firebaseConfig.projectId);
+
+// Inicialización SINCRÓNICA y segura de la app Firebase '[DEFAULT]' — mismo
+// patrón que getApps().length > 0 ? getApp() : initializeApp(config), pero
+// usando getDefaultAppOrNull() (arriba) en vez de getApps() a secas, porque
+// este proyecto también crea apps CON NOMBRE (ej. 'routes-config-db') y
+// getApps().length > 0 sería true sin que exista la default — getApp() con
+// esa condición explotaría con el mismo error app/no-app que se busca evitar.
+//
+// A diferencia de initializeFirebaseApp() (async, porque además maneja el
+// caso de CAMBIAR de local borrando la app anterior con otra config),
+// initializeApp() en sí es sincrónico — por eso esta función no necesita
+// awaits y puede llamarse como PRIMER paso del arranque, antes de cualquier
+// operación async no relacionada (IPC, fetch, etc.), cerrando la ventana en
+// la que localId ya está seteado pero la app default todavía no existe. Los
+// servicios deben pedirse siempre pasándole la instancia que devuelve:
+//   const app = ensureFirebaseAppSync();
+//   const database = app && getDatabase(app);
+//
+// SEGURIDAD MULTI-LOCAL: si ya existe una app '[DEFAULT]', NUNCA se devuelve
+// a ciegas — se verifica que su databaseURL/storageBucket coincidan con los
+// del localId pedido. Si no coinciden (típicamente: el usuario cambió de
+// local hace un instante y initializeFirebaseApp() todavía no terminó de
+// borrar la app vieja y crear la nueva), se devuelve null en vez de la app
+// del local ANTERIOR — un caller que reciba null simplemente no se suscribe
+// todavía (se recupera solo en el próximo montaje/llamada), lo cual es
+// preferible a leer o escribir en el Firebase equivocado.
+export const ensureFirebaseAppSync = (localId = getLocalId()) => {
+  if (!localId) return null;
+
+  const config = getConfig(localId);
+  const firebaseConfig = {
+    apiKey: config.apiKey,
+    projectId: config.projectId,
+    databaseURL: config.dbUrl,
+    storageBucket: config.storage,
+  };
+
+  // Config incompleta (defensivo — getConfig() ya resuelve fallbacks, pero un
+  // override guardado a medias en localStorage podría faltar algún campo):
+  // no inicializar con datos parciales.
+  if (!isCompleteFirebaseConfig(firebaseConfig)) {
+    console.error('[core] ensureFirebaseAppSync: firebaseConfig incompleta para localId', localId, firebaseConfig);
+    return null;
+  }
+
+  const existing = getDefaultAppOrNull();
+  if (existing) {
+    const matchesRequestedLocal =
+      existing.options.databaseURL === firebaseConfig.databaseURL &&
+      existing.options.storageBucket === firebaseConfig.storageBucket;
+    // Coincide: reusar (evita "Firebase App named '[DEFAULT]' already exists").
+    // NO coincide: es la app de OTRO local (cambio de local en curso) —
+    // devolver null, nunca la app equivocada.
+    return matchesRequestedLocal ? existing : null;
+  }
+
+  currentDBURL = firebaseConfig.databaseURL;
+  currentStorageBucket = firebaseConfig.storageBucket;
+
+  try {
+    return initializeApp(firebaseConfig);
+  } catch (e) {
+    console.error("Firebase initialization error:", e);
+    return null;
+  }
+};
+
 export const initializeFirebaseApp = async () => {
   const localId = getLocalId();
 
@@ -183,6 +261,14 @@ export const initializeFirebaseApp = async () => {
     databaseURL: config.dbUrl,
     storageBucket: config.storage,
   };
+
+  // Misma validación que ensureFirebaseAppSync() — antes solo esa la tenía,
+  // así que un config incompleto podía ser rechazado por una y aceptado por
+  // la otra según cuál se llamara primero.
+  if (!isCompleteFirebaseConfig(firebaseConfig)) {
+    console.error('[core] initializeFirebaseApp: firebaseConfig incompleta para localId', localId, firebaseConfig);
+    return null;
+  }
 
   const defaultApp = getDefaultAppOrNull();
 
@@ -222,10 +308,109 @@ export const initializeFirebaseApp = async () => {
   }
 };
 
-export const getFirebaseApp = () => {
-  const defaultApp = getDefaultAppOrNull();
-  if (defaultApp) return defaultApp;
-  return initializeFirebaseApp();
+// SIEMPRE sincrónica: devuelve FirebaseApp o null, NUNCA una Promise. Antes
+// podía devolver initializeFirebaseApp() (una Promise) cuando no había app
+// todavía, así que un caller sin await recibía un objeto Promise en vez de
+// la app — ej. storage.js hacía `getStorage(getFirebaseApp())` sin await, lo
+// que en ese caso le pasaba una Promise a getStorage(). Ahora es un simple
+// alias de ensureFirebaseAppSync(), que ya es sincrónica y segura (nunca
+// devuelve la app de OTRO local). Los callers existentes (storage.js,
+// whatsappMessageApi.js) no necesitan cambiar su forma de llamarla.
+export const getFirebaseApp = (localId = getLocalId()) => ensureFirebaseAppSync(localId);
+
+// Estado central de disponibilidad — vive en readiness.js (SIN import.meta.env)
+// para poder testearlo directo con node:assert, sin tener que replicar su
+// lógica en un test. Re-exportado acá para no cambiar cómo lo importa el
+// resto del código (App.jsx, hooks, etc. siguen usando '@/lib/firebase/core').
+export {
+  getFirebaseReadinessSnapshot,
+  subscribeFirebaseReadiness,
+  markFirebaseSwitching,
+  markFirebaseReady,
+  markFirebaseError,
+  isFirebaseReady,
+  isFirebaseSwitching,
+  getFirebaseGeneration,
+  FirebaseNotReadyError,
+} from './readiness.js';
+
+/**
+ * ÚNICO punto seguro para obtener el Database del local ACTUAL. Reemplaza a
+ * getDatabase() a secas en listeners persistentes (categoría A) y en código
+ * de arranque (categoría C) — ver auditoría de getDatabase() bare.
+ *
+ * Verifica, en este orden: (1) que haya localId, (2) que Firebase no esté a
+ * mitad de un cambio de local (isFirebaseSwitching()), (3) que exista una app
+ * '[DEFAULT]' cuya config coincida con el localId pedido (ensureFirebaseAppSync
+ * ya garantiza esto último — nunca devuelve la app de otro local). Si algo de
+ * esto falla, lanza FirebaseNotReadyError en vez de dejar que getDatabase()
+ * tire el crudo "No Firebase App '[DEFAULT]'" — el caller puede distinguirlo
+ * (error.code === 'firebase/not-ready') y reintentar/esperar en vez de crashear.
+ */
+export const getCurrentDatabaseOrThrow = (localId = getCurrentLocalId() || getLocalId()) => {
+  if (!localId) {
+    throw new FirebaseNotReadyError('No hay ningún local configurado todavía.');
+  }
+  if (isFirebaseSwitching()) {
+    throw new FirebaseNotReadyError('Firebase está cambiando de local — todavía no se puede leer ni escribir.');
+  }
+  const app = ensureFirebaseAppSync(localId);
+  if (!app) {
+    throw new FirebaseNotReadyError('Firebase todavía no está listo para este local.');
+  }
+  return getDatabase(app);
+};
+
+/**
+ * Protección central para operaciones asíncronas con un await de por medio
+ * (guardar con una subida de archivo/imagen previa, un fetch externo antes de
+ * escribir, etc.). El riesgo que cierra: se arranca en el local A, la función
+ * obtiene su db/ref, queda esperando un await, el usuario cambia al local B, y
+ * la función continúa y escribe en A (o escribe en B con datos pensados para
+ * A) — un simple chequeo de "hay localId" en ese punto no alcanza porque
+ * puede haber un localId B perfectamente válido, solo que no es el que la
+ * operación empezó a procesar.
+ *
+ * Uso: al EMPEZAR la operación (antes del primer await real) se llama
+ * beginFirebaseOperation() para capturar el local y la generación vigentes en
+ * ese instante. Antes de CADA escritura definitiva se llama a
+ * op.getDatabaseOrAbort(), que revalida: Firebase sigue ready, no está
+ * cambiando de local, el localId no cambió, y la generación (que sube en cada
+ * markFirebaseSwitching(), es decir en cada cambio de local) tampoco cambió.
+ * Si algo cambió, lanza FirebaseNotReadyError — el caller debe atraparlo y
+ * abortar sin escribir, nunca ignorarlo.
+ *
+ * Deliberadamente NO se aplica a los ~146 call sites de getDatabase()/
+ * getCurrentDatabaseOrThrow() que resuelven la db y escriben en el mismo tick
+ * sin ningún await intermedio real: ahí no hay ventana de carrera que cerrar,
+ * y agregar esto ahí sería ceremonia sin beneficio. Se usa quirúrgicamente
+ * solo en los flujos que sí tienen un await genuino entre "obtener db" y
+ * "escribir" (ver auditoría de operaciones en vuelo).
+ */
+export const beginFirebaseOperation = (localId = getCurrentLocalId() || getLocalId()) => {
+  const generation = getFirebaseGeneration();
+
+  const getDatabaseOrAbort = () => {
+    if (!isFirebaseReady()) {
+      throw new FirebaseNotReadyError('Firebase no está listo — operación abortada (posible cambio de local en curso).');
+    }
+    if (isFirebaseSwitching()) {
+      throw new FirebaseNotReadyError('Firebase está cambiando de local — operación abortada para evitar escribir en el local incorrecto.');
+    }
+    if (getFirebaseGeneration() !== generation) {
+      throw new FirebaseNotReadyError('El local cambió mientras la operación estaba en curso — operación abortada para evitar escribir en el local incorrecto.');
+    }
+    const activeLocalId = getCurrentLocalId() || getLocalId();
+    if (!localId || activeLocalId !== localId) {
+      throw new FirebaseNotReadyError('El local activo cambió mientras la operación estaba en curso — operación abortada.');
+    }
+    // getCurrentDatabaseOrThrow ya revalida internamente switching/ready/localId,
+    // así que esto además garantiza que la app/database devuelta corresponde
+    // efectivamente a ESTE localId (nunca la de otro local a mitad de cambio).
+    return getCurrentDatabaseOrThrow(localId);
+  };
+
+  return { localId, generation, getDatabaseOrAbort };
 };
 
 /**

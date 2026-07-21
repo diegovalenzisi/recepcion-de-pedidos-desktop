@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, query, orderByChild, equalTo, runTransaction } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { fetchAllStockableItems } from '@/lib/api/stockApi';
 
 const updateStatisticsRecursive = async (item, quantity, fechaCaja, allStockableItems, updates) => {
@@ -42,10 +42,10 @@ const updateStatisticsRecursive = async (item, quantity, fechaCaja, allStockable
 export const updateStatistics = async (items, fechaCaja) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
+  const op = beginFirebaseOperation(LOCAL_ID);
 
   const allStockableItems = await fetchAllStockableItems();
-  
+
   const updates = {};
   for (const item of items) {
     const quantity = item.cantidad || item.quantity || 1;
@@ -53,7 +53,9 @@ export const updateStatistics = async (items, fechaCaja) => {
   }
 
   for (const path in updates) {
-    const statRef = ref(db, `${LOCAL_ID}/${path}`);
+    // Revalida en CADA iteración: fetchAllStockableItems() de arriba fue un
+    // await real, y este loop en sí puede ser largo (una transacción por path).
+    const statRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/${path}`);
     await runTransaction(statRef, (currentData) => {
       return (currentData || 0) + updates[path];
     });

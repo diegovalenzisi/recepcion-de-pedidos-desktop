@@ -1,5 +1,5 @@
 
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, runTransaction, update, onValue, off } from 'firebase/database';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { validateInheritedStockStatus } from './stockDeliveryAutomation';
@@ -50,30 +50,31 @@ const processSnapshot = (snapshot, tabId) => {
 const syncOptionalToArticles = async (groupCode, optionalCode) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
-    
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
+
     try {
         const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
         const articlesSnapshot = await get(articlesRef);
-        
+
         if (!articlesSnapshot.exists()) {
             return { synced: 0, errors: [] };
         }
-        
+
         const articlesData = articlesSnapshot.val();
         const updates = {};
         let syncCount = 0;
         const errors = [];
-        
+
         for (const articleId in articlesData) {
             const article = articlesData[articleId];
-            
+
             if (article.opcionalesConfig && article.opcionalesConfig[groupCode]) {
                 const groupConfig = article.opcionalesConfig[groupCode];
-                
+
                 if (groupConfig.activo === true) {
                     const currentOpcionales = groupConfig.opcionales || [];
-                    
+
                     if (!currentOpcionales.includes(optionalCode)) {
                         const updatedOpcionales = [...currentOpcionales, optionalCode];
                         updates[`${LOCAL_ID}/ARTICULOS/${articleId}/opcionalesConfig/${groupCode}/opcionales`] = updatedOpcionales;
@@ -82,11 +83,12 @@ const syncOptionalToArticles = async (groupCode, optionalCode) => {
                 }
             }
         }
-        
+
         if (Object.keys(updates).length > 0) {
-            await update(ref(db), updates);
+            // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+            await update(ref(op.getDatabaseOrAbort()), updates);
         }
-        
+
         return { synced: syncCount, errors };
     } catch (error) {
         console.error('[Optional Sync] Error syncing optional to articles:', error);
@@ -97,25 +99,26 @@ const syncOptionalToArticles = async (groupCode, optionalCode) => {
 const removeOptionalFromArticles = async (groupCode, optionalCode) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
-    
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
+
     try {
         const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
         const articlesSnapshot = await get(articlesRef);
-        
+
         if (!articlesSnapshot.exists()) return { removed: 0 };
-        
+
         const articlesData = articlesSnapshot.val();
         const updates = {};
         let removeCount = 0;
-        
+
         for (const articleId in articlesData) {
             const article = articlesData[articleId];
-            
+
             if (article.opcionalesConfig && article.opcionalesConfig[groupCode]) {
                 const groupConfig = article.opcionalesConfig[groupCode];
                 const currentOpcionales = groupConfig.opcionales || [];
-                
+
                 if (currentOpcionales.includes(optionalCode)) {
                     const updatedOpcionales = currentOpcionales.filter(code => code !== optionalCode);
                     updates[`${LOCAL_ID}/ARTICULOS/${articleId}/opcionalesConfig/${groupCode}/opcionales`] = updatedOpcionales;
@@ -123,11 +126,12 @@ const removeOptionalFromArticles = async (groupCode, optionalCode) => {
                 }
             }
         }
-        
+
         if (Object.keys(updates).length > 0) {
-            await update(ref(db), updates);
+            // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+            await update(ref(op.getDatabaseOrAbort()), updates);
         }
-        
+
         return { removed: removeCount };
     } catch (error) {
         console.error('[Optional Cleanup] Error removing optional from articles:', error);
@@ -138,10 +142,17 @@ const removeOptionalFromArticles = async (groupCode, optionalCode) => {
 export const listenToManagementData = (tabId, callback, errorCallback) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
     const tabConfig = getTabConfig(tabId);
     if (!tabConfig) return () => {};
-    
+
+    let db;
+    try {
+        db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+        console.warn('[listenToManagementData] Firebase todavía no está listo, no se suscribe:', e.message);
+        if (errorCallback) errorCallback(e);
+        return () => {};
+    }
     const dataRef = ref(db, `${LOCAL_ID}/${tabConfig.path}`);
 
     const listener = onValue(dataRef, (snapshot) => {
@@ -285,7 +296,13 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
     let finalPath;
     let newKey = finalData.codigo;
 
-    const db = getDatabase();
+    // Un solo "op" para toda la función: hay varios await reales antes del
+    // set() definitivo (lecturas previas, migración de imagen a Storage) y
+    // más awaits después (sync de opcionales, validación de stock heredado)
+    // antes de la transacción del contador. Se revalida en cada punto de
+    // escritura, no solo al principio.
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
     if (!newKey) {
         throw new Error("El código es obligatorio.");
@@ -526,7 +543,9 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
             stock: dataToSave.stock,
         });
     }
-    await set(ref(db, finalPath), dataToSave);
+    // Revalida antes del set() definitivo: arriba puede haber habido lecturas
+    // previas y/o una migración de imagen a Storage (awaits reales).
+    await set(ref(op.getDatabaseOrAbort(), finalPath), dataToSave);
 
     // RTDB ya quedó guardado OK → recién ahora borrar la imagen vieja (best-effort).
     if (oldFotoToDelete && oldFotoToDelete !== dataToSave.foto) {
@@ -556,7 +575,10 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
 
     const numericId = parseInt(newKey.replace(tabConfig.idPrefix, ''), 10);
     if (!isNaN(numericId)) {
-        const counterRef = ref(db, `${LOCAL_ID}/CONTADORES/${tabConfig.path}`);
+        // Revalida antes de tocar el contador: el guardado principal ya está
+        // hecho (correctamente, en el local en el que empezó); esto es una
+        // actualización secundaria y NO debe escribirse en un local distinto.
+        const counterRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/CONTADORES/${tabConfig.path}`);
         await runTransaction(counterRef, (currentCounter) => {
             return Math.max(currentCounter || 0, numericId);
         });
@@ -576,9 +598,8 @@ export const deleteData = async (tabId, item) => {
         path = `${LOCAL_ID}/${tabConfig.path}/${item.grupo}/${item.codigo}`;
     }
 
-    const db = getDatabase();
-    const itemRef = ref(db, path);
-    
+    const op = beginFirebaseOperation(LOCAL_ID);
+
     if (tabId === 'opcionales') {
         try {
             await removeOptionalFromArticles(item.grupo, item.codigo);
@@ -586,7 +607,10 @@ export const deleteData = async (tabId, item) => {
             console.error('[Optional Delete] Failed to cleanup optional from articles:', cleanupError);
         }
     }
-    
+
+    // Revalida antes del remove() definitivo: removeOptionalFromArticles()
+    // arriba hizo su propio await real.
+    const itemRef = ref(op.getDatabaseOrAbort(), path);
     await remove(itemRef);
 
     // Artículo borrado de RTDB → borrar también su imagen en Storage (best-effort).

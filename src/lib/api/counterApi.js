@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, runTransaction, get, update, set } from 'firebase/database';
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary, reversarVentaCuenta } from '@/lib/api/myAccountApi';
 import { cancelarComision } from '@/lib/api/comisionesApi';
 import { restoreStockForItem, bulkUpdateStock, fetchAllStockableItems } from '@/lib/api/stockApi';
@@ -78,7 +78,12 @@ export const saveCounterSale = async (saleData, shift) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
   const FIREBASE_URL = getFirebaseUrl();
-  const db = getDatabase();
+  // Un solo "op" para TODA la venta de mostrador, incluida la Fase 2 en
+  // background: si el local cambia en cualquier punto, cada escritura que
+  // quede (incluidas las de background) se aborta en vez de terminar
+  // escribiendo en el local equivocado.
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
 
   try {
     // ── FASE 1: Ruta crítica — bloquea UI hasta completar ─────────────────
@@ -119,6 +124,9 @@ export const saveCounterSale = async (saleData, shift) => {
     };
 
     t = Date.now();
+    // Revalida antes del PUT crítico definitivo: getNextCounterSaleId() de
+    // arriba hizo su propia transacción (await real).
+    op.getDatabaseOrAbort();
     const url = `${FIREBASE_URL}/${LOCAL_ID}/MOSTRADOR/${saleId}.json`;
     const response = await fetch(url, {
       method: 'PUT',
@@ -177,7 +185,10 @@ export const saveCounterSale = async (saleData, shift) => {
             p => p.method.toLowerCase().includes('transferencia')
           );
           if (hasTransferencia) {
-            await saveCounterSaleToFacturacion(db, LOCAL_ID, saleId, saleWithTimestamp);
+            // Revalida: esto corre en background, potencialmente mucho después
+            // de que arrancó la venta — si el local cambió, se aborta acá.
+            const bgDb = op.getDatabaseOrAbort();
+            await saveCounterSaleToFacturacion(bgDb, LOCAL_ID, saleId, saleWithTimestamp);
             console.log(`[VENTA MOSTRADOR] guardar facturación transferencia: ${Date.now() - tb} ms`);
           }
         }

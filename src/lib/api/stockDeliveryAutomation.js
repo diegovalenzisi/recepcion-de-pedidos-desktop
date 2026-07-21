@@ -1,5 +1,5 @@
 import { getDatabase, ref, get, update } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 
 /**
  * Stock Delivery Automation Module
@@ -27,8 +27,9 @@ export const shouldAutoToggleDelivery = (article) => {
 export const validateInheritedStockStatus = async (parentId, parentStockValue) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
-  
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
+
   try {
     const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
     const snapshot = await get(articlesRef);
@@ -84,7 +85,8 @@ export const validateInheritedStockStatus = async (parentId, parentStockValue) =
     traverse(parentId, isDepleted);
     
     if (Object.keys(updates).length > 0) {
-      await update(ref(db), updates);
+      // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+      await update(ref(op.getDatabaseOrAbort()), updates);
       console.log(`[Stock Automation] Applied ${Object.keys(updates).length} cascade updates for parent ${parentId}`);
     }
   } catch (error) {
@@ -99,24 +101,25 @@ export const handleStockDepletion = async (articleId, currentStock, previousStoc
 
   if (!isOwnStock) return;
   if (currentStock !== 0 || previousStock <= 0) return;
-  
+
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
-  
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
+
   try {
     const articleRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articleId}`);
     const snapshot = await get(articleRef);
-    
+
     if (!snapshot.exists()) {
       console.warn(`[Stock Automation] Article ${articleId} not found`);
       return;
     }
-    
+
     const articleData = snapshot.val();
-    const isCurrentlyActive = articleData.activoDelivery !== false; 
+    const isCurrentlyActive = articleData.activoDelivery !== false;
     const updates = {};
-    
+
     if (isCurrentlyActive) {
       updates.hadDeliveryEnabled = true;
       updates.activoDelivery = false;
@@ -127,9 +130,11 @@ export const handleStockDepletion = async (articleId, currentStock, previousStoc
     } else if (articleData.hadDeliveryEnabled !== false) {
       updates.hadDeliveryEnabled = false;
     }
-    
+
     if (Object.keys(updates).length > 0) {
-      await update(articleRef, updates);
+      // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+      const freshArticleRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/ARTICULOS/${articleId}`);
+      await update(freshArticleRef, updates);
     }
   } catch (error) {
     console.error(`[Stock Automation] Error handling depletion for ${articleId}:`, error);
@@ -144,25 +149,26 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
 
   if (!isOwnStock) return;
   if (previousStock !== 0 || currentStock <= 0) return;
-  
+
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
-  
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
+
   try {
     const articleRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articleId}`);
     const snapshot = await get(articleRef);
-    
+
     if (!snapshot.exists()) {
       console.warn(`[Stock Automation] Article ${articleId} not found`);
       return;
     }
-    
+
     const articleData = snapshot.val();
     const updates = {};
-    
+
     console.log(`[Stock Automation] Evaluating ${articleId} for replenishment: hadDeliveryEnabled=${articleData.hadDeliveryEnabled}`);
-    
+
     if (articleData.hadDeliveryEnabled === true) {
       updates.hadDeliveryEnabled = false;
       updates.activoDelivery = true;
@@ -173,9 +179,11 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
     } else if (articleData.hadDeliveryEnabled !== false) {
       updates.hadDeliveryEnabled = false;
     }
-    
+
     if (Object.keys(updates).length > 0) {
-      await update(articleRef, updates);
+      // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+      const freshArticleRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/ARTICULOS/${articleId}`);
+      await update(freshArticleRef, updates);
     }
   } catch (error) {
     console.error(`[Stock Automation] Error handling replenishment for ${articleId}:`, error);

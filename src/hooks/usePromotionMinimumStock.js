@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { getDatabase, ref, onValue, get } from 'firebase/database';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { ref, onValue, get } from 'firebase/database';
+import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 import { getAvailableUnits } from '@/lib/api/stockAvailability';
 
 export const usePromotionMinimumStock = (promotion) => {
@@ -11,6 +12,9 @@ export const usePromotionMinimumStock = (promotion) => {
         loading: true,
         error: null
     });
+    // firebaseReady en las deps del efecto: se desuscribe apenas empieza un
+    // cambio de local y solo vuelve a suscribirse cuando el nuevo está listo.
+    const { ready: firebaseReady } = useFirebaseReadiness();
 
     useEffect(() => {
         if (!promotion || !promotion.isPromo || !promotion.promoItems || promotion.promoItems.length === 0) {
@@ -19,12 +23,18 @@ export const usePromotionMinimumStock = (promotion) => {
         }
 
         const localId = getCurrentLocalId();
-        if (!localId) {
-            setState(s => ({ ...s, loading: false, error: 'No local ID' }));
+        if (!localId || !firebaseReady) {
+            setState(s => ({ ...s, loading: false, error: !localId ? 'No local ID' : null }));
             return;
         }
 
-        const db = getDatabase();
+        let db;
+        try {
+            db = getCurrentDatabaseOrThrow(localId);
+        } catch (e) {
+            setState(s => ({ ...s, loading: false, error: e.message }));
+            return;
+        }
         let active = true;
         const listeners = [];
 
@@ -191,7 +201,7 @@ export const usePromotionMinimumStock = (promotion) => {
             active = false;
             listeners.forEach(l => l.ref && l.listener && typeof l.listener === 'function' && l.listener());
         };
-    }, [promotion]);
+    }, [promotion, firebaseReady]);
 
     return state;
 };

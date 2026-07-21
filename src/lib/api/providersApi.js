@@ -1,6 +1,6 @@
 
 import { getDatabase, ref, get, set, remove, onValue, off, runTransaction } from 'firebase/database';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 import { getNextProviderId } from './providerIdUtils';
 
 /**
@@ -383,8 +383,14 @@ export const deleteRemito = async (providerId, remitoId) => {
 export const listenToProviders = (callback) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
-  
+  let db;
+  try {
+    db = getCurrentDatabaseOrThrow();
+  } catch (e) {
+    console.warn('[listenToProviders] Firebase todavía no está listo, no se suscribe:', e.message);
+    return () => {};
+  }
+
   const providersRef = ref(db, `${LOCAL_ID}/PROVEEDORES_META`);
   
   const listener = onValue(providersRef, (snapshot) => {
@@ -424,8 +430,14 @@ export const listenToProviders = (callback) => {
 export const listenToRemitos = (providerId, callback) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
-  
+  let db;
+  try {
+    db = getCurrentDatabaseOrThrow();
+  } catch (e) {
+    console.warn('[listenToRemitos] Firebase todavía no está listo, no se suscribe:', e.message);
+    return () => {};
+  }
+
   const remitosRef = ref(db, `${LOCAL_ID}/PROVEEDORES`);
   
   const listener = onValue(remitosRef, (snapshot) => {

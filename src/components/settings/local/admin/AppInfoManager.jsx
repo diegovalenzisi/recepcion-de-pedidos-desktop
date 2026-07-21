@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Loader2, Save, UploadCloud, Image as ImageIcon, Smartphone } from 'lucide-react';
 import { saveSettings } from '@/lib/api/settingsApi';
 import { uploadAppIcon, uploadAppLogo } from '@/lib/firebase/storage';
-import { getLocalId } from '@/lib/firebase/core';
+import { getLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 
 const MAX_ICON_SIZE_BYTES = 2 * 1024 * 1024;
 
@@ -58,6 +58,11 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
 
   const handleSave = async () => {
     setIsSaving(true);
+    // Captura local+generación ANTES de la subida (que tiene un await real).
+    // Si el local cambia mientras uploadAppIcon está en curso, getDatabaseOrAbort()
+    // más abajo tira FirebaseNotReadyError y el guardado se cancela — nunca se
+    // guarda un ícono subido al Storage de un local en la CONFIGURACION de otro.
+    const op = beginFirebaseOperation();
     try {
       let iconUrl = appIcon;
 
@@ -65,6 +70,8 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
         const localId = getLocalId();
         iconUrl = await uploadAppIcon(selectedFile, localId);
       }
+
+      op.getDatabaseOrAbort();
 
       const settingsToSave = {
         nombreAppPedidos: appName,
@@ -87,8 +94,10 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
       }
       toast({
         variant: "destructive",
-        title: "Error al guardar",
-        description: "No se pudo guardar la información de la app.",
+        title: error.code === 'firebase/not-ready' ? "Guardado cancelado" : "Error al guardar",
+        description: error.code === 'firebase/not-ready'
+          ? "El local activo cambió mientras se guardaba. Volvé a intentarlo."
+          : "No se pudo guardar la información de la app.",
       });
     } finally {
       setIsSaving(false);
@@ -147,6 +156,7 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
 
   const handleSaveLogo = async () => {
     setIsSavingLogo(true);
+    const op = beginFirebaseOperation();
     try {
       let logoUrl = appLogo;
 
@@ -154,6 +164,8 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
         const localId = getLocalId();
         logoUrl = await uploadAppLogo(selectedLogoFile, localId);
       }
+
+      op.getDatabaseOrAbort();
 
       const settingsToSave = { logoAppPedidos: logoUrl };
       await saveSettings(settingsToSave);
@@ -173,8 +185,10 @@ const AppInfoManager = ({ settings, onSettingsChange }) => {
       }
       toast({
         variant: "destructive",
-        title: "Error al guardar",
-        description: "No se pudo guardar el logo de la app.",
+        title: error.code === 'firebase/not-ready' ? "Guardado cancelado" : "Error al guardar",
+        description: error.code === 'firebase/not-ready'
+          ? "El local activo cambió mientras se guardaba. Volvé a intentarlo."
+          : "No se pudo guardar el logo de la app.",
       });
     } finally {
       setIsSavingLogo(false);

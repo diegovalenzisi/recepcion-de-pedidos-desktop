@@ -1,6 +1,6 @@
 import { getDatabase, ref, onValue, update, set, get } from 'firebase/database';
 import { format } from 'date-fns';
-import { getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 
 const PAGOS_CONFIRMADOS_SUFFIX = 'PAGOS_CONFIRMADOS';
 
@@ -13,7 +13,7 @@ const resolvePaymentsPath = (pathOverride) => {
 export const listenToPaymentConfirmations = (callback, errorCallback, pathOverride = null) => {
   try {
     const path = resolvePaymentsPath(pathOverride);
-    const db = getDatabase();
+    const db = getCurrentDatabaseOrThrow();
     const paymentsRef = ref(db, path);
 
     console.log(`[voice-payments] ruta escuchada: ${path}`);

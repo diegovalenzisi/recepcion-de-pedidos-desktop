@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, set, get, runTransaction, update, onValue, off } from 'firebase/database';
 import { registrarPagoComision } from '@/lib/api/comisionesApi';
 
@@ -47,7 +47,17 @@ export const fetchSettings = async () => {
 export const listenToChanges = (path, callback) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    // getCurrentDatabaseOrThrow() en vez de getDatabase() a secas: nunca se
+    // suscribe contra el local anterior ni contra una app a medio inicializar
+    // (el caller en App.jsx ya espera a firebaseReadiness.ready, pero esto
+    // protege también a cualquier otro caller futuro de este export).
+    let db;
+    try {
+      db = getCurrentDatabaseOrThrow();
+    } catch (e) {
+      console.warn('[listenToChanges] Firebase todavía no está listo, no se suscribe:', e.message);
+      return () => {};
+    }
     const dataRef = ref(db, `${LOCAL_ID}/${path}`);
 
     const listener = onValue(dataRef, (snapshot) => {
@@ -107,7 +117,12 @@ export const fetchPaymentMethods = async () => {
 export const saveSettings = async (settingsData) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const db = getDatabase();
+  // getCurrentDatabaseOrThrow() en vez de getDatabase() a secas: este export
+  // es llamado por callers que hacen un await real ANTES (ej. AppInfoManager
+  // sube un ícono/logo a Storage y recién después llama a saveSettings) —
+  // si el local cambió en el medio, esto tira FirebaseNotReadyError en vez
+  // de escribir en la database equivocada.
+  const db = getCurrentDatabaseOrThrow();
   const configRef = ref(db, `${LOCAL_ID}/CONFIGURACION`);
   
   const updates = {};
@@ -380,15 +395,18 @@ const getNextPaymentId = async (db, localId) => {
 export const processCommissionPayment = async (paymentAmount, responsable = 'Sistema') => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const db = getDatabase();
+    // Un solo "op" para todo el pago: hay varios await reales (lectura del
+    // resumen, getNextPaymentId) antes de cada una de las tres escrituras
+    // definitivas de abajo. Se revalida antes de cada una.
+    const op = beginFirebaseOperation(LOCAL_ID);
+    const db = op.getDatabaseOrAbort();
 
-    const totalsRef = ref(db, `${LOCAL_ID}/RESUMEN_CUENTA/TOTALES`);
     const accountSummaryRef = ref(db, `${LOCAL_ID}/RESUMEN_CUENTA`);
 
     try {
         const accountSummarySnapshot = await get(accountSummaryRef);
         const accountSummaryData = accountSummarySnapshot.exists() ? accountSummarySnapshot.val() : {};
-        
+
         const salesToArchive = { ...accountSummaryData };
         if(salesToArchive.PAGO) delete salesToArchive.PAGO;
         if(salesToArchive.VENTAS_COMISION) delete salesToArchive.VENTAS_COMISION;
@@ -397,8 +415,8 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
 
         if (Object.keys(salesToArchive).length > 0) {
             const newPaymentId = await getNextPaymentId(db, LOCAL_ID);
-            const paymentRef = ref(db, `${LOCAL_ID}/PAGOS_COMISIONES/${newPaymentId}`);
-            
+            const paymentRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/PAGOS_COMISIONES/${newPaymentId}`);
+
             await set(paymentRef, {
                 id: newPaymentId,
                 paymentDate: new Date().toISOString(),
@@ -407,6 +425,7 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
             });
         }
 
+        const totalsRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/RESUMEN_CUENTA/TOTALES`);
         await runTransaction(totalsRef, (currentTotals) => {
             if (currentTotals) {
                 const currentCommission = currentTotals.totalCommission || 0;
@@ -439,7 +458,8 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
             }
         }
         if(Object.keys(updates).length > 0) {
-            await update(accountSummaryRef, updates);
+            const freshAccountSummaryRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/RESUMEN_CUENTA`);
+            await update(freshAccountSummaryRef, updates);
         }
 
         // Marcar registros en COMISIONES/REGISTRO como pagados

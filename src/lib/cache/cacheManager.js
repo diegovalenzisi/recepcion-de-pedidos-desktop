@@ -1,3 +1,5 @@
+import { CACHE_KEY_PREFIX as IMAGE_CACHE_KEY_PREFIX } from './imageCache.js';
+
 const DB_NAME = 'DLV_OrdersCache';
 const DB_VERSION = 2; // Incremented version for TTL support
 const STORE_NAME = 'orders';
@@ -5,6 +7,20 @@ const META_STORE = 'meta';
 const CACHE_STORE = 'general_cache';
 
 const DEFAULT_TTL = 1000 * 60 * 60; // 1 hour
+
+// Identificación de los caches de Cache Storage que crea el Service Worker
+// (ver public/sw.js) SIN depender de una lista de nombres exactos duplicada
+// entre los dos archivos: cualquier cache cuyo nombre empiece con este
+// prefijo se considera propio de la app y reconstruible (archivos estáticos
+// versionados, se vuelven a descargar solos) — si el nombre cambia en
+// sw.js en el futuro (ej. se le agrega una versión), con que conserve el
+// mismo prefijo esta limpieza lo sigue encontrando sin tocar código acá.
+// Nunca se borra un cache que no empiece con este prefijo (no se tocan
+// caches ajenos a la app).
+const SW_CACHE_PREFIX = 'dlv-';
+// Nombres sin el prefijo, de antes de este cambio — se siguen limpiando por
+// compatibilidad con lo que ya esté cacheado en instalaciones existentes.
+const LEGACY_SW_CACHE_NAMES = ['html-cache', 'static-resources'];
 
 export const initDB = () => {
   return new Promise((resolve, reject) => {
@@ -131,6 +147,71 @@ export const clearCache = async () => {
     console.warn("Failed to clear cache:", error);
     return false;
   }
+};
+
+// ---------------------------------------------------------------------------
+// Limpieza SEGURA para el botón "Limpiar Caché Local" de la UI.
+//
+// A diferencia de clearCache() (arriba, ya no la usa la UI), esta función
+// NUNCA toca: localId, overrides de rutas por local, cuentas de Mercado Pago,
+// preferencias de voz/WhatsApp/vista de entregas, sessionStorage (sesión del
+// usuario), ni los stores de IndexedDB de pedidos (STORE_NAME) o última
+// sincronización (META_STORE).
+//
+// Solo borra datos temporales y reconstruibles:
+//   - IndexedDB "general_cache": cache genérica con TTL (sin uso de pedidos).
+//   - localStorage con el prefijo de metadatos de imágenes cacheadas.
+//   - Cache Storage del Service Worker (html-cache, static-resources) —
+//     archivos estáticos versionados que se vuelven a descargar solos.
+//
+// Devuelve un reporte de qué se borró (usado también por el test automatizado).
+export const clearSafeLocalCache = async () => {
+  const report = { generalCacheCleared: false, imageCacheKeysRemoved: 0, swCachesRemoved: [] };
+
+  try {
+    const db = await initDB();
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction([CACHE_STORE], 'readwrite');
+      transaction.objectStore(CACHE_STORE).clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    report.generalCacheCleared = true;
+  } catch (error) {
+    console.warn('[clearSafeLocalCache] No se pudo limpiar la cache general (IndexedDB):', error);
+  }
+
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(IMAGE_CACHE_KEY_PREFIX)) keysToRemove.push(key);
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+    report.imageCacheKeysRemoved = keysToRemove.length;
+  } catch (error) {
+    console.warn('[clearSafeLocalCache] No se pudo limpiar la cache de imágenes:', error);
+  }
+
+  try {
+    if (typeof caches !== 'undefined') {
+      // Se descubren por prefijo (o por los nombres legacy conocidos) en vez
+      // de una lista fija — así sigue funcionando aunque sw.js cambie los
+      // nombres, y nunca se toca un cache que no sea reconociblemente propio.
+      const allCacheNames = await caches.keys();
+      const namesToDelete = allCacheNames.filter(
+        (name) => name.startsWith(SW_CACHE_PREFIX) || LEGACY_SW_CACHE_NAMES.includes(name)
+      );
+      for (const name of namesToDelete) {
+        const deleted = await caches.delete(name);
+        if (deleted) report.swCachesRemoved.push(name);
+      }
+    }
+  } catch (error) {
+    console.warn('[clearSafeLocalCache] No se pudo limpiar Cache Storage:', error);
+  }
+
+  return report;
 };
 
 export const getCacheMeta = async () => {

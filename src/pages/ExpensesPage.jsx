@@ -12,6 +12,7 @@ import ConfirmationDialog from '@/components/management/ConfirmationDialog';
 import ProvidersPage from '@/pages/ProvidersPage';
 import { listenToShiftExpenses, addExpenseToShift, deleteExpenseFromShift } from '@/lib/api/expensesApi';
 import { fetchEmployees, saveHRPayment, fetchCategories } from '@/lib/api/hrApi';
+import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 function ExpensesPage({ currentShift, userPermissions }) {
   const [activeTab, setActiveTab] = useState('expenses');
@@ -23,13 +24,14 @@ function ExpensesPage({ currentShift, userPermissions }) {
   const [loading, setLoading] = useState(true);
   const [expenseToDelete, setExpenseToDelete] = useState(null);
   const { toast } = useToast();
+  const { ready: firebaseReady } = useFirebaseReadiness();
 
   const canRegisterExpense = userPermissions.gastos_registrar_gasto;
   const canManageHRPayments = userPermissions.gastos_pagos_empleados;
   const canAccessProviders = userPermissions.gastos_proveedores || userPermissions.stock;
 
   useEffect(() => {
-    if (activeTab === 'expenses' && currentShift) {
+    if (activeTab === 'expenses' && currentShift && firebaseReady) {
       setLoading(true);
       const unsubscribe = listenToShiftExpenses(currentShift, (newExpenses) => {
         setExpenses(newExpenses);
@@ -55,7 +57,7 @@ function ExpensesPage({ currentShift, userPermissions }) {
 
       return () => unsubscribe();
     }
-  }, [currentShift, canManageHRPayments, canRegisterExpense, activeTab]);
+  }, [currentShift, canManageHRPayments, canRegisterExpense, activeTab, firebaseReady]);
 
   const handleAddGeneralExpense = async (expenseData) => {
     try {

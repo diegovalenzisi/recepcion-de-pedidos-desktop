@@ -1,4 +1,4 @@
-import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 import { getDatabase, ref, runTransaction, get, set, onValue, off, update } from 'firebase/database';
 
 export const fetchAccounts = async () => {
@@ -82,7 +82,15 @@ export const listenToAccounts = (localId, callback, errorCallback) => {
         if(errorCallback) errorCallback();
         return () => {};
     }
-    const db = getDatabase();
+    let db;
+    try {
+        db = getCurrentDatabaseOrThrow(localId);
+    } catch (e) {
+        console.warn('[listenToAccounts] Firebase todavía no está listo, no se suscribe:', e.message);
+        callback([]);
+        if (errorCallback) errorCallback(e);
+        return () => {};
+    }
     const accountsRef = ref(db, `${getLocationSpecificDatabasePath(localId)}/CUENTAS`);
 
     const listener = onValue(accountsRef, (snapshot) => {
