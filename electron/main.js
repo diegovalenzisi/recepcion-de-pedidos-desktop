@@ -955,8 +955,8 @@ function resolveCredentialsPath(vars, baseDir) {
     return raw;
   }
 
-  // 3. Es relativa → resolver contra userData
-  const fromUserData = path.join(userDataPath, raw);
+  // 3. Es relativa → resolver contra baseDir (dir del local bajo userData)
+  const fromUserData = path.join(baseDir, raw);
   console.log(`[MP SERVICE ACCOUNT] ruta resuelta=${fromUserData}`);
   if (existsSync(fromUserData)) {
     console.log('[MP SERVICE ACCOUNT] existe en userData=true');
@@ -965,7 +965,7 @@ function resolveCredentialsPath(vars, baseDir) {
 
   console.log('[MP SERVICE ACCOUNT] existe en userData=false');
   console.log('[MP SERVICE ACCOUNT] buscando fallback...');
-  return resolveCredentialsFallback(userDataPath, defaultPath);
+  return resolveCredentialsFallback(baseDir, defaultPath);
 }
 
 // Busca serviceAccount en ubicaciones conocidas de AFIP y copia a userData/serviceAccountKey.json
