@@ -348,11 +348,23 @@ function createImageCacheService(options = {}) {
     return next;
   }
 
-  // URL con versión (`?v=`) para forzar recarga cuando cambian los bytes
-  // (requisito 1). El handler del protocolo IGNORA el query y resuelve solo por
-  // host+key; el `?v=` es únicamente para invalidar la caché de Chromium.
+  // URL del protocolo. El localId va en el PATH, NO en el host: para un esquema
+  // "standard", el parser de Chromium interpreta un host puramente numérico
+  // (ej. "40508022") como una IPv4 de 32 bits y lo canoniza (→ "2.106.26.118"),
+  // rompiendo la resolución. Con host fijo "img" y localId como primer segmento
+  // del path, el localId numérico se preserva intacto. `?v=` (versión) fuerza la
+  // recarga cuando cambian los bytes; el handler lo ignora para resolver.
   function buildProtocolUrl(localId, key, entryOrMeta) {
-    return `dlvimg://${sanitizeLocalId(localId)}/${key}?v=${versionTag(entryOrMeta)}`;
+    return `dlvimg://img/${sanitizeLocalId(localId)}/${key}?v=${versionTag(entryOrMeta)}`;
+  }
+
+  // Parsea la URL del protocolo dlvimg://img/{localId}/{key}?v=... → {localId, key}.
+  // Centralizado acá para que el handler del main y las pruebas usen la MISMA lógica.
+  function parseProtocolUrl(rawUrl) {
+    const u = new URL(rawUrl);
+    // pathname = "/{localId}/{key}" (el host es el fijo "img").
+    const parts = u.pathname.replace(/^\/+/, '').split('/');
+    return { localId: parts[0] || '', key: parts[1] || '' };
   }
 
   // ---- API pública ----
@@ -647,6 +659,7 @@ function createImageCacheService(options = {}) {
     sweepOrphans,
     stats,
     buildProtocolUrl,
+    parseProtocolUrl,
     makeStableKey,
     // Para inspección/pruebas:
     __internals: { inFlightDownloads, manifestLocks, localDir, manifestPath, filePath, readManifest },

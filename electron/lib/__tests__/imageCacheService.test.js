@@ -139,7 +139,7 @@ function makeHttpGet(routes) {
     const svc = createImageCacheService({ root, httpGet: makeHttpGet({ [URL_A]: { status: 200, buffer: PNG, contentType: 'image/png' } }) });
     const key = makeStableKey(BUCKET, OBJ);
     const r = await svc.download('40508022', BUCKET, OBJ, { url: URL_A, remoteMeta: { generation: '1', md5Hash: md5Base64(PNG), size: PNG.length } });
-    assert.strictEqual(r.protocolUrl, `dlvimg://40508022/${key}?v=g1`);
+    assert.strictEqual(r.protocolUrl, `dlvimg://img/40508022/${key}?v=g1`);
     const onDisk = await fsp.readFile(path.join(root, '40508022', key));
     assert.ok(onDisk.equals(PNG));
     const manifest = JSON.parse(await fsp.readFile(path.join(root, '40508022', 'manifest.json'), 'utf8'));
@@ -569,6 +569,30 @@ function makeHttpGet(routes) {
     assert.ok(r.deleted >= 1, 'debe poder limpiar con catálogo vacío confirmado');
     assert.ok(!fs.existsSync(path.join(root, '40508022', key)), 'huérfano del local vacío borrado');
     assert.ok(fs.existsSync(path.join(root, '99999999', key)), 'el otro local queda intacto');
+  });
+
+  console.log('\n20. localId NUMÉRICO en la URL del protocolo (regresión del bug de placeholders):');
+  await check('buildProtocolUrl pone el localId en el PATH (host fijo "img"), no en el host', () => {
+    const svc = createImageCacheService({ root: mkTmpRoot(), httpGet: makeHttpGet({}) });
+    const key = 'a'.repeat(40);
+    const url = svc.buildProtocolUrl('40508022', key, { generation: '7' });
+    assert.strictEqual(url, `dlvimg://img/40508022/${key}?v=g7`);
+    // El host debe ser el fijo "img", NUNCA el localId (que si fuera numérico se
+    // canonizaría como IPv4, ej. 40508022 → 2.106.26.118).
+    const u = new URL(url);
+    assert.strictEqual(u.hostname, 'img');
+  });
+  await check('parseProtocolUrl recupera el localId numérico INTACTO (no como IP)', () => {
+    const svc = createImageCacheService({ root: mkTmpRoot(), httpGet: makeHttpGet({}) });
+    const key = 'b'.repeat(40);
+    // Simula EXACTAMENTE lo que recibe protocol.handle: la URL ya pasada por el
+    // parser estándar de Chromium (que canoniza el host, no el path).
+    const url = svc.buildProtocolUrl('40508022', key, { generation: '1' });
+    const parsed = svc.parseProtocolUrl(url);
+    assert.strictEqual(parsed.localId, '40508022', 'el localId numérico debe preservarse');
+    assert.strictEqual(parsed.key, key);
+    // Y con new URL() (lo que hace el runtime real) el path NO se canoniza a IP.
+    assert.strictEqual(new URL(url).pathname, `/40508022/${key}`);
   });
 
   console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

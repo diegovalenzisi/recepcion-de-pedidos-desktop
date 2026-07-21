@@ -98,11 +98,10 @@ function setupImageCacheIPC() {
   // verifica que el archivo exista, sea regular y coincida en tamaño.
   protocol.handle('dlvimg', async (request) => {
     try {
-      // dlvimg://{localId}/{key}?v={version}  — el query `?v=` se IGNORA para
-      // resolver (solo sirve para invalidar la caché de Chromium).
-      const u = new URL(request.url);
-      const localId = u.hostname;
-      const key = u.pathname.replace(/^\/+/, '');
+      // dlvimg://img/{localId}/{key}?v={version}  — localId va en el PATH (no en
+      // el host) para no ser interpretado como IPv4 cuando es numérico. El `?v=`
+      // se ignora para resolver (solo invalida la caché de Chromium).
+      const { localId, key } = imageCacheService.parseProtocolUrl(request.url);
       const { path: filePath, contentType } = await imageCacheService.resolveProtocolPath(localId, key);
       const data = await require('fs').promises.readFile(filePath);
       return new Response(data, {
