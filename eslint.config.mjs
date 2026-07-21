@@ -50,4 +50,29 @@ export default [
 		},
 	},
 	{ files: ['tools/**/*.js', 'tailwind.config.js'], languageOptions: { globals: globals.node } },
+	// Proceso principal de Electron (y sus pruebas): CommonJS + entorno Node real.
+	// Reconoce require/module/process/Buffer/console/__dirname y los globals web
+	// disponibles en el runtime de Node de Electron 32 (URL, Response, fetch, ...),
+	// en vez de dejarlos como no-undef. NO desactiva reglas globalmente.
+	{
+		files: ['electron/**/*.js'],
+		languageOptions: {
+			sourceType: 'commonjs',
+			globals: {
+				...globals.node,
+				URL: 'readonly',
+				URLSearchParams: 'readonly',
+				Response: 'readonly',
+				Request: 'readonly',
+				Headers: 'readonly',
+				fetch: 'readonly',
+			},
+		},
+	},
+	// Archivos de prueba (node:assert): corren con Node, así que reconocen sus
+	// globals (process, console, Buffer, setTimeout, ...). No desactiva reglas.
+	{
+		files: ['**/__tests__/**', '**/*.test.js'],
+		languageOptions: { globals: { ...globals.node, ...globals.browser } },
+	},
 ];

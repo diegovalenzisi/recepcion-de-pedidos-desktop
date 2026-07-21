@@ -13,7 +13,7 @@ const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStre
 const https = require('https');
 const http  = require('http');
 const { resolveRequestTransport, normalizeFirebaseDatabaseURL, classifyTransportError } = require('./lib/firebaseHttpTransport');
-const { createImageCacheService } = require('./lib/imageCacheService');
+const { createImageCacheService, assertRedirectAllowed, DEFAULT_ALLOWED_DOWNLOAD_HOSTS, validateDownloadUrl: validateImageDownloadUrl } = require('./lib/imageCacheService');
 
 const isDev = !app.isPackaged;
 
@@ -34,7 +34,7 @@ let imageCacheService = null; // se instancia en app.whenReady (necesita userDat
 // sigue redirects (Firebase puede responder 302), y NUNCA bufferea más de
 // maxBytes (aborta la conexión si se excede). Reusa resolveRequestTransport
 // para elegir http/https por el parser estándar (nunca por texto).
-function dlvimgHttpGet(rawUrl, { maxBytes = 10 * 1024 * 1024, redirectsLeft = 4 } = {}) {
+function dlvimgHttpGet(rawUrl, { maxBytes = 10 * 1024 * 1024, redirectsLeft = 4, allowedHosts = DEFAULT_ALLOWED_DOWNLOAD_HOSTS } = {}) {
   return new Promise((resolve, reject) => {
     let transport;
     try {
@@ -42,12 +42,16 @@ function dlvimgHttpGet(rawUrl, { maxBytes = 10 * 1024 * 1024, redirectsLeft = 4 
     } catch (e) { reject(e); return; }
     const req = transport.module.get(transport.url, (res) => {
       const status = res.statusCode || 0;
-      // Redirect
+      // Redirect — el destino DEBE seguir dentro de los hosts permitidos
+      // (requisito 2). assertRedirectAllowed lanza si no.
       if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) { reject(new Error('demasiados redirects')); return; }
-        const nextUrl = new URL(res.headers.location, transport.url).toString();
-        resolve(dlvimgHttpGet(nextUrl, { maxBytes, redirectsLeft: redirectsLeft - 1 }));
+        let nextUrl;
+        try {
+          nextUrl = assertRedirectAllowed(res.headers.location, transport.url.toString(), allowedHosts);
+        } catch (e) { reject(e); return; }
+        resolve(dlvimgHttpGet(nextUrl, { maxBytes, redirectsLeft: redirectsLeft - 1, allowedHosts }));
         return;
       }
       const chunks = [];
@@ -74,33 +78,49 @@ function dlvimgHttpGet(rawUrl, { maxBytes = 10 * 1024 * 1024, redirectsLeft = 4 
   });
 }
 
+let imageCacheProtocolRegistered = false; // evita registrar el handler dos veces
+
 // Registra el handler del protocolo dlvimg:// y los IPC del caché de imágenes.
-// Debe llamarse DESPUÉS de app.ready.
+// Debe llamarse DESPUÉS de app.ready. Idempotente.
 function setupImageCacheIPC() {
+  if (imageCacheProtocolRegistered) return; // ya configurado en este proceso
   if (!imageCacheService) {
     imageCacheService = createImageCacheService({
       root: path.join(app.getPath('userData'), 'cache', 'article-images'),
       httpGet: dlvimgHttpGet,
-      logger: { warn: (...a) => console.warn(...a), error: (...a) => console.error(...a), info: () => {} },
+      debug: process.env.DLV_IMG_DEBUG === '1', // logs con tags solo si se pide
+      logger: { warn: (...a) => console.warn(...a), error: (...a) => console.error(...a), info: (...a) => console.log(...a) },
     });
   }
 
   // Sirve SOLO archivos registrados en el manifiesto, dentro de la carpeta del
-  // local. resolveProtocolPath rechaza traversal / keys / locales inválidos.
+  // local. resolveProtocolPath rechaza traversal / keys / locales inválidos y
+  // verifica que el archivo exista, sea regular y coincida en tamaño.
   protocol.handle('dlvimg', async (request) => {
     try {
-      // dlvimg://{localId}/{key}
+      // dlvimg://{localId}/{key}?v={version}  — el query `?v=` se IGNORA para
+      // resolver (solo sirve para invalidar la caché de Chromium).
       const u = new URL(request.url);
       const localId = u.hostname;
       const key = u.pathname.replace(/^\/+/, '');
       const { path: filePath, contentType } = await imageCacheService.resolveProtocolPath(localId, key);
       const data = await require('fs').promises.readFile(filePath);
-      return new Response(data, { status: 200, headers: { 'content-type': contentType, 'cache-control': 'no-cache' } });
+      return new Response(data, {
+        status: 200,
+        headers: {
+          'content-type': contentType,
+          // no-store: Chromium nunca conserva una versión anterior en su caché
+          // HTTP; combinado con el `?v=` versionado, un cambio de imagen fuerza
+          // recarga real (requisito 1).
+          'cache-control': 'no-store, no-cache, must-revalidate',
+        },
+      });
     } catch (e) {
       // Nunca exponer detalles de ruta: solo un 404 controlado.
-      return new Response('', { status: 404 });
+      return new Response('', { status: 404, headers: { 'cache-control': 'no-store' } });
     }
   });
+  imageCacheProtocolRegistered = true;
 
   ipcMain.handle('image-cache:resolve-local', async (_e, { localId, bucket, objectPath }) => {
     try {
@@ -121,6 +141,12 @@ function setupImageCacheIPC() {
 
   ipcMain.handle('image-cache:download', async (_e, { localId, bucket, objectPath, url, remoteMeta }) => {
     try {
+      // El MAIN valida la URL antes de descargar (requisito 2): https, host de
+      // Firebase/Storage permitido, y que el bucket+objectPath del path de la URL
+      // coincidan EXACTAMENTE con los declarados por el renderer. Así una llamada
+      // IPC alterada no convierte el servicio en un descargador arbitrario.
+      const check = validateImageDownloadUrl(url, { bucket, objectPath });
+      if (!check.ok) return { ok: false, code: check.code, message: 'URL de descarga rechazada por el main' };
       const r = await imageCacheService.download(localId, bucket, objectPath, { url, remoteMeta });
       return { ok: true, protocolUrl: r.protocolUrl, key: r.key };
     } catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }

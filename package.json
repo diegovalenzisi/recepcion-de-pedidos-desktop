@@ -6,7 +6,8 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite --host :: --port 3000",
-    "test": "node electron/lib/__tests__/firebaseHttpTransport.test.js && node src/lib/cache/__tests__/clearSafeLocalCache.test.js && node src/lib/firebase/__tests__/firebaseAppPattern.test.js && node src/lib/firebase/__tests__/readiness.test.js && node src/lib/firebase/__tests__/multiLocalSwitch.test.js && node src/lib/firebase/__tests__/firebaseGeneration.test.js && node src/lib/firebase/__tests__/listenerCleanupOnSwitch.test.js && node electron/lib/__tests__/imageCacheService.test.js",
+    "test": "node electron/lib/__tests__/firebaseHttpTransport.test.js && node src/lib/cache/__tests__/clearSafeLocalCache.test.js && node src/lib/firebase/__tests__/firebaseAppPattern.test.js && node src/lib/firebase/__tests__/readiness.test.js && node src/lib/firebase/__tests__/multiLocalSwitch.test.js && node src/lib/firebase/__tests__/firebaseGeneration.test.js && node src/lib/firebase/__tests__/listenerCleanupOnSwitch.test.js && node electron/lib/__tests__/imageCacheService.test.js && node src/lib/cache/__tests__/articleImageController.test.js",
+    "test:electron-runtime": "electron electron/lib/__tests__/electronRuntimeGlobals.cjs",
     "build": "node tools/generate-llms.js & npx vite build",
     "preview": "vite preview --host :: --port 3000",
     "lint": "eslint . --quiet",

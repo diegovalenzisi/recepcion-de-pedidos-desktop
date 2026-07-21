@@ -18,6 +18,7 @@ import { getOperationalDate, formatDateToDDMMAAAA } from '@/lib/utils';
 import { savePrepaymentForApp } from '@/lib/api/prepaymentApi';
 import { preloadImage } from '@/lib/cache/imageCache';
 import { warmArticleImages, sweepArticleImageOrphans } from '@/lib/cache/articleImageCache';
+import { getLocalId } from '@/lib/firebase/core';
 import { useStockVerification } from '@/hooks/useStockVerification';
 import { usePromotionStockAutomation } from '@/hooks/usePromotionStockAutomation';
 
@@ -107,6 +108,9 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   const loadData = async () => {
     setLoading(true);
     setError(null);
+    // Local activo al INICIAR la carga: si cambia antes del sweep, se cancela
+    // la limpieza (requisito 11).
+    const catalogLocalId = getLocalId();
     try {
       const [fetchedDepartments, fetchedArticles, fetchedOptionals, fetchedOptionalGroups, fetchedProductGroups, fetchedAccounts] = await Promise.all([
         fetchData('departamentos'),
@@ -148,8 +152,9 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       warmArticleImages(fetchedArticles, { concurrency: 4 }).catch(() => {});
 
       // Limpieza de huérfanos: SOLO acá, con el catálogo completo y confirmado
-      // recién cargado (requisito 16/17). Nunca por render ni por artículo.
-      sweepArticleImageOrphans(fetchedArticles).catch(() => {});
+      // recién cargado (requisito 16/17), y solo si el local no cambió durante
+      // la carga (requisito 11). Nunca por render ni por artículo.
+      sweepArticleImageOrphans(fetchedArticles, catalogLocalId).catch(() => {});
 
     } catch (err) {
       setError('No se pudieron cargar los datos. Inténtelo de nuevo.');

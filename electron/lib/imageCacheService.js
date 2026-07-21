@@ -44,6 +44,13 @@ const DEFAULT_MIN_CHECK_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 const DEFAULT_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000; // 24 h
 const KEY_REGEX = /^[a-f0-9]{40}$/;             // sha1 hex — rechaza `..`, `/`, absolutos
 const LOCAL_ID_REGEX = /^[A-Za-z0-9_-]+$/;      // rechaza traversal en el nombre de carpeta
+// Hosts permitidos para descargar (requisito 2). Solo Google/Firebase Storage.
+// firebasestorage.googleapis.com sirve los bytes directo; storage.googleapis.com
+// se acepta por si algún bucket responde por ahí. Nada más.
+const DEFAULT_ALLOWED_DOWNLOAD_HOSTS = new Set([
+  'firebasestorage.googleapis.com',
+  'storage.googleapis.com',
+]);
 
 // ---------------------------------------------------------------------------
 // Errores tipados (el renderer puede distinguir por .code)
@@ -156,6 +163,77 @@ function md5Base64(buffer) {
 }
 
 /**
+ * Etiqueta de versión URL-safe para el query `?v=` del protocolo (requisito 1).
+ * Prioridad generation → md5Hash → updated → size → downloadedAt. Solo
+ * alfanumérico, para que el `<img src>` cambie cuando cambia la versión y
+ * Chromium no reuse la anterior.
+ */
+function versionTag(meta) {
+  if (!meta) return '0';
+  if (meta.generation != null && String(meta.generation) !== '') return `g${String(meta.generation)}`;
+  if (meta.md5Hash) return `m${crypto.createHash('sha1').update(String(meta.md5Hash)).digest('hex').slice(0, 12)}`;
+  if (meta.updated) return `u${Date.parse(meta.updated) || 0}`;
+  if (meta.size != null) return `s${meta.size}`;
+  if (meta.downloadedAt) return `d${meta.downloadedAt}`;
+  return '0';
+}
+
+/** localhost / IP privada / loopback / link-local (requisito 2). */
+function isPrivateOrLocalHost(hostname) {
+  const h = String(hostname || '').toLowerCase();
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (m) {
+    const a = Number(m[1]); const b = Number(m[2]);
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 169 && b === 254) return true;               // link-local
+    if (a === 172 && b >= 16 && b <= 31) return true;       // 172.16/12
+    if (a === 192 && b === 168) return true;                // 192.168/16
+    if (a >= 224) return true;                              // multicast/reserved
+  }
+  if (h === '::1' || h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
+  return false;
+}
+
+/**
+ * Valida que una URL de descarga sea legítima ANTES de pedirla (requisito 2):
+ * https, host permitido (no localhost/IP privada/externo), y que bucket +
+ * objectPath del path coincidan EXACTAMENTE con los declarados. Devuelve
+ * { ok, code }. Nunca lanza.
+ */
+function validateDownloadUrl(rawUrl, { bucket, objectPath, allowedHosts = DEFAULT_ALLOWED_DOWNLOAD_HOSTS } = {}) {
+  let u;
+  try { u = new URL(String(rawUrl)); } catch { return { ok: false, code: 'URL_INVALID' }; }
+  if (u.protocol !== 'https:') return { ok: false, code: 'URL_NOT_HTTPS' };
+  if (isPrivateOrLocalHost(u.hostname)) return { ok: false, code: 'URL_LOCAL_OR_PRIVATE' };
+  if (!allowedHosts.has(u.hostname)) return { ok: false, code: 'URL_HOST_NOT_ALLOWED' };
+  const m = u.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
+  if (!m) return { ok: false, code: 'URL_PATH_MISMATCH' };
+  let urlBucket, urlObjectPath;
+  try {
+    urlBucket = normalizeBucket(decodeURIComponent(m[1]));
+    urlObjectPath = normalizeObjectPath(decodeURIComponent(m[2]));
+  } catch { return { ok: false, code: 'URL_PATH_MISMATCH' }; }
+  if (bucket != null && urlBucket !== normalizeBucket(bucket)) return { ok: false, code: 'URL_BUCKET_MISMATCH' };
+  if (objectPath != null && urlObjectPath !== normalizeObjectPath(objectPath)) return { ok: false, code: 'URL_OBJECT_MISMATCH' };
+  return { ok: true, code: 'OK', host: u.hostname };
+}
+
+/**
+ * Valida el destino de un redirect (requisito 2): https + host permitido +
+ * no privado/local. Devuelve la URL absoluta o lanza ImageCacheError.
+ */
+function assertRedirectAllowed(location, baseUrl, allowedHosts = DEFAULT_ALLOWED_DOWNLOAD_HOSTS) {
+  let target;
+  try { target = new URL(location, baseUrl); } catch { throw new ImageCacheError('REDIRECT_INVALID', `redirect inválido: ${location}`); }
+  if (target.protocol !== 'https:') throw new ImageCacheError('REDIRECT_NOT_HTTPS', `redirect no-https: ${target.protocol}`);
+  if (isPrivateOrLocalHost(target.hostname)) throw new ImageCacheError('REDIRECT_HOST_NOT_ALLOWED', `redirect a host local/privado: ${target.hostname}`);
+  if (!allowedHosts.has(target.hostname)) throw new ImageCacheError('REDIRECT_HOST_NOT_ALLOWED', `redirect a host no permitido: ${target.hostname}`);
+  return target.toString();
+}
+
+/**
  * Valida una respuesta de descarga ANTES de reemplazar la copia local.
  * Devuelve { ok, code }. Nunca lanza. Códigos:
  *  URL_EXPIRED (401/403) · HTTP_ERROR · EMPTY · TOO_LARGE · BAD_CONTENT_TYPE ·
@@ -189,7 +267,13 @@ function createImageCacheService(options = {}) {
     : DEFAULT_ALLOWED_CONTENT_TYPES;
   const minCheckIntervalMs = options.minCheckIntervalMs != null ? options.minCheckIntervalMs : DEFAULT_MIN_CHECK_INTERVAL_MS;
   const orphanGraceMs = options.orphanGraceMs != null ? options.orphanGraceMs : DEFAULT_ORPHAN_GRACE_MS;
+  const allowedHosts = options.allowedHosts ? new Set(options.allowedHosts) : DEFAULT_ALLOWED_DOWNLOAD_HOSTS;
   const logger = options.logger || { warn() {}, error() {}, info() {} };
+  // Logs de depuración con tags (requisito 12), apagados por defecto. No imprimen
+  // tokens ni URLs completas: solo objectPath/key/version.
+  const debug = options.debug
+    ? (tag, info) => { try { logger.info(`[imageCache] ${tag}`, info || ''); } catch { /* noop */ } }
+    : () => {};
 
   // Dedupe de descargas por (localId, bucket, objectPath) — requisito 15.
   const inFlightDownloads = new Map();
@@ -264,8 +348,11 @@ function createImageCacheService(options = {}) {
     return next;
   }
 
-  function buildProtocolUrl(localId, key) {
-    return `dlvimg://${sanitizeLocalId(localId)}/${key}`;
+  // URL con versión (`?v=`) para forzar recarga cuando cambian los bytes
+  // (requisito 1). El handler del protocolo IGNORA el query y resuelve solo por
+  // host+key; el `?v=` es únicamente para invalidar la caché de Chromium.
+  function buildProtocolUrl(localId, key, entryOrMeta) {
+    return `dlvimg://${sanitizeLocalId(localId)}/${key}?v=${versionTag(entryOrMeta)}`;
   }
 
   // ---- API pública ----
@@ -279,7 +366,8 @@ function createImageCacheService(options = {}) {
     const manifest = await readManifest(localId);
     const entry = manifest[key];
     if (entry && await fileExists(filePath(localId, key))) {
-      return { key, cached: true, protocolUrl: buildProtocolUrl(localId, key), entry };
+      debug('CACHE_HIT', { objectPath: normalizeObjectPath(objectPath), key, v: versionTag(entry) });
+      return { key, cached: true, protocolUrl: buildProtocolUrl(localId, key, entry), entry };
     }
     return { key, cached: false, entry: entry || null };
   }
@@ -329,8 +417,21 @@ function createImageCacheService(options = {}) {
 
     if (inFlightDownloads.has(dedupeKey)) return inFlightDownloads.get(dedupeKey);
 
+    // Defensa en profundidad (requisito 2): el main YA valida la URL completa
+    // (host permitido + bucket/objectPath coincidentes) antes de llamar acá vía
+    // validateDownloadUrl. Este guard adicional del servicio corta lo más
+    // peligroso aunque alguien lo invoque directo: nunca https → rechaza; host
+    // local/loopback/IP privada → rechaza (anti-SSRF). La validación estricta de
+    // allowlist+path vive en el handler IPC del main.
+    let parsedDlUrl;
+    try { parsedDlUrl = new URL(String(url)); }
+    catch { return Promise.reject(new ImageCacheError('URL_INVALID', `URL inválida: ${url}`)); }
+    if (parsedDlUrl.protocol !== 'https:') return Promise.reject(new ImageCacheError('URL_NOT_HTTPS', 'la descarga debe ser https'));
+    if (isPrivateOrLocalHost(parsedDlUrl.hostname)) return Promise.reject(new ImageCacheError('URL_LOCAL_OR_PRIVATE', 'destino local/privado rechazado'));
+
     const task = (async () => {
-      const res = await httpGet(url, { maxBytes });
+      debug('DOWNLOAD_START', { objectPath: p, key });
+      const res = await httpGet(url, { maxBytes, allowedHosts });
       const validation = validateDownload({
         status: res.status,
         buffer: res.buffer,
@@ -340,6 +441,7 @@ function createImageCacheService(options = {}) {
         allowedContentTypes,
       });
       if (!validation.ok) {
+        debug('DOWNLOAD_FAILED_KEEPING_OLD', { objectPath: p, key, code: validation.code });
         throw new ImageCacheError(validation.code, `descarga inválida (${validation.code}) para ${p}`);
       }
 
@@ -363,8 +465,9 @@ function createImageCacheService(options = {}) {
 
       const ct = (res.contentType || (res.headers && res.headers['content-type']) || '')
         .split(';')[0].trim().toLowerCase();
+      let savedEntry;
       await withManifest(lid, (manifest) => {
-        manifest[key] = {
+        savedEntry = {
           bucket: b,
           objectPath: p,
           generation: remoteMeta && remoteMeta.generation != null ? String(remoteMeta.generation) : (manifest[key] && manifest[key].generation) || null,
@@ -378,10 +481,12 @@ function createImageCacheService(options = {}) {
           lastCheckedAt: now(),
           state: 'ready',
         };
+        manifest[key] = savedEntry;
         return { __write: true, manifest, value: null };
       });
 
-      return { key, protocolUrl: buildProtocolUrl(lid, key) };
+      debug('DOWNLOAD_OK', { objectPath: p, key, v: versionTag(savedEntry), bytes: res.buffer.length });
+      return { key, protocolUrl: buildProtocolUrl(lid, key, savedEntry) };
     })();
 
     // finally: SIEMPRE se limpia la entrada de inFlight (requisito 15).
@@ -427,7 +532,19 @@ function createImageCacheService(options = {}) {
     if (abs !== path.join(dir, key) || !abs.startsWith(dirWithSep)) {
       throw new ImageCacheError('PATH_ESCAPE', `ruta fuera del cache: ${key}`);
     }
-    if (!await fileExists(abs)) throw new ImageCacheError('FILE_MISSING', `archivo ausente: ${key}`);
+    // Requisito 8: antes de servir, verificar que el archivo exista, sea un
+    // archivo REGULAR y su tamaño sea coherente con el manifiesto. Si fue
+    // manipulado/corrompido externamente, no servirlo como válido: se lanza y
+    // el handler devuelve 404 (el renderer cae al placeholder y puede volver a
+    // resolver más tarde).
+    let st;
+    try { st = await fs.stat(abs); } catch { throw new ImageCacheError('FILE_MISSING', `archivo ausente: ${key}`); }
+    if (!st.isFile()) throw new ImageCacheError('NOT_A_FILE', `no es un archivo regular: ${key}`);
+    if (st.size === 0) throw new ImageCacheError('FILE_EMPTY', `archivo vacío: ${key}`);
+    const expectedSize = manifest[key].size;
+    if (expectedSize != null && Number(expectedSize) > 0 && Number(st.size) !== Number(expectedSize)) {
+      throw new ImageCacheError('SIZE_MISMATCH', `tamaño incoherente (${st.size} != ${expectedSize}): ${key}`);
+    }
     return { path: abs, contentType: manifest[key].contentType || 'image/jpeg' };
   }
 
@@ -440,7 +557,7 @@ function createImageCacheService(options = {}) {
    * - Nunca toca carpetas de otros locales (opera solo dentro de localDir(localId)).
    */
   async function sweepOrphans(localId, validKeys, { catalogComplete = false, graceMs = orphanGraceMs } = {}) {
-    if (!catalogComplete) return { skipped: true, reason: 'catalog-incomplete', deleted: 0 };
+    if (!catalogComplete) { debug('SWEEP_SKIPPED', { localId, reason: 'catalog-incomplete' }); return { skipped: true, reason: 'catalog-incomplete', deleted: 0 }; }
     const lid = sanitizeLocalId(localId);
     const valid = validKeys instanceof Set ? validKeys : new Set(validKeys || []);
     const dir = localDir(lid);
@@ -483,6 +600,7 @@ function createImageCacheService(options = {}) {
         }
       }
 
+      debug('SWEEP_OK', { localId: lid, deleted });
       return { __write: changed, manifest, value: { skipped: false, deleted } };
     });
   }
@@ -520,10 +638,15 @@ module.exports = {
   looksLikeImage,
   md5Base64,
   validateDownload,
+  versionTag,
+  isPrivateOrLocalHost,
+  validateDownloadUrl,
+  assertRedirectAllowed,
   // constantes
   DEFAULT_MAX_BYTES,
   DEFAULT_MIN_CHECK_INTERVAL_MS,
   DEFAULT_ORPHAN_GRACE_MS,
+  DEFAULT_ALLOWED_DOWNLOAD_HOSTS,
   KEY_REGEX,
   LOCAL_ID_REGEX,
 };

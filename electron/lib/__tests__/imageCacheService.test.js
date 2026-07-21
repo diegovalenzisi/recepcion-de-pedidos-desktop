@@ -19,6 +19,10 @@ const {
   compareVersion,
   looksLikeImage,
   validateDownload,
+  validateDownloadUrl,
+  assertRedirectAllowed,
+  isPrivateOrLocalHost,
+  versionTag,
   md5Base64,
   DEFAULT_MAX_BYTES,
 } = require('../imageCacheService.js');
@@ -135,7 +139,7 @@ function makeHttpGet(routes) {
     const svc = createImageCacheService({ root, httpGet: makeHttpGet({ [URL_A]: { status: 200, buffer: PNG, contentType: 'image/png' } }) });
     const key = makeStableKey(BUCKET, OBJ);
     const r = await svc.download('40508022', BUCKET, OBJ, { url: URL_A, remoteMeta: { generation: '1', md5Hash: md5Base64(PNG), size: PNG.length } });
-    assert.strictEqual(r.protocolUrl, `dlvimg://40508022/${key}`);
+    assert.strictEqual(r.protocolUrl, `dlvimg://40508022/${key}?v=g1`);
     const onDisk = await fsp.readFile(path.join(root, '40508022', key));
     assert.ok(onDisk.equals(PNG));
     const manifest = JSON.parse(await fsp.readFile(path.join(root, '40508022', 'manifest.json'), 'utf8'));
@@ -420,6 +424,103 @@ function makeHttpGet(routes) {
   await check('objectPath con caracteres se normaliza sin romper la key', () => {
     const k = makeStableKey(BUCKET, '40508022/articulos/año & café (1).png');
     assert.match(k, /^[a-f0-9]{40}$/);
+  });
+
+  console.log('\n15. URL versionada (?v=) — cambio visual al reemplazar bytes:');
+  await check('primera descarga da ?v=g100; nueva generation da ?v=g101 (src diferente)', async () => {
+    const root = mkTmpRoot();
+    const URL_100 = 'https://firebasestorage.googleapis.com/v0/b/proj-a.appspot.com/o/40508022%2Farticulos%2Fa.png?token=t1';
+    const URL_101 = 'https://firebasestorage.googleapis.com/v0/b/proj-a.appspot.com/o/40508022%2Farticulos%2Fa.png?token=t2';
+    const OBJ2 = '40508022/articulos/a.png';
+    const svc = createImageCacheService({ root, httpGet: makeHttpGet({
+      [URL_100]: { status: 200, buffer: PNG, contentType: 'image/png' },
+      [URL_101]: { status: 200, buffer: JPEG_V2, contentType: 'image/jpeg' },
+    }) });
+    const r100 = await svc.download('40508022', BUCKET, OBJ2, { url: URL_100, remoteMeta: { generation: '100' } });
+    assert.ok(r100.protocolUrl.endsWith('?v=g100'), `esperaba ?v=g100, fue ${r100.protocolUrl}`);
+    const local = await svc.resolveLocal('40508022', BUCKET, OBJ2);
+    assert.ok(local.protocolUrl.endsWith('?v=g100'));
+    const r101 = await svc.download('40508022', BUCKET, OBJ2, { url: URL_101, remoteMeta: { generation: '101' } });
+    assert.ok(r101.protocolUrl.endsWith('?v=g101'), `esperaba ?v=g101, fue ${r101.protocolUrl}`);
+    assert.notStrictEqual(r100.protocolUrl, r101.protocolUrl, 'el src debe cambiar');
+  });
+  await check('versionTag prioriza generation, luego md5, luego size', () => {
+    assert.strictEqual(versionTag({ generation: '77' }), 'g77');
+    assert.ok(versionTag({ md5Hash: 'abc' }).startsWith('m'));
+    assert.strictEqual(versionTag({ size: 123 }), 's123');
+    assert.strictEqual(versionTag(null), '0');
+  });
+
+  console.log('\n16. Validación de URL de descarga (anti descargador arbitrario):');
+  const OBJ_URL = '40508022/articulos/a.png';
+  const GOOD = `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/${encodeURIComponent(OBJ_URL)}?alt=media&token=x`;
+  await check('acepta una URL de Firebase legítima con bucket+objectPath coincidentes', () => {
+    assert.strictEqual(validateDownloadUrl(GOOD, { bucket: BUCKET, objectPath: OBJ_URL }).ok, true);
+  });
+  await check('rechaza http://localhost', () => {
+    assert.strictEqual(validateDownloadUrl('http://localhost/x', {}).code, 'URL_NOT_HTTPS');
+  });
+  await check('rechaza https://localhost (host local aunque sea https)', () => {
+    assert.strictEqual(validateDownloadUrl('https://localhost/x', {}).code, 'URL_LOCAL_OR_PRIVATE');
+  });
+  await check('rechaza https://127.0.0.1', () => {
+    assert.strictEqual(validateDownloadUrl('https://127.0.0.1/x', {}).code, 'URL_LOCAL_OR_PRIVATE');
+  });
+  await check('rechaza IP privada 192.168.x', () => {
+    assert.strictEqual(validateDownloadUrl('https://192.168.1.5/x', {}).code, 'URL_LOCAL_OR_PRIVATE');
+  });
+  await check('rechaza dominio externo', () => {
+    assert.strictEqual(validateDownloadUrl('https://evil.example.com/v0/b/x/o/y', {}).code, 'URL_HOST_NOT_ALLOWED');
+  });
+  await check('rechaza URL Firebase cuyo objectPath NO coincide con el declarado', () => {
+    assert.strictEqual(validateDownloadUrl(GOOD, { bucket: BUCKET, objectPath: '40508022/articulos/OTRO.png' }).code, 'URL_OBJECT_MISMATCH');
+  });
+  await check('rechaza URL Firebase cuyo bucket NO coincide', () => {
+    assert.strictEqual(validateDownloadUrl(GOOD, { bucket: 'otro-bucket.appspot.com', objectPath: OBJ_URL }).code, 'URL_BUCKET_MISMATCH');
+  });
+  await check('rechaza protocolo file:', () => {
+    assert.strictEqual(validateDownloadUrl('file:///etc/passwd', {}).code, 'URL_NOT_HTTPS');
+  });
+  await check('isPrivateOrLocalHost detecta rangos privados y loopback', () => {
+    assert.ok(isPrivateOrLocalHost('10.0.0.1'));
+    assert.ok(isPrivateOrLocalHost('172.16.0.1'));
+    assert.ok(isPrivateOrLocalHost('::1'));
+    assert.ok(!isPrivateOrLocalHost('firebasestorage.googleapis.com'));
+  });
+  await check('assertRedirectAllowed rechaza redirect a host no permitido y a no-https', () => {
+    assert.throws(() => assertRedirectAllowed('https://evil.example.com/x', GOOD), (e) => e.code === 'REDIRECT_HOST_NOT_ALLOWED');
+    assert.throws(() => assertRedirectAllowed('http://firebasestorage.googleapis.com/x', GOOD), (e) => e.code === 'REDIRECT_NOT_HTTPS');
+    // Redirect legítimo dentro de hosts permitidos: no lanza.
+    assert.doesNotThrow(() => assertRedirectAllowed('https://storage.googleapis.com/x', GOOD));
+  });
+  await check('download() rechaza una URL no permitida SIN pedirla (httpGet no se llama)', async () => {
+    const root = mkTmpRoot();
+    let hits = 0;
+    const svc = createImageCacheService({ root, httpGet: async () => { hits++; return { status: 200, buffer: PNG, contentType: 'image/png' }; } });
+    await assert.rejects(
+      svc.download('40508022', BUCKET, OBJ_URL, { url: 'https://127.0.0.1/x' }),
+      (e) => e.code === 'URL_LOCAL_OR_PRIVATE'
+    );
+    assert.strictEqual(hits, 0, 'no debe intentar la descarga de una URL rechazada');
+  });
+
+  console.log('\n17. Archivo local manipulado externamente (verificación al servir):');
+  await check('rechaza servir si el tamaño en disco NO coincide con el manifiesto', async () => {
+    const root = mkTmpRoot();
+    const svc = createImageCacheService({ root, httpGet: makeHttpGet({ [URL_A]: { status: 200, buffer: PNG, contentType: 'image/png' } }) });
+    const key = makeStableKey(BUCKET, OBJ);
+    await svc.download('40508022', BUCKET, OBJ, { url: URL_A, remoteMeta: { generation: '1', size: PNG.length } });
+    // Manipular el archivo en disco (agregar bytes) → tamaño incoherente.
+    await fsp.appendFile(path.join(root, '40508022', key), Buffer.from([9, 9, 9, 9]));
+    await assert.rejects(svc.resolveProtocolPath('40508022', key), (e) => e.code === 'SIZE_MISMATCH');
+  });
+  await check('rechaza servir si el archivo fue borrado externamente', async () => {
+    const root = mkTmpRoot();
+    const svc = createImageCacheService({ root, httpGet: makeHttpGet({ [URL_A]: { status: 200, buffer: PNG, contentType: 'image/png' } }) });
+    const key = makeStableKey(BUCKET, OBJ);
+    await svc.download('40508022', BUCKET, OBJ, { url: URL_A, remoteMeta: { generation: '1' } });
+    await fsp.unlink(path.join(root, '40508022', key));
+    await assert.rejects(svc.resolveProtocolPath('40508022', key), (e) => e.code === 'FILE_MISSING');
   });
 
   console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
