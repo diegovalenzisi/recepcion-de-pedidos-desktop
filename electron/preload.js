@@ -107,11 +107,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Caché local de imágenes de artículos (proceso principal). El renderer solo
   // recibe URLs dlvimg://... o el placeholder — nunca rutas físicas de Windows.
   imageCache: {
-    resolveLocal: (params) => ipcRenderer.invoke('image-cache:resolve-local', params),
-    shouldCheck:  (params) => ipcRenderer.invoke('image-cache:should-check', params),
-    recordCheck:  (params) => ipcRenderer.invoke('image-cache:record-check', params),
-    download:     (params) => ipcRenderer.invoke('image-cache:download', params),
-    sweep:        (params) => ipcRenderer.invoke('image-cache:sweep', params),
+    resolveLocal:      (params) => ipcRenderer.invoke('image-cache:resolve-local', params),
+    shouldCheck:       (params) => ipcRenderer.invoke('image-cache:should-check', params),
+    recordCheck:       (params) => ipcRenderer.invoke('image-cache:record-check', params),
+    markRemoteDeleted: (params) => ipcRenderer.invoke('image-cache:mark-remote-deleted', params),
+    download:          (params) => ipcRenderer.invoke('image-cache:download', params),
+    sweep:             (params) => ipcRenderer.invoke('image-cache:sweep', params),
   },
   isElectron: true,
 });

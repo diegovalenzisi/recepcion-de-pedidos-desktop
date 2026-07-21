@@ -365,6 +365,11 @@ function createImageCacheService(options = {}) {
     const key = makeStableKey(bucket, objectPath);
     const manifest = await readManifest(localId);
     const entry = manifest[key];
+    // Entrada marcada como eliminada en el remoto: NO servir el archivo para
+    // este artículo (aunque siga en disco); el renderer mostrará el placeholder.
+    if (entry && entry.state === 'remote-deleted') {
+      return { key, cached: false, remoteDeleted: true, entry };
+    }
     if (entry && await fileExists(filePath(localId, key))) {
       debug('CACHE_HIT', { objectPath: normalizeObjectPath(objectPath), key, v: versionTag(entry) });
       return { key, cached: true, protocolUrl: buildProtocolUrl(localId, key, entry), entry };
@@ -398,6 +403,26 @@ function createImageCacheService(options = {}) {
         if (remoteMeta.contentType) entry.contentType = remoteMeta.contentType;
       }
       if (downloadUrl) entry.downloadUrl = downloadUrl; // token nuevo, misma identidad
+      return { __write: true, manifest, value: { key, updated: true } };
+    });
+  }
+
+  /**
+   * Marca una entrada como "eliminada en el remoto" (404 confirmado): deja de
+   * servirse para ese artículo (resolveLocal → remoteDeleted, protocolo → 404) y
+   * el renderer muestra el placeholder. NO borra el archivo físico acá: podría
+   * estar referenciado por otro artículo del mismo local; la eliminación física
+   * queda para el sweep seguro. Un re-download posterior (objeto recreado) limpia
+   * el estado (vuelve a 'ready').
+   */
+  async function markRemoteDeleted(localId, bucket, objectPath) {
+    const key = makeStableKey(bucket, objectPath);
+    return withManifest(localId, (manifest) => {
+      const entry = manifest[key];
+      if (!entry) return { value: { key, updated: false } };
+      if (entry.state === 'remote-deleted') return { value: { key, updated: false } };
+      entry.state = 'remote-deleted';
+      entry.remoteDeletedAt = now();
       return { __write: true, manifest, value: { key, updated: true } };
     });
   }
@@ -525,6 +550,7 @@ function createImageCacheService(options = {}) {
     }
     const manifest = await readManifest(lid);
     if (!manifest[key]) throw new ImageCacheError('UNKNOWN_KEY', `key no registrada: ${key}`);
+    if (manifest[key].state === 'remote-deleted') throw new ImageCacheError('REMOTE_DELETED', `entrada eliminada en el remoto: ${key}`);
 
     const dir = localDir(lid);
     const abs = path.resolve(dir, key);
@@ -614,6 +640,7 @@ function createImageCacheService(options = {}) {
     resolveLocal,
     shouldCheckMetadata,
     recordMetadataCheck,
+    markRemoteDeleted,
     download,
     downloadWithRefresh,
     resolveProtocolPath,

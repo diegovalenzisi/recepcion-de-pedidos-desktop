@@ -152,6 +152,11 @@ function setupImageCacheIPC() {
     } catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
   });
 
+  ipcMain.handle('image-cache:mark-remote-deleted', async (_e, { localId, bucket, objectPath }) => {
+    try { const r = await imageCacheService.markRemoteDeleted(localId, bucket, objectPath); return { ok: true, ...r }; }
+    catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
   ipcMain.handle('image-cache:sweep', async (_e, { localId, validRefs, catalogComplete }) => {
     try {
       // El main calcula las keys (sha1 de bucket+objectPath) para no duplicar el

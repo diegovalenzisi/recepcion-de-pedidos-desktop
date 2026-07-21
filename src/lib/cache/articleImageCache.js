@@ -12,7 +12,7 @@
 import { getStorage, ref as storageRef, getMetadata, getDownloadURL } from 'firebase/storage';
 import { getFirebaseApp, getLocalId, isFirebaseReady, isFirebaseSwitching } from '@/lib/firebase/core';
 import placeholderUrl from '@/assets/article-placeholder.svg';
-import { createArticleImageController } from '@/lib/cache/articleImageController';
+import { createArticleImageController, decideSweep } from '@/lib/cache/articleImageController';
 
 export const ARTICLE_IMAGE_PLACEHOLDER = placeholderUrl;
 
@@ -57,14 +57,23 @@ function storageRefFor(bucket, objectPath) {
   return storageRef(getStorage(app), `gs://${bucket}/${objectPath}`); // respeta el bucket exacto
 }
 
+// Clasifica el resultado de getMetadata (corrección punto 1). Distingue una
+// ELIMINACIÓN remota confirmada (object-not-found / 404) de un fallo de conexión:
+//   { status: 'ok', meta }      → metadata disponible
+//   { status: 'deleted' }       → 404 / storage/object-not-found confirmado
+//   { status: 'keep', reason }  → offline/timeout/DNS/429/5xx/unauthorized/unknown
 async function fetchRemoteMetadata(bucket, objectPath) {
   try {
     const r = storageRefFor(bucket, objectPath);
-    if (!r) return null;
+    if (!r) return { status: 'keep', reason: 'no-app' };
     const md = await getMetadata(r);
-    return { generation: md.generation, md5Hash: md.md5Hash, updated: md.updated, size: md.size, contentType: md.contentType };
-  } catch {
-    return null; // requisito 1: fallo de getMetadata NO invalida el caché
+    return { status: 'ok', meta: { generation: md.generation, md5Hash: md.md5Hash, updated: md.updated, size: md.size, contentType: md.contentType } };
+  } catch (e) {
+    const code = (e && e.code) || '';
+    if (code === 'storage/object-not-found') return { status: 'deleted' };
+    // unauthorized (403), retry-limit, canceled, quota, unknown, red sin código:
+    // conservar la copia local — un fallo de conexión NO invalida el caché.
+    return { status: 'keep', reason: code || 'network' };
   }
 }
 
@@ -84,10 +93,12 @@ const controller = createArticleImageController({
     resolveLocal: (p) => window.electronAPI.imageCache.resolveLocal(p),
     shouldCheck: (p) => window.electronAPI.imageCache.shouldCheck(p),
     recordCheck: (p) => window.electronAPI.imageCache.recordCheck(p),
+    markRemoteDeleted: (p) => window.electronAPI.imageCache.markRemoteDeleted(p),
     download: (p) => window.electronAPI.imageCache.download(p),
   },
   fetchRemoteMetadata,
   fetchFreshDownloadUrl,
+  placeholderSrc: ARTICLE_IMAGE_PLACEHOLDER,
   isReady: () => { try { return isFirebaseReady(); } catch { return true; } },
   isSwitching: () => { try { return isFirebaseSwitching(); } catch { return false; } },
   debug,
@@ -131,14 +142,15 @@ export async function warmArticleImages(articles, { concurrency = 4 } = {}) {
  */
 export async function sweepArticleImageOrphans(articles, expectedLocalId) {
   if (!hasImageCacheIPC()) return { skipped: true };
-  const localId = getLocalId();
-  if (!localId || (expectedLocalId && localId !== expectedLocalId)) {
-    debug('SWEEP_SKIPPED', { reason: 'local-changed' });
-    return { skipped: true, reason: 'local-changed' };
-  }
-  if (!Array.isArray(articles) || articles.length === 0) {
-    debug('SWEEP_SKIPPED', { reason: 'no-catalog' });
-    return { skipped: true, reason: 'no-catalog' }; // catálogo vacío/incompleto: no borrar
+  const currentLocalId = getLocalId();
+  // decideSweep autoriza SOLO con un catálogo confirmado (un array, aunque esté
+  // VACÍO) y con el local esperado todavía activo (corrección punto 2). null =
+  // estado inicial/parcial/abortado → no barrer. Un array vacío = catálogo
+  // completo válido → sí barrer (limpia huérfanos de ESE local tras la gracia).
+  const decision = decideSweep({ articles, currentLocalId, expectedLocalId });
+  if (!decision.allowed) {
+    debug('SWEEP_SKIPPED', { reason: decision.reason });
+    return { skipped: true, reason: decision.reason };
   }
   const validRefs = [];
   for (const a of articles) {
@@ -146,7 +158,7 @@ export async function sweepArticleImageOrphans(articles, expectedLocalId) {
     if (idn.kind === 'firebase') validRefs.push({ bucket: idn.bucket, objectPath: idn.objectPath });
   }
   try {
-    return await window.electronAPI.imageCache.sweep({ localId, validRefs, catalogComplete: true });
+    return await window.electronAPI.imageCache.sweep({ localId: currentLocalId, validRefs, catalogComplete: true });
   } catch {
     return { skipped: true, reason: 'ipc-error' };
   }

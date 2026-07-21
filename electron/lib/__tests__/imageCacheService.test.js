@@ -523,5 +523,53 @@ function makeHttpGet(routes) {
     await assert.rejects(svc.resolveProtocolPath('40508022', key), (e) => e.code === 'FILE_MISSING');
   });
 
+  console.log('\n18. Eliminación remota (markRemoteDeleted) — no borra el archivo físico:');
+  await check('markRemoteDeleted: resolveLocal deja de servir (remoteDeleted), protocolo da REMOTE_DELETED, archivo sigue en disco', async () => {
+    const root = mkTmpRoot();
+    const svc = createImageCacheService({ root, httpGet: makeHttpGet({ [URL_A]: { status: 200, buffer: PNG, contentType: 'image/png' } }) });
+    const key = makeStableKey(BUCKET, OBJ);
+    await svc.download('40508022', BUCKET, OBJ, { url: URL_A, remoteMeta: { generation: '1' } });
+    await svc.markRemoteDeleted('40508022', BUCKET, OBJ);
+    assert.ok(fs.existsSync(path.join(root, '40508022', key)), 'NO debe borrar el archivo físico');
+    const local = await svc.resolveLocal('40508022', BUCKET, OBJ);
+    assert.strictEqual(local.cached, false);
+    assert.strictEqual(local.remoteDeleted, true);
+    await assert.rejects(svc.resolveProtocolPath('40508022', key), (e) => e.code === 'REMOTE_DELETED');
+  });
+  await check('un re-download (objeto recreado) limpia el estado remote-deleted y vuelve a servir con nueva versión', async () => {
+    const root = mkTmpRoot();
+    const URL_1 = 'https://firebasestorage.googleapis.com/o/a.png?token=1';
+    const URL_2 = 'https://firebasestorage.googleapis.com/o/a.png?token=2';
+    const svc = createImageCacheService({ root, httpGet: makeHttpGet({
+      [URL_1]: { status: 200, buffer: PNG, contentType: 'image/png' },
+      [URL_2]: { status: 200, buffer: JPEG_V2, contentType: 'image/jpeg' },
+    }) });
+    const key = makeStableKey(BUCKET, OBJ);
+    await svc.download('40508022', BUCKET, OBJ, { url: URL_1, remoteMeta: { generation: '1' } });
+    await svc.markRemoteDeleted('40508022', BUCKET, OBJ);
+    assert.strictEqual((await svc.resolveLocal('40508022', BUCKET, OBJ)).remoteDeleted, true);
+    await svc.download('40508022', BUCKET, OBJ, { url: URL_2, remoteMeta: { generation: '2' } });
+    const local = await svc.resolveLocal('40508022', BUCKET, OBJ);
+    assert.strictEqual(local.cached, true);
+    assert.ok(local.protocolUrl.endsWith('?v=g2'));
+  });
+
+  console.log('\n19. Sweep con catálogo COMPLETO pero VACÍO (corrección punto 2):');
+  await check('validKeys vacío + catalogComplete borra huérfanos del local (tras gracia) y NO toca otros locales', async () => {
+    const root = mkTmpRoot();
+    let clock = 1_000_000;
+    const svc = createImageCacheService({ root, now: () => clock, orphanGraceMs: 10_000, httpGet: makeHttpGet({
+      'https://firebasestorage.googleapis.com/o/x?token=1': { status: 200, buffer: PNG, contentType: 'image/png' },
+    }) });
+    const key = makeStableKey(BUCKET, OBJ);
+    await svc.download('40508022', BUCKET, OBJ, { url: 'https://firebasestorage.googleapis.com/o/x?token=1', remoteMeta: { generation: '1' } });
+    await svc.download('99999999', BUCKET, OBJ, { url: 'https://firebasestorage.googleapis.com/o/x?token=1', remoteMeta: { generation: '1' } });
+    clock += 20_000; // supera la gracia
+    const r = await svc.sweepOrphans('40508022', new Set(), { catalogComplete: true }); // catálogo VACÍO válido
+    assert.ok(r.deleted >= 1, 'debe poder limpiar con catálogo vacío confirmado');
+    assert.ok(!fs.existsSync(path.join(root, '40508022', key)), 'huérfano del local vacío borrado');
+    assert.ok(fs.existsSync(path.join(root, '99999999', key)), 'el otro local queda intacto');
+  });
+
   console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
 })();
