@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import { fetchData } from '@/lib/api/firebaseApi';
 import { saveOrder, updateOrder } from '@/lib/api/ordersApi';
-import { calcularTotalPedido, detectarOpcionalesConPrecioInvalido } from '@/lib/api/optionalsPricing';
+import { calcularTotalPedido } from '@/lib/api/optionalsPricing';
+import { evaluarBloqueoPrecioInvalido } from '@/lib/api/bloqueoPrecioInvalido';
 import {
   esLineaConfigurable,
   quitarUnidad,
@@ -393,14 +394,13 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     // total incorrecto. Se indica exactamente qué producto y qué opcional fallan.
     // Un precio 0 (gratuito) NO bloquea; los pedidos históricos ya guardados
     // tampoco se ven afectados (esto corre solo al confirmar uno nuevo).
-    const opcionalesRotos = detectarOpcionalesConPrecioInvalido(orderItems);
-    if (opcionalesRotos.length > 0) {
-      const detalle = opcionalesRotos.map((m) => `${m.articulo} → ${m.opcional}`).join(' · ');
-      toast({
-        variant: "destructive",
-        title: "Precio de opcional inválido",
-        description: `No se puede confirmar: revisá el precio de ${detalle}.`,
-      });
+    // Bloqueo compartido con Tablet y DLV: identifica producto, unidad, grupo,
+    // opcional y el valor inválido recibido. Corre tanto al confirmar un pedido
+    // nuevo como al guardar la edición de uno pendiente (este mismo handler
+    // atiende los dos casos, según `isEditing`).
+    const bloqueo = evaluarBloqueoPrecioInvalido(orderItems);
+    if (bloqueo.bloquear) {
+      toast({ variant: "destructive", title: bloqueo.titulo, description: bloqueo.mensaje });
       return;
     }
 
