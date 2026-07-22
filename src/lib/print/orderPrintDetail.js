@@ -5,19 +5,43 @@
 // es una operación de lectura pura: llamar a estas funciones no puede producir
 // efectos secundarios.
 //
-// AUDITORÍA DE SALIDAS (condición 9) — estado actual del sistema:
-//   · lib/print/command.js      → COMANDA DE COCINA: NO lleva importes (diseño
-//     actual del sistema). Se le agrega la UNIDAD y los opcionales, sin precios.
-//   · lib/print/counterTicket.js→ ticket de mostrador: hoy no lleva importes ni
-//     opcionales (ticket mínimo con QR).
-//   · lib/print/safeTicket.js   → caja fuerte, no aplica.
-// El detalle CON importes se genera acá (conImportes: true) para el resumen
-// económico; no se inyectan precios en la comanda para no romper su diseño.
+// AUDITORÍA DE SALIDAS DE IMPRESIÓN — a dónde va cada cosa:
+//
+//   Acción de UI                     Función              Archivo                     Tipo            ¿Importes?
+//   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//   Confirmar venta de mostrador     printCounterTicket   lib/print/counterTicket.js  ticket cliente  SÍ (este módulo)
+//   (CounterTab.jsx / CounterPage)                                                                    total + opcionales
+//   Enviar pedido a cocina           printCommand         lib/print/command.js        comanda cocina  NO (por diseño;
+//   (useDeliveryActions)                                                                              sólo unidad+opcionales)
+//   Cerrar/retirar caja fuerte       printSafeTicket      lib/print/safeTicket.js     arqueo caja     no aplica
+//   Reimprimir factura (SalesPage)   printTicket          components/sales/           comprobante     SÍ, pero del
+//                                                         ReceiptDocument.jsx         fiscal AFIP     registro fiscal
+//
+// El único destino al cliente que ahora muestra el desglose económico de los
+// opcionales es counterTicket.js (vía counterTicketHtml.js). La comanda de
+// cocina sigue SIN importes por decisión del negocio. ReceiptDocument reimprime
+// la factura AFIP: sus importes salen del registro fiscal guardado, nunca de un
+// recálculo local, y sólo muestra el desglose si el propio registro lo trae.
 // ---------------------------------------------------------------------------
 
 import { normalizarImporte } from '../api/optionalsPricing.js';
 
-const fmt = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n);
+/**
+ * Formato monetario por defecto del ticket: entero cuando el importe no tiene
+ * centavos ($14.500) y con centavos solo si realmente los tiene ($14.500,50).
+ * Cada destino puede inyectar el suyo (opción `formatImporte`) para NO mezclar
+ * dos estilos monetarios dentro del mismo comprobante (condición 8).
+ */
+export const formatImporteTicket = (n) => {
+  const num = Number(n) || 0;
+  const decimales = Number.isInteger(num) ? 0 : 2;
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: decimales,
+    maximumFractionDigits: decimales,
+  }).format(num).replace(/ /g, ' ');
+};
 
 /** Nombre seguro: nunca undefined / null / [object Object]. */
 function nombreSeguro(x) {
@@ -78,7 +102,7 @@ export function opcionalesOrdenados(selectedOptionals) {
  * @param {{conImportes?:boolean}} opts
  * @returns {string[]}
  */
-export function lineasDeItem(item, { conImportes = true } = {}) {
+export function lineasDeItem(item, { conImportes = true, formatImporte = formatImporteTicket } = {}) {
   if (!item || typeof item !== 'object') return [];
   const out = [];
 
@@ -95,7 +119,7 @@ export function lineasDeItem(item, { conImportes = true } = {}) {
 
   if (conImportes) {
     const rBase = normalizarImporte(item.precioBaseUnitario !== undefined ? item.precioBaseUnitario : item.valor);
-    if (rBase.valido && !rBase.ausente) out.push(`Precio base|${fmt(rBase.valor)}`);
+    if (rBase.valido && !rBase.ausente) out.push(`Precio base|${formatImporte(rBase.valor)}`);
   }
 
   // Opcionales del propio ítem (agrupados, con nombre de grupo si existe).
@@ -108,7 +132,7 @@ export function lineasDeItem(item, { conImportes = true } = {}) {
       const nom = nombreSeguro(op);
       if (imp !== null && imp > 0) {
         // Pago: se imprime con importe (ya multiplicado; nunca se vuelve a multiplicar).
-        out.push(`+ ${nom}${cant > 1 ? ` x${cant}` : ''}|${fmt(imp)}`);
+        out.push(`+ ${nom}${cant > 1 ? ` x${cant}` : ''}|${formatImporte(imp)}`);
       } else {
         // Gratuito / histórico sin precio: nombre solo, jamás "+$0".
         gratuitos.push(`${nom}${cant > 1 ? ` x${cant}` : ''}`);
@@ -128,7 +152,7 @@ export function lineasDeItem(item, { conImportes = true } = {}) {
         for (const op of grupo.opcionales) {
           const imp = conImportes ? importeOpcionalImprimible(op) : null;
           const nom = nombreSeguro(op);
-          if (imp !== null && imp > 0) out.push(`+ ${nom}|${fmt(imp)}`);
+          if (imp !== null && imp > 0) out.push(`+ ${nom}|${formatImporte(imp)}`);
           else gratuitos.push(nom);
         }
         if (gratuitos.length > 0) out.push(`${etiqueta}${gratuitos.join(' / ')}`);
@@ -139,7 +163,7 @@ export function lineasDeItem(item, { conImportes = true } = {}) {
   if (conImportes) {
     // Subtotal SOLO desde el snapshot; si no hay, se omite (histórico sin desglose).
     const rSub = normalizarImporte(item.subtotalLinea);
-    if (rSub.valido && !rSub.ausente) out.push(`Subtotal|${fmt(rSub.valor)}`);
+    if (rSub.valido && !rSub.ausente) out.push(`Subtotal|${formatImporte(rSub.valor)}`);
   }
 
   return out;
@@ -149,13 +173,13 @@ export function lineasDeItem(item, { conImportes = true } = {}) {
  * Detalle completo del pedido para imprimir. Solo lectura, solo snapshot.
  * @returns {{ lineas: string[], total: number|null }}
  */
-export function construirDetalleImpresionPedido(order, { conImportes = true } = {}) {
+export function construirDetalleImpresionPedido(order, { conImportes = true, formatImporte = formatImporteTicket } = {}) {
   const items = Array.isArray(order && order.items) ? order.items : [];
   const lineas = [];
 
   items.forEach((item, i) => {
     if (i > 0) lineas.push('');
-    lineas.push(...lineasDeItem(item, { conImportes }));
+    lineas.push(...lineasDeItem(item, { conImportes, formatImporte }));
   });
 
   let total = null;
@@ -174,7 +198,7 @@ export function construirDetalleImpresionPedido(order, { conImportes = true } = 
     }
     if (total !== null) {
       lineas.push('');
-      lineas.push(`TOTAL PEDIDO|${fmt(total)}`);
+      lineas.push(`TOTAL PEDIDO|${formatImporte(total)}`);
     }
   }
 

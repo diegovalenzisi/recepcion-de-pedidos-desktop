@@ -1,16 +1,43 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { getBusinessName } from '@/lib/businessNameUtils';
+import { lineasDeItem } from '@/lib/print/orderPrintDetail';
 
+// COMPROBANTE FISCAL (reimpresión de la factura AFIP). Sus renglones e importes
+// salen del registro fiscal guardado (FACTURAS/…/ARTICULOS), NUNCA del catálogo
+// actual ni de un recálculo local: reimprimir no puede cambiar lo facturado.
+// El desglose de opcionales sólo se muestra si el propio registro lo trae; si no
+// lo trae (comprobantes históricos), el renglón se imprime como siempre.
 const ReceiptDocument = ({ sale }) => {
   const formatCurrency = (value) => {
+    const num = Number(value);
     return new Intl.NumberFormat('es-AR', {
       style: 'currency',
       currency: 'ARS',
       minimumFractionDigits: 2,
-    }).format(value || 0);
+    }).format(Number.isFinite(num) ? num : 0);
   };
-  
+
+  // Un único estilo monetario en todo el comprobante: el desglose usa el mismo
+  // formateador que el TOTAL (no se mezclan dos formatos en el mismo ticket).
+  const detalleOpcionales = (item) => {
+    if (!item || !item.selectedOptionals) return null;
+    const lineas = lineasDeItem(
+      { ...item, valor: undefined, precioBaseUnitario: undefined, subtotalLinea: undefined },
+      { formatImporte: formatCurrency }
+    ).slice(1);
+    if (lineas.length === 0) return null;
+    return lineas.map((l, i) => {
+      const sep = l.indexOf('|');
+      return (
+        <div key={i} className="receipt-optional" style={{ fontSize: '0.85em', display: 'flex', justifyContent: 'space-between', gap: '6px' }}>
+          <span>{sep === -1 ? l : l.slice(0, sep)}</span>
+          {sep !== -1 && <span style={{ whiteSpace: 'nowrap' }}>{l.slice(sep + 1)}</span>}
+        </div>
+      );
+    });
+  };
+
   const articulos = Array.isArray(sale.articulos) ? sale.articulos : [];
   
   // Get location-specific business name
@@ -58,7 +85,13 @@ const ReceiptDocument = ({ sale }) => {
         <tbody>
           {articulos.map((item, index) => (
             <tr key={index} className="item-row">
-              <td>{item.nombre}</td>
+              <td>
+                {item.nombre}
+                {Number(item.unidadTotal) > 1 && Number.isFinite(Number(item.unidadIndice))
+                  ? ` — Unidad ${item.unidadIndice} de ${item.unidadTotal}`
+                  : ''}
+                {detalleOpcionales(item)}
+              </td>
               <td className="qty">{item.cantidad}</td>
               <td className="price">{formatCurrency(item.precioTotal)}</td>
             </tr>

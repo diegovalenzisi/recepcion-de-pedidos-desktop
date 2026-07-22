@@ -4,22 +4,16 @@ import { QRCodeSVG } from 'qrcode.react';
 import { reloadPrintSettings, cachedPrintSettings } from './settings';
 import { printElectron } from './electronPrint';
 import { getBusinessNameUppercase } from '@/lib/businessNameUtils';
+import { buildCounterTicketBody, COUNTER_TICKET_DETAIL_CSS } from './counterTicketHtml';
 
 export const printCounterTicket = async (sale) => {
   await reloadPrintSettings();
   const settings = cachedPrintSettings;
 
-  let itemsHtml = '';
-  sale.items.forEach(item => {
-    itemsHtml += `
-      <tr>
-        <td style="text-align: left; vertical-align: top; padding-right: 8px;">${item.quantity}x</td>
-        <td style="text-align: left; vertical-align: top;">
-          <div class="item-name">${item.nombre.toUpperCase()}</div>
-        </td>
-      </tr>
-    `;
-  });
+  // Detalle económico desde el SNAPSHOT del pedido (nunca del catálogo actual).
+  // Este es el ticket que recibe el cliente: cuando un opcional tiene incidencia
+  // económica debe verse de dónde sale el adicional cobrado.
+  const { itemsHtml, totalHtml } = buildCounterTicketBody(sale);
 
   // Generate QR Code SVG String
   const qrElement = React.createElement(QRCodeSVG, { value: String(sale.id), size: 130 });
@@ -58,6 +52,7 @@ export const printCounterTicket = async (sale) => {
           .section p { margin: 2px 0; }
           .items-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
           .items-table td { padding: 2px 0; text-align: left; font-size: 1.2em; }
+          /* Detalle económico de opcionales: ancho 80mm, importe a la derecha. */${COUNTER_TICKET_DETAIL_CSS}
           .item-name { font-size: 1.1em; }
           .qr-section {
             display: flex;
@@ -86,6 +81,7 @@ export const printCounterTicket = async (sale) => {
               ${itemsHtml}
             </tbody>
           </table>
+          ${totalHtml}
         </div>
         
         <div class="qr-section">
