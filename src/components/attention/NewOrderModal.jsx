@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import { fetchData } from '@/lib/api/firebaseApi';
 import { saveOrder, updateOrder } from '@/lib/api/ordersApi';
-import { calcularTotalPedido } from '@/lib/api/optionalsPricing';
+import { calcularTotalPedido, detectarOpcionalesConPrecioInvalido } from '@/lib/api/optionalsPricing';
 import { useToast } from '@/components/ui/use-toast';
 import OptionalSelectionModal from '@/components/attention/OptionalSelectionModal';
 import GroupProductSelectionModal from '@/components/attention/GroupProductSelectionModal';
@@ -395,6 +395,21 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         variant: "destructive",
         title: "Pedido vacío",
         description: "Debes añadir al menos un artículo al pedido.",
+      });
+      return;
+    }
+
+    // Precio de opcional inválido → NO se puede confirmar un pedido nuevo con un
+    // total incorrecto. Se indica exactamente qué producto y qué opcional fallan.
+    // Un precio 0 (gratuito) NO bloquea; los pedidos históricos ya guardados
+    // tampoco se ven afectados (esto corre solo al confirmar uno nuevo).
+    const opcionalesRotos = detectarOpcionalesConPrecioInvalido(orderItems);
+    if (opcionalesRotos.length > 0) {
+      const detalle = opcionalesRotos.map((m) => `${m.articulo} → ${m.opcional}`).join(' · ');
+      toast({
+        variant: "destructive",
+        title: "Precio de opcional inválido",
+        description: `No se puede confirmar: revisá el precio de ${detalle}.`,
       });
       return;
     }

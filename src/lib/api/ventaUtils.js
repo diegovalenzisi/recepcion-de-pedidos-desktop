@@ -3,6 +3,7 @@
  * stock, caja y comisiones. Centraliza la lógica de estado
  * para evitar inconsistencias entre módulos.
  */
+import { calcularTotalOpcionalesUnidad, listarOpcionalesSeleccionados } from './optionalsPricing.js';
 
 /**
  * Devuelve true si la venta está realmente concretada
@@ -104,6 +105,19 @@ export const calcularVentaCostoGanancia = (items = []) => {
       const unitCost  = normalizarCosto(item.costoTotalReceta ?? item.costoUnitario);
       totalVenta += qty * unitPrice;
       totalCosto += qty * unitCost;
+
+      // VENTA: los opcionales pagos también se cobran, así que suman a la venta.
+      // Antes quedaban fuera y la venta/ganancia salían mal.
+      // COSTO: solo se suma el COSTO REAL del artículo usado como opcional
+      // (costoTotalReceta/costoUnitario del artículo vinculado). Un opcional
+      // manual sin costo configurado NO aporta costo: nunca se usa su precio de
+      // venta como costo (inflaría el costo y hundiría la ganancia).
+      totalVenta += qty * calcularTotalOpcionalesUnidad(item.selectedOptionals);
+      for (const op of listarOpcionalesSeleccionados(item.selectedOptionals)) {
+        const cantOp = Number(op.cantidad ?? op.quantity ?? 1) || 1;
+        const costoOp = normalizarCosto(op.costoTotalReceta ?? op.costoUnitario ?? op.costo);
+        totalCosto += qty * cantOp * costoOp;
+      }
     }
   }
   const r3 = (n) => Math.round(n * 1000) / 1000;

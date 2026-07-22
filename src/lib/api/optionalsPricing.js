@@ -311,6 +311,108 @@ export function construirSnapshotOpcionales(item, { formaPago = null, onWarn = n
 }
 
 /**
+ * Enriquece UN opcional con los campos canónicos del snapshot, conservando los
+ * campos históricos que ya existían (id, codigo, precio, grupo, groupName…)
+ * porque todavía hay consumidores que los usan.
+ *
+ * CAMPOS CANÓNICOS (los que deben leerse de acá en adelante):
+ *   precioUnitario · cantidad · total · consumoStockUnitario · origen ·
+ *   articleId · departamentoId · grupoId · grupoNombre
+ * ALIAS HISTÓRICOS conservados (no leer para calcular): precio, quantity, groupName.
+ */
+export function enriquecerOpcionalSnapshot(op, groupId = null, { formaPago = null, onWarn = null } = {}) {
+  if (!op || typeof op !== 'object') return null;
+  const precioUnitario = obtenerPrecioOpcional(op, formaPago, onWarn);
+  const cantidad = Number(op.quantity ?? op.cantidad ?? 1) || 1;
+  const articleId = op.articleId ?? null;
+  return {
+    ...op, // conserva alias históricos (id, codigo, precio, grupo, groupName…)
+    grupoId: op.grupoId ?? op.groupId ?? groupId,
+    grupoNombre: op.grupoNombre ?? op.groupName ?? null,
+    nombre: op.nombre ?? op.name ?? '',
+    descripcion: op.descripcion ?? null,
+    numeroOrden: op.numeroOrden ?? null,
+    origen: op.origen ?? (articleId ? 'departamento' : 'manual'),
+    articleId,
+    departamentoId: op.departamentoId ?? null,
+    precioUnitario,
+    cantidad,
+    total: precioUnitario * cantidad,
+    consumoStockUnitario: articleId ? Number(op.consumoStockUnitario ?? op.consumoStock ?? 1) || 1 : 0,
+  };
+}
+
+/**
+ * Construye la LÍNEA PERSISTIBLE definitiva de un pedido nuevo.
+ * Se llama SIEMPRE justo antes de guardar/confirmar y RECALCULA con el módulo
+ * centralizado: nunca se confía en subtotales temporales del modal.
+ * Mantiene la forma { [grupoId]: [opcionales] } de `selectedOptionals` para no
+ * romper impresión / resumen / edición existentes.
+ */
+export function construirLineaPersistible(item, { formaPago = null, onWarn = null } = {}) {
+  if (!item || typeof item !== 'object') return item;
+
+  // Recalcular desde las selecciones actuales, ignorando cualquier subtotal previo.
+  const base = { ...item };
+  delete base.precioBaseUnitario;
+  delete base.totalOpcionales;
+  delete base.subtotalLinea;
+  delete base.opcionalesIncluidosEnValor;
+  const { precioBase, cantidad, totalOpcionales, subtotal } = calcularSubtotalLinea(base, { formaPago, onWarn });
+
+  const snapshotPorGrupo = {};
+  if (item.selectedOptionals && typeof item.selectedOptionals === 'object') {
+    for (const gid of Object.keys(item.selectedOptionals)) {
+      const lista = item.selectedOptionals[gid];
+      if (!Array.isArray(lista) || lista.length === 0) continue;
+      const enriquecidos = lista.map((op) => enriquecerOpcionalSnapshot(op, gid, { formaPago, onWarn })).filter(Boolean);
+      if (enriquecidos.length > 0) snapshotPorGrupo[gid] = enriquecidos;
+    }
+  }
+
+  const linea = {
+    ...item,
+    quantity: cantidad,
+    precioBaseUnitario: precioBase,
+    totalOpcionales,
+    subtotalLinea: subtotal,
+    opcionalesIncluidosEnValor: false, // `valor` es SIEMPRE base
+  };
+  if (Object.keys(snapshotPorGrupo).length > 0) linea.selectedOptionals = snapshotPorGrupo;
+  return linea;
+}
+
+/**
+ * Verifica un total recibido de afuera (p. ej. DLV Pedidos) contra la fórmula
+ * canónica reconstruida desde los snapshots. NO confía ciegamente en el total
+ * del navegador. Si el snapshot está completo y difiere, manda el canónico.
+ * Si el pedido es histórico/incompleto, se respeta el total guardado.
+ */
+export function verificarTotalRecibido(items, totalRecibido, { formaPago = null, onWarn = null, tolerancia = 0.01 } = {}) {
+  const lista = Array.isArray(items) ? items : [];
+  const { total: totalCanonico } = calcularTotalPedido(lista, { formaPago, onWarn });
+  const recibido = normalizarImporte(totalRecibido).valor;
+
+  // Snapshot completo = todas las líneas traen el desglose nuevo.
+  const snapshotCompleto = lista.length > 0 && lista.every(
+    (i) => i && i.precioBaseUnitario !== undefined && i.subtotalLinea !== undefined
+  );
+  const difiere = Math.abs(totalCanonico - recibido) > tolerancia;
+
+  if (difiere && typeof onWarn === 'function') {
+    onWarn({ tipo: 'total-recibido-difiere', totalRecibido: recibido, totalCanonico, snapshotCompleto });
+  }
+  return {
+    total: (difiere && snapshotCompleto) ? totalCanonico : recibido,
+    totalCanonico,
+    totalRecibido: recibido,
+    difiere,
+    snapshotCompleto,
+    fuente: (difiere && snapshotCompleto) ? 'canonico' : 'recibido',
+  };
+}
+
+/**
  * Consumo de stock generado por los opcionales de una línea (Fase 2).
  * Devuelve movimientos por artículo real, ya multiplicados por la cantidad de
  * la línea (regla por unidad). Solo incluye opcionales vinculados a un artículo.

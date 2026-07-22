@@ -5,6 +5,7 @@ import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
+import { construirLineaPersistible, enriquecerOpcionalSnapshot } from '@/lib/api/optionalsPricing';
 import { processStockForDeliveredOrder } from './transactionsApi';
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
@@ -159,8 +160,16 @@ const isDebugPromosEnabled = () => {
 };
 
 const formatOrderItemsForFirebase = (items) => {
-  return items.map(item => {
-    const { uniqueId, ...itemToSave } = item;
+  return items.map(rawItem => {
+    // SNAPSHOT AL CONFIRMAR: se RECALCULA con el módulo centralizado justo antes
+    // de persistir, usando las selecciones actuales de la línea. Nunca se confía
+    // en subtotales que hayan quedado en el estado del modal.
+    const item = construirLineaPersistible(rawItem, {
+      onWarn: (w) => console.warn('[opcionales] importe inválido al guardar', w),
+    });
+    // `uniqueId` se conserva: identifica cada unidad para poder editarla por
+    // separado y evitar que se fusionen unidades con configuraciones distintas.
+    const itemToSave = { ...item };
 
     if (itemToSave.isPromo && itemToSave.promoDetails) {
       const promoItems = itemToSave.promoDetails.map(promoItem => {
@@ -176,9 +185,13 @@ const formatOrderItemsForFirebase = (items) => {
           for (const groupId in promoItem.selectedOptionals) {
             const optionals = promoItem.selectedOptionals[groupId];
             if (Array.isArray(optionals) && optionals.length > 0) {
-              formattedOptionals[groupId] = optionals.map(op => ({
-                nombre: op.nombre,
-              }));
+              // ANTES se reducía a { nombre }, perdiendo precio e identidad del
+              // opcional de cada hijo de la promo. Ahora se guarda el snapshot
+              // completo POR HIJO (nunca en un nivel global del combo), para que
+              // impresión, edición y stock puedan asociarlo al producto correcto.
+              formattedOptionals[groupId] = optionals
+                .map(op => enriquecerOpcionalSnapshot(op, groupId))
+                .filter(Boolean);
             }
           }
           if (Object.keys(formattedOptionals).length > 0) {
