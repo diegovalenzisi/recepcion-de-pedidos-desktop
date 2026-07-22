@@ -5,6 +5,10 @@ import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Minus, Search, Loader2 } from 'lucide-react';
 import { fetchAllOptionalOrders, saveOptionalOrder, saveMultipleOptionalOrders } from '@/lib/api/optionalOrderApi';
+import { tienePrecio, obtenerPrecioOpcional, precioOpcionalInvalido } from '@/lib/api/optionalsPricing';
+
+// Mismo patrón que el resto de los modales de atención (formato local ARS).
+const formatCurrency = (value) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value);
 
 function OptionalSelectionModal({ 
   isOpen, 
@@ -17,7 +21,9 @@ function OptionalSelectionModal({
   isSubmodal = false,
   isPromoItem = false,
   promoItemIndex = 0,
-  promoTotalItems = 0
+  promoTotalItems = 0,
+  unidadIndice = null,
+  unidadTotal = null
 }) {
   const [selectedOptionals, setSelectedOptionals] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
@@ -451,6 +457,13 @@ function OptionalSelectionModal({
                 Promo: Configurar Artículo {promoItemIndex + 1} de {promoTotalItems}
               </span>
             )}
+            {/* Configuración independiente por unidad: cada unidad elige sus
+                propios grupos; no se copian las selecciones de otra unidad. */}
+            {!isPromoItem && unidadTotal > 1 && (
+              <span className="text-orange-600 font-bold text-[11px] mt-0.5 truncate block">
+                Unidad {unidadIndice} de {unidadTotal}
+              </span>
+            )}
           </div>
 
           <div className="relative flex-1 max-w-md mx-auto min-w-[200px]">
@@ -596,6 +609,19 @@ function OptionalSelectionModal({
                           >
                             <span className="text-[11px] leading-tight font-bold w-full truncate block">
                               {opcional.nombre}
+                              {/* Adicional visible SOLO si el precio es > 0.
+                                  Precio 0 → nada (nunca "+$0"). Precio inválido →
+                                  se marca, nunca se muestra como gratuito. */}
+                              {tienePrecio(opcional) && (
+                                <span className="ml-1 font-extrabold text-emerald-700">
+                                  (+{formatCurrency(obtenerPrecioOpcional(opcional))})
+                                </span>
+                              )}
+                              {precioOpcionalInvalido(opcional) && (
+                                <span className="ml-1 font-extrabold text-red-600" title="Precio inválido: revisar el opcional">
+                                  (precio inválido)
+                                </span>
+                              )}
                             </span>
                           </div>
 

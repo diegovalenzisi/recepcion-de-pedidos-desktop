@@ -115,6 +115,44 @@ export function tienePrecio(opcional, formaPago = null) {
 }
 
 /**
+ * ¿El precio de este opcional es INVÁLIDO? (basura tipo "abc"). Un precio
+ * ausente o 0 NO es inválido: es un opcional gratuito. Se usa para no mostrar
+ * un importe roto como si fuera gratis y para bloquear la confirmación.
+ */
+export function precioOpcionalInvalido(opcional, formaPago = null) {
+  if (!opcional || typeof opcional !== 'object') return false;
+  let crudo;
+  if (formaPago && opcional.preciosPorPago && opcional.preciosPorPago[formaPago] !== undefined) {
+    crudo = opcional.preciosPorPago[formaPago];
+  } else if (opcional.precioUnitario !== undefined) crudo = opcional.precioUnitario;
+  else if (opcional.precio !== undefined) crudo = opcional.precio;
+  else crudo = opcional.valor;
+  return normalizarImporte(crudo).valido === false;
+}
+
+/**
+ * Lista los opcionales con precio inválido de una línea. Si devuelve algo, un
+ * pedido NUEVO no debe confirmarse (los históricos igual se abren y muestran).
+ */
+export function detectarOpcionalesConPrecioInvalido(items, formaPago = null) {
+  const lista = Array.isArray(items) ? items : [items];
+  const malos = [];
+  for (const item of lista) {
+    if (!item) continue;
+    for (const op of listarOpcionalesSeleccionados(item.selectedOptionals)) {
+      if (precioOpcionalInvalido(op, formaPago)) {
+        malos.push({
+          articulo: item.nombre || item.id || '(sin nombre)',
+          opcional: op.nombre || op.name || '(sin nombre)',
+          grupoId: op.groupId || null,
+        });
+      }
+    }
+  }
+  return malos;
+}
+
+/**
  * Itera las selecciones de opcionales de UNA unidad.
  * `selectedOptionals` es { [groupId]: [opcional, ...] } (estructura actual).
  */

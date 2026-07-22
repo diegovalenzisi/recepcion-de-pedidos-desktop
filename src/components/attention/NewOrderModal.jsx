@@ -37,6 +37,8 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   const { toast } = useToast();
 
   const [isOptionalModalOpen, setIsOptionalModalOpen] = useState(false);
+  // Unidad que se está configurando ("Unidad 2 de 2"). null = alta normal.
+  const [pendingUnitInfo, setPendingUnitInfo] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [articleForSelection, setArticleForSelection] = useState(null);
   const [editOrderType, setEditOrderType] = useState('ENVIO');
@@ -70,6 +72,22 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     }
   }, [isOpen]);
 
+  // Cada unidad configurada con opcionales es su propia línea (quantity: 1).
+  // Renumera unidadIndice/unidadTotal por artículo para mostrar "Unidad N de M".
+  // Solo afecta la PRESENTACIÓN: no toca uniqueId ni las selecciones existentes.
+  const renumerarUnidades = useCallback((items) => {
+    const totales = {};
+    items.forEach((it) => {
+      if (it.selectedOptionals) totales[it.id] = (totales[it.id] || 0) + 1;
+    });
+    const vistos = {};
+    return items.map((it) => {
+      if (!it.selectedOptionals) return it;
+      vistos[it.id] = (vistos[it.id] || 0) + 1;
+      return { ...it, unidadIndice: vistos[it.id], unidadTotal: totales[it.id] };
+    });
+  }, []);
+
   const addArticleToOrder = useCallback((article) => {
     const uniqueId = (article.selectedOptionals || article.promoDetails)
       ? `${article.id}-${Date.now()}` 
@@ -86,9 +104,11 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
           );
         }
       }
-      return [...prevItems, { ...article, valor: priceToUse, quantity: 1, uniqueId }];
+      // Las líneas configurables (con opcionales) SIEMPRE entran con quantity: 1
+      // y se renumeran para mostrar "Unidad N de M".
+      return renumerarUnidades([...prevItems, { ...article, valor: priceToUse, quantity: 1, uniqueId }]);
     });
-  }, []);
+  }, [renumerarUnidades]);
 
   const handlePromoUnavailable = useCallback(() => {
     toast({
@@ -247,16 +267,42 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   }, [startPromo, settings, context, addArticleToOrder]);
 
   const handleUpdateQuantity = useCallback((uniqueId, change) => {
-    setOrderItems(prevItems => {
-      return prevItems.map(item => {
-        if (item.uniqueId === uniqueId) {
-          const newQuantity = item.quantity + change;
-          return newQuantity > 0 ? { ...item, quantity: newQuantity } : null;
-        }
-        return item;
-      }).filter(Boolean);
-    });
-  }, []);
+    const target = orderItems.find((i) => i.uniqueId === uniqueId);
+    if (!target) return;
+
+    // Producto CON opcionales: no se comparte una selección entre unidades.
+    if (target.selectedOptionals) {
+      if (change > 0) {
+        // Aumentar = configurar una unidad NUEVA. No se copia la unidad 1 ni se
+        // agrega nada hasta confirmar (confirmación incremental segura: si el
+        // usuario cancela, el carrito queda como estaba).
+        const base = allArticles.find((a) => a.id === target.id) || target;
+        const yaConfiguradas = orderItems.filter((i) => i.id === target.id && i.selectedOptionals).length;
+        setPendingUnitInfo({ unidadIndice: yaConfiguradas + 1, unidadTotal: yaConfiguradas + 1 });
+        const { selectedOptionals, uniqueId: _u, quantity: _q, unidadIndice: _ui, unidadTotal: _ut, ...limpio } = base;
+        setArticleForSelection(limpio);
+        setIsOptionalModalOpen(true);
+        return;
+      }
+      // Disminuir = quitar ESTA línea concreta (no "la última"), conservando
+      // intactas las selecciones de las demás unidades.
+      setOrderItems((prev) => renumerarUnidades(prev.filter((i) => i.uniqueId !== uniqueId)));
+      return;
+    }
+
+    // Producto SIN opcionales: comportamiento actual intacto (agrupa por quantity).
+    setOrderItems((prevItems) =>
+      prevItems
+        .map((item) => {
+          if (item.uniqueId === uniqueId) {
+            const newQuantity = item.quantity + change;
+            return newQuantity > 0 ? { ...item, quantity: newQuantity } : null;
+          }
+          return item;
+        })
+        .filter(Boolean)
+    );
+  }, [orderItems, allArticles, renumerarUnidades]);
 
   const handleUpdatePrice = useCallback((uniqueId, newPrice) => {
     setOrderItems(prevItems => 
@@ -289,6 +335,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     
     addArticleToOrder(articleWithOptionals);
     setIsOptionalModalOpen(false);
+    setPendingUnitInfo(null); // la unidad quedó confirmada y agregada
   };
 
   const handleOptionalModalClose = (open) => {
@@ -301,6 +348,9 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       }
       resetPromoConfig();
       setIsOptionalModalOpen(false);
+      // Cancelar la configuración de una unidad nueva NO agrega nada al carrito
+      // ni deja estado temporal: el pedido queda exactamente como estaba.
+      setPendingUnitInfo(null);
     }
   };
   
@@ -510,6 +560,8 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         isPromoItem={promoConfig.isConfiguring}
         promoItemIndex={promoConfig.currentIndex}
         promoTotalItems={promoConfig.itemsToConfigure.length}
+        unidadIndice={pendingUnitInfo?.unidadIndice}
+        unidadTotal={pendingUnitInfo?.unidadTotal}
       />
 
       <GroupProductSelectionModal
