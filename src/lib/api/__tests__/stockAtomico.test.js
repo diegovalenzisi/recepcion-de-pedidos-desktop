@@ -257,7 +257,7 @@ check('reintento completo NO vuelve a descontar', () => {
   const db = new Db(base());
   aplicar(db, refMostrador(1));
   const r = aplicar(db, refMostrador(1));
-  assert.ok(r.resultados.every((x) => x.resultado === 'ya-aplicado'));
+  assert.ok(r.resultados.every((x) => x.resultado === 'already-applied'));
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
 });
 check('mismo referenceId con OTRO impacto se rechaza, no se procesa', () => {
@@ -265,7 +265,7 @@ check('mismo referenceId con OTRO impacto se rechaza, no se procesa', () => {
   aplicar(db, refMostrador(1));
   const otro = { 'A-ROCKLETS': { quantity: 5, type: 'ARTICULO' } };
   const r = aplicar(db, refMostrador(1), otro);
-  assert.strictEqual(r.resultados[0].resultado, 'conflicto-de-hash');
+  assert.strictEqual(r.resultados[0].resultado, 'hash-conflict');
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'no se aplicó el impacto distinto');
 });
 
@@ -281,8 +281,8 @@ check('reanudar completa SOLO lo que faltaba', () => {
   const db = new Db(base());
   aplicar(db, refMostrador(2), IMPACTO, { hasta: 1 });
   const r = aplicar(db, refMostrador(2));
-  assert.strictEqual(r.resultados[0].resultado, 'ya-aplicado', 'el primero no se toca');
-  assert.strictEqual(r.resultados[1].resultado, 'aplicado');
+  assert.strictEqual(r.resultados[0].resultado, 'already-applied', 'el primero no se toca');
+  assert.strictEqual(r.resultados[1].resultado, 'applied');
   assert.strictEqual(stock(db, 'A-0007'), 9, 'nunca 8');
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
   assert.strictEqual(mp(db), 99.5);
@@ -326,15 +326,15 @@ check('el pedido se descuenta UNA SOLA VEZ', () => {
   assert.strictEqual(stock(db, 'A-0007'), 9, 'nunca 8');
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'nunca 16');
   assert.strictEqual(mp(db), 99.5, 'nunca 99');
-  assert.ok(rb.resultados.every((x) => x.resultado === 'aplicado'));
-  assert.ok(ra.resultados.every((x) => x.resultado === 'ya-aplicado'), 'A no puede aplicar de nuevo');
+  assert.ok(rb.resultados.every((x) => x.resultado === 'applied'));
+  assert.ok(ra.resultados.every((x) => x.resultado === 'already-applied'), 'A no puede aplicar de nuevo');
 });
 check('da igual el orden: si A confirma primero, B tampoco duplica', () => {
   const db = new Db(base());
   const ref = refMostrador(43);
   aplicar(db, ref);                       // A
   const rb = aplicar(db, ref);            // B, dueño "vigente"
-  assert.ok(rb.resultados.every((x) => x.resultado === 'ya-aplicado'));
+  assert.ok(rb.resultados.every((x) => x.resultado === 'already-applied'));
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
 });
 check('intercalados recurso por recurso tampoco duplican', () => {
@@ -381,11 +381,11 @@ check('distingue ausente, número, string histórico y corrupto', () => {
   assert.deepStrictEqual(leerStockActual({ propio: 'abc' }, 'ARTICULO'), { valor: 0, estado: 'corrupto' });
   assert.deepStrictEqual(leerStockActual({ propio: {} }, 'ARTICULO'), { valor: 0, estado: 'corrupto' });
 });
-check('un campo corrupto avisa y NO se convierte en un número en silencio', () => {
+check('un campo corrupto NO se descuenta: devuelve corrupt-stock', () => {
   const r = aplicarEnRecurso({ propio: 'abc' }, { referenceId: 'R', cantidad: 2, impactHash: 'h', tipo: 'ARTICULO' });
-  assert.strictEqual(r.resultado, 'aplicado');
+  assert.strictEqual(r.resultado, 'corrupt-stock');
+  assert.strictEqual(r.nodo, undefined, 'no se escribe sobre un dato ilegible');
   assert.ok(r.aviso && r.aviso.tipo === 'stock-no-numerico');
-  assert.strictEqual(r.aviso.estado, 'corrupto');
 });
 check('un string histórico avisa pero conserva el valor', () => {
   const r = aplicarEnRecurso({ propio: '20' }, { referenceId: 'R', cantidad: 2, impactHash: 'h', tipo: 'ARTICULO' });
@@ -428,14 +428,26 @@ check('segunda cancelación devuelve already-reversed y NO repone dos veces', ()
   assert.ok(r2.every((x) => x.resultado === 'ya-revertido'));
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 20, 'nunca 22');
 });
-check('con el nodo en null NO aborta: deja que RTDB reejecute con datos reales', () => {
-  // RTDB llama al reductor la primera vez con el cache en null. Abortar ahí
-  // (devolver undefined) impedía la reejecución y la reversión no reponía nada:
-  // bug real detectado contra el emulador (daba 18 en vez de 20).
-  const r = revertirEnRecurso(null, { referenceIdOriginal: 'MOSTRADOR_1', referenceIdReversion: 'REVERSAL_MOSTRADOR_1', tipo: 'ARTICULO' });
-  assert.notStrictEqual(r.nodo, undefined, 'no debe abortar la transacción');
-  assert.strictEqual(r.resultado, 'esperando-datos-del-servidor');
-  assert.deepStrictEqual(r.nodo, {}, 'un objeto vacío equivale a null en RTDB: no deja basura');
+check('null en la PRIMERA invocación: no aborta y no crea el recurso', () => {
+  const r = revertirEnRecurso(null, { referenceIdOriginal: 'MOSTRADOR_1', referenceIdReversion: 'REVERSAL_MOSTRADOR_1', tipo: 'ARTICULO', invocacion: 1 });
+  assert.notStrictEqual(r.nodo, undefined, 'no debe abortar: haría falta la reejecución');
+  assert.deepStrictEqual(r.nodo, {}, 'un objeto vacío equivale a null en RTDB: no crea nada');
+  assert.strictEqual(r.resultado, 'retryable');
+});
+check('null en la REEJECUCIÓN: el recurso realmente no existe', () => {
+  const r = revertirEnRecurso(null, { referenceIdOriginal: 'MOSTRADOR_1', referenceIdReversion: 'REVERSAL_MOSTRADOR_1', tipo: 'ARTICULO', invocacion: 2 });
+  assert.strictEqual(r.resultado, 'missing-resource');
+  assert.strictEqual(r.nodo, undefined, 'no se recrea un recurso eliminado');
+});
+check('aplicar sobre un recurso inexistente NO lo crea', () => {
+  const r = aplicarEnRecurso(null, { referenceId: 'R', cantidad: 1, impactHash: 'h', tipo: 'ARTICULO', invocacion: 2 });
+  assert.strictEqual(r.resultado, 'missing-resource');
+  assert.strictEqual(r.nodo, undefined);
+});
+check('aplicar con null inicial pide reejecución sin crear nada', () => {
+  const r = aplicarEnRecurso(null, { referenceId: 'R', cantidad: 1, impactHash: 'h', tipo: 'ARTICULO', invocacion: 1 });
+  assert.strictEqual(r.resultado, 'retryable');
+  assert.deepStrictEqual(r.nodo, {});
 });
 check('no se puede revertir lo que nunca se aplicó en ese recurso', () => {
   const db = new Db(base());
