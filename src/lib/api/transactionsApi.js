@@ -1,9 +1,10 @@
-import { getDatabase, ref, get, runTransaction, update, push, set } from 'firebase/database';
+import { getDatabase, ref, get, runTransaction, update, push, set, onValue } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
 import { construirPlanDeStock } from './stockPlan';
+import { revertirEnRecurso, resolverResultadoRecurso } from './stockAtomico';
 
 const parseQuantity = (val) => {
     if (typeof val === 'number') return val;
@@ -361,6 +362,107 @@ export const processStockForDeliveredOrder = async (order) => {
         console.error("Stock deduction failed:", error);
         return { success: false, error: error.message };
     }
+};
+
+/**
+ * REVERSIÓN IDEMPOTENTE DE UNA VENTA DE MOSTRADOR (Fase 2, punto 11).
+ *
+ * Única autoridad de reversión: reemplaza al camino viejo
+ * (restoreStockForItem + bulkUpdateStock), que no tenía referenceId y por lo
+ * tanto reponía de nuevo en cada cancelación repetida.
+ *
+ * Cómo garantiza que no repone dos veces: no se apoya en el pedido actual sino
+ * en lo que cada recurso REGISTRÓ haber recibido. `revertirEnRecurso` mira el
+ * `appliedOps` del propio nodo dentro de la transacción:
+ *   · si la operación original no figura ahí     → no repone (nunca se descontó);
+ *   · si la reversión ya figura                  → `ya-revertido`;
+ *   · si figura la original y no la reversión    → repone exactamente su importe.
+ * Por eso una operación original PARCIAL revierte solo los recursos realmente
+ * aplicados, sin necesidad de reconstruir nada.
+ *
+ * @returns {{ success, estado, resultados, motivo? }}
+ *   estado: 'reversed' | 'already-reversed' | 'original-not-applied' | 'reversal-partial'
+ */
+export const reverseStockForCounterSale = async (sale) => {
+    if (!sale || !sale.items || sale.items.length === 0) {
+        return { success: true, estado: 'reversed', resultados: [], motivo: 'sin-items' };
+    }
+    checkLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
+    const op = beginFirebaseOperation();
+    const db = op.getDatabaseOrAbort();
+
+    const referenceIdOriginal = `MOSTRADOR_${sale.id}`;
+    const referenceIdReversion = `REVERSAL_MOSTRADOR_${sale.id}`;
+
+    // Solo se revierte lo que efectivamente se aplicó.
+    const marcaOriginal = (await get(ref(db, `${LOCAL_ID}/PROCESSED_STOCK_IDS/${referenceIdOriginal}`))).val();
+    if (!marcaOriginal || marcaOriginal.status !== 'completed') {
+        return { success: true, estado: 'original-not-applied', resultados: [], motivo: 'la venta no descontó stock' };
+    }
+    const marcaReversion = (await get(ref(db, `${LOCAL_ID}/PROCESSED_STOCK_IDS/${referenceIdReversion}`))).val();
+    if (marcaReversion && marcaReversion.status === 'completed') {
+        return { success: true, estado: 'already-reversed', resultados: [], motivo: 'ya se había repuesto' };
+    }
+
+    const [articlesSnapshot, materiaPrimaSnapshot] = await Promise.all([
+        get(ref(db, `${LOCAL_ID}/ARTICULOS`)),
+        get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`)),
+    ]);
+    const articlesData = articlesSnapshot.val() || {};
+    const materiaPrimaData = materiaPrimaSnapshot.val() || {};
+
+    // El mismo plan que se usó al descontar: base + hijos de promo + opcionales,
+    // agrupado por ruta física.
+    const plan = construirPlanDeStock({ items: sale.items, articulos: articlesData, materiaPrima: materiaPrimaData });
+
+    const resultados = [];
+    const dbRev = op.getDatabaseOrAbort();
+    for (const [itemId, datos] of Object.entries(plan.impactMap)) {
+        const rutaNodo = datos.type === 'ARTICULO'
+            ? `${LOCAL_ID}/ARTICULOS/${itemId}/stock`
+            : `${LOCAL_ID}/MATERIA_PRIMA/${itemId}`;
+        const refNodo = ref(dbRev, rutaNodo);
+
+        // Precarga: el reductor de runTransaction recibe null en su primera
+        // llamada si el nodo no está en el árbol de sincronización.
+        await new Promise((resolve) => {
+            const off = onValue(refNodo, () => { off(); resolve(); });
+        });
+
+        let resultado = null;
+        let invocacion = 0;
+        await runTransaction(refNodo, (nodo) => {
+            invocacion += 1;
+            const r = revertirEnRecurso(nodo, {
+                referenceIdOriginal, referenceIdReversion, tipo: datos.type, invocacion,
+            });
+            resultado = r.resultado;
+            return r.nodo;
+        });
+        if (resultado === 'retryable') {
+            resultado = resolverResultadoRecurso(resultado, (await get(refNodo)).val());
+        }
+        resultados.push({ itemId, tipo: datos.type, resultado });
+    }
+
+    const repuestos = resultados.filter((r) => r.resultado === 'revertido');
+    const problemas = resultados.filter((r) => !['revertido', 'ya-revertido', 'original-no-aplicada'].includes(r.resultado));
+    const estado = problemas.length > 0 ? 'reversal-partial' : 'reversed';
+
+    await set(ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/PROCESSED_STOCK_IDS/${referenceIdReversion}`), {
+        status: estado === 'reversed' ? 'completed' : 'reversal-partial',
+        referenceId: referenceIdReversion,
+        revierteA: referenceIdOriginal,
+        timestamp: Date.now(),
+        movementId: `MOV_${referenceIdReversion}`,
+        resultados,
+    });
+
+    if (problemas.length > 0) {
+        console.warn('[stock] la reversión de mostrador quedó incompleta', { referenceIdReversion, problemas });
+    }
+    return { success: true, estado, resultados, repuestos: repuestos.length };
 };
 
 export const processStockForCounterSale = async (sale) => {

@@ -3,8 +3,7 @@ import { getDatabase, ref, runTransaction, get, update, set } from 'firebase/dat
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary, reversarVentaCuenta } from '@/lib/api/myAccountApi';
 import { cancelarComision } from '@/lib/api/comisionesApi';
-import { restoreStockForItem, bulkUpdateStock, fetchAllStockableItems } from '@/lib/api/stockApi';
-import { processStockForCounterSale } from '@/lib/api/transactionsApi';
+import { processStockForCounterSale, reverseStockForCounterSale } from '@/lib/api/transactionsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { saveFacturacionForPayments } from './ordersApi';
@@ -234,15 +233,24 @@ export const cancelCounterSale = async (sale, shift) => {
   const saleRef = ref(db, `${LOCAL_ID}/MOSTRADOR/${sale.id}`);
   await update(saleRef, { status: 'CANCELADO' });
 
+  // REVERSIÓN DE STOCK — única autoridad (Fase 2, punto 11).
+  //
+  // Antes se usaba restoreStockForItem + bulkUpdateStock, que no tenía
+  // referenceId: una segunda cancelación (o un reintento tras un error de red)
+  // reponía el stock por segunda vez. Ahora la reversión es idempotente, va
+  // bajo REVERSAL_MOSTRADOR_{saleId}, incluye artículo base, hijos de promoción
+  // y opcionales de departamento, y se apoya en lo que cada recurso registró
+  // haber recibido en lugar de reconstruirlo desde la venta.
+  //
+  // Los dos caminos NO conviven: el viejo quedó eliminado de este flujo.
   try {
-    const allStockData = await fetchAllStockableItems();
-    const stockUpdates = {};
-    const affectedItems = new Set();
-    for (const item of sale.items) {
-      await restoreStockForItem(item, item.quantity, allStockData, stockUpdates, affectedItems);
-    }
-    if (Object.keys(stockUpdates).length > 0) {
-      await bulkUpdateStock(stockUpdates);
+    const resultado = await reverseStockForCounterSale(sale);
+    if (resultado.estado === 'already-reversed') {
+      console.warn(`[mostrador] la venta ${sale.id} ya había repuesto stock: no se repone otra vez.`);
+    } else if (resultado.estado === 'original-not-applied') {
+      console.warn(`[mostrador] la venta ${sale.id} no había descontado stock: no hay nada que reponer.`);
+    } else if (resultado.estado === 'reversal-partial') {
+      console.warn(`[mostrador] la reversión de la venta ${sale.id} quedó incompleta`, resultado.resultados);
     }
   } catch (stockError) {
     console.error("Error restoring stock for cancelled sale:", stockError);
