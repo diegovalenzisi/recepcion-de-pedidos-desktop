@@ -79,16 +79,9 @@ const AttentionPage = ({
           <TabLink to="clientes" permission="clientes" userPermissions={userPermissions} userRole={userRole}>Clientes</TabLink>
           <TabLink to="repartidores" permission="repartidor" userPermissions={userPermissions} userRole={userRole}>Repartidores</TabLink>
         </div>
-        
-        <div className="pb-2 px-2 flex items-center gap-2 text-sm font-medium text-gray-600">
-          <div className="cursor-pointer" onClick={() => setIsOutOfStockModalOpen(true)}>
-            <StockStatusBadge 
-              outOfStockCount={outOfStockCount} 
-              lowStockCount={lowStockCount} 
-            />
-          </div>
-          <span>Atención</span>
-        </div>
+
+        {/* Indicador redundante superior derecho (badge de stock + "Atención")
+            ocultado a pedido. El OutOfStockModal y su estado se conservan. */}
       </div>
 
       <div className="flex-grow bg-white p-2 rounded-b-xl shadow-sm min-h-0 border-l border-r border-b border-gray-200">

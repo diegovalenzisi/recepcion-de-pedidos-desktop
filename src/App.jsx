@@ -834,14 +834,10 @@ function AppContent() {
                         backendLoading={mpBackendLoading}
                         refreshBackend={refreshMpBackend}
                     />
-                    <button
-                        onClick={requestClearCache}
-                        disabled={clearingCache || checkingConnection}
-                        className="p-2 text-gray-500 hover:text-orange-600 hover:bg-orange-50 rounded-md transition-colors"
-                        title="Borra archivos temporales y vuelve a descargar la versión actual."
-                    >
-                        {(clearingCache || checkingConnection) ? <Loader2 size={16} className="animate-spin"/> : <DatabaseZap size={16} />}
-                    </button>
+                    {/* Botón superior de "Actualizar aplicación" (icono DatabaseZap)
+                        ocultado a pedido. requestClearCache/handleClearCache y el
+                        diálogo de confirmación se conservan (quedan inactivos al no
+                        tener disparador visible). */}
                     <AlertDialog open={clearCacheConfirmOpen} onOpenChange={setClearCacheConfirmOpen}>
                       <AlertDialogContent>
                         <AlertDialogHeader>

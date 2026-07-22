@@ -159,10 +159,7 @@ const DeliveryActionBar = memo(({
           </Button>
         </div>
 
-        <div className="mt-auto flex flex-col items-center justify-center py-4 text-gray-400">
-          <div className="w-12 h-1 bg-gray-200 rounded-full mb-2 opacity-50" />
-          <span className="text-[9px] uppercase tracking-[0.2em] font-bold">Gestión de Envíos</span>
-        </div>
+        {/* Pie "Gestión de Envíos" (separador decorativo + texto) ocultado a pedido. */}
       </div>
 
       <QROptionsModal 

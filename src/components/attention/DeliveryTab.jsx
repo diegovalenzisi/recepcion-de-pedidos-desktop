@@ -640,24 +640,12 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
              <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                     <h2 className="text-lg font-semibold text-gray-700 px-2">Pedidos</h2>
-                    {renderSyncStatus()}
+                    {/* Indicador de estado de sincronización ("Synced") ocultado a pedido. */}
                 </div>
-                
-                {(hasOutOfStock || hasLowStock) && (
-                  <div 
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer transition-colors ${hasOutOfStock ? 'bg-red-50 border-red-200 hover:bg-red-100' : 'bg-amber-50 border-amber-200 hover:bg-amber-100'}`}
-                    onClick={() => setIsStockModalOpen(true)}
-                    title="Ver alertas de stock"
-                  >
-                    <StockStatusBadge 
-                      outOfStockCount={outOfStockCount}
-                      lowStockCount={lowStockCount}
-                    />
-                    <span className={`text-sm font-bold ${hasOutOfStock ? 'text-red-700' : 'text-amber-700'}`}>
-                      Stock ({outOfStockCount + lowStockCount})
-                    </span>
-                  </div>
-                )}
+
+                {/* Indicador de stock (badge "Stock (n)") ocultado a pedido. El
+                    cálculo de stock (useStockStatus) y el OutOfStockModal se
+                    conservan; solo se quita este badge visual. */}
 
                 <div className="flex items-center bg-gray-50 border rounded-md px-2 py-1">
                     <CalendarIcon className="h-4 w-4 text-gray-500 mr-2" />
@@ -694,18 +682,11 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
              </div>
              
              <div className="flex gap-2">
-                <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={forceRefresh}
-                    title="Sincronizar pedidos"
-                    className="h-9 w-9 text-gray-500 hover:text-primary hover:bg-primary/10"
-                >
-                    <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                </Button>
-                <Button 
-                    variant="outline" 
-                    size="sm" 
+                {/* Botón de refresco circular pequeño ocultado a pedido. La
+                    función forceRefresh se conserva (la usa "Actualizar" grande). */}
+                <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => setIsChangeTimeModalOpen(true)}
                     disabled={!selectedOrderId}
                     className="flex items-center gap-2 text-cyan-700 hover:text-cyan-800 hover:bg-cyan-50"
