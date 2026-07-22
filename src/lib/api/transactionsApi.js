@@ -3,6 +3,7 @@ import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
+import { construirPlanDeStock } from './stockPlan';
 
 const parseQuantity = (val) => {
     if (typeof val === 'number') return val;
@@ -214,28 +215,40 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
         const articlesData = articlesSnapshot.val() || {};
         const materiaPrimaData = materiaPrimaSnapshot.val() || {};
 
-        items.forEach(item => {
-            const quantityToReduce = parseQuantity(item.quantity || item.cantidad || 1);
-            let itemCodigo = item.codigo || item.id;
-            const identifier = itemCodigo || item.nombre;
-
-            const promoChildren = (item.isPromo && (item.promoItems || item.promoDetails)) || [];
-            const hasChildren = promoChildren.length > 0;
-
-            if (identifier && !hasChildren) {
-                resolveStockImpact(identifier, quantityToReduce, articlesData, materiaPrimaData, impactMap, new Set());
-            }
-
-            if (hasChildren) {
-                promoChildren.forEach(promoItem => {
-                     const promoQty = parseQuantity(promoItem.cantidad || 1);
-                     const promoIdentifier = promoItem.codigo || promoItem.id || promoItem.nombre;
-                     if (promoIdentifier) {
-                         resolveStockImpact(promoIdentifier, promoQty * quantityToReduce, articlesData, materiaPrimaData, impactMap, new Set());
-                     }
-                });
-            }
+        // PLAN ÚNICO DE STOCK (Fase 2, punto 10).
+        //
+        // Antes este bucle resolvía solo el artículo base y los hijos de promo,
+        // y los opcionales quedaban afuera: un topping vinculado a un artículo
+        // real se cobraba pero nunca se descontaba.
+        //
+        // `construirPlanDeStock` arma UNA sola operación con artículo base,
+        // hijos de promoción y opcionales de departamento, resolviendo cada
+        // consumo hasta la RUTA FÍSICA que realmente cambia (propio, heredado o
+        // receta) y agrupando cuando varios caminos caen en el mismo nodo. No se
+        // crea una segunda llamada de stock ni un segundo referenceId.
+        //
+        // Reglas que aplica: los opcionales resuelven SOLO por articleId y nunca
+        // por nombre; un opcional manual sin articleId no mueve stock; el
+        // consumo sale del snapshot congelado y validado, jamás del nombre; y un
+        // opcional gratuito basado en artículo igual descuenta.
+        const plan = construirPlanDeStock({
+            items,
+            articulos: articlesData,
+            materiaPrima: materiaPrimaData,
+            permitirNombreEnBase: true,   // compatibilidad de artículos base históricos
         });
+        Object.assign(impactMap, plan.impactMap);
+
+        for (const aviso of plan.avisos) {
+            if (aviso.tipo === 'fallback-por-nombre') {
+                console.warn(`[stock] artículo resuelto por NOMBRE (compatibilidad histórica): "${aviso.buscado}" → ${aviso.resuelto}`, aviso);
+            } else if (aviso.tipo === 'recurso-inexistente' || aviso.tipo === 'consumo-invalido' || aviso.tipo === 'ciclo') {
+                console.warn(`[stock] ${aviso.tipo}`, aviso);
+            }
+        }
+        if (plan.faltantes.length > 0) {
+            console.warn(`[stock] ${plan.faltantes.length} recurso(s) del pedido no existen en el catálogo`, plan.faltantes);
+        }
 
         if (Object.keys(impactMap).length > 0) {
             // Revalida antes del set() del reporte: el Promise.all(get) de
