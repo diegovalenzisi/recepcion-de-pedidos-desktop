@@ -18,22 +18,15 @@
 
 import { rutaRecurso } from './stockAtomico.js';
 import { idCanonico } from './idsCanonicos.js';
+import { tipoDeStock } from './opcionalesDepartamento.js';
+
+export { tipoDeStock };
 
 const numero = (v) => {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
   if (typeof v === 'string') { const n = parseFloat(v.replace(',', '.')); return Number.isFinite(n) ? n : 0; }
   return 0;
 };
-
-/** Tipo de stock efectivo de un artículo, con la misma regla que ya usa el sistema. */
-export function tipoDeStock(articulo) {
-  const s = (articulo && articulo.stock) || {};
-  if (s.stockType) return s.stockType;
-  if (s.receta && Object.keys(s.receta).length > 0) return 'receta';
-  if (s.heredadoDe) return 'heredado';
-  if (s.propio !== undefined) return 'propio';
-  return 'ninguno';
-}
 
 /**
  * Resuelve un consumo hasta las rutas FÍSICAS que realmente cambian, siguiendo

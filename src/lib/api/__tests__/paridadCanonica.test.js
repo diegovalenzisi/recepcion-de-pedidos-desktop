@@ -35,6 +35,10 @@ const NUCLEO = [
   'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato
   'src/lib/api/__tests__/fixturesComunes.test.js', // ejecutor del contrato
   'src/lib/api/__tests__/idsCanonicos.test.js',
+  'src/lib/api/bloqueoPrecioInvalido.js',
+  'src/lib/api/__tests__/bloqueoPrecioInvalido.test.js',
+  'src/lib/api/opcionalesDepartamento.js',
+  'src/lib/api/__tests__/opcionalesDepartamento.test.js',
 ];
 
 // COMPARTIDOS ENTRE RECEPTORES: solo aplican a Desktop y Tablet (DLV no imprime
