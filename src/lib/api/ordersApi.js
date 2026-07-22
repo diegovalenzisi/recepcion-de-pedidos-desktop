@@ -6,6 +6,7 @@ import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { construirLineaPersistible, enriquecerOpcionalSnapshot } from '@/lib/api/optionalsPricing';
+import { normalizarPedidosRecibidos } from '@/lib/api/ordersIngest';
 import { processStockForDeliveredOrder } from './transactionsApi';
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
@@ -609,9 +610,15 @@ export const fetchOrders = async () => {
     const data = snapshot.val();
 
     if (!data) return [];
-    return Object.keys(data)
-      .map(key => ({ ...data[key], id: key }))
-      .sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
+    // Los pedidos de este nodo pueden venir del Desktop, de la Tablet o de DLV
+    // Pedidos (que corre en el navegador del cliente). No se confía ciegamente
+    // en el total recibido: si el snapshot está completo se reconstruye el total
+    // canónico y se deja aviso si difiere; si el pedido es histórico, se respeta
+    // el total guardado. Misma regla exacta que aplica la Tablet. Solo lectura.
+    return normalizarPedidosRecibidos(
+      Object.keys(data).map(key => ({ ...data[key], id: key })),
+      { onWarn: (w) => console.warn('[pedidos] total recibido inconsistente', w) }
+    ).sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
   } catch (error) {
     console.error("Error fetching orders:", error);
     throw error;
