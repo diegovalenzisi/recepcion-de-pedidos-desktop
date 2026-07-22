@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import { fetchData } from '@/lib/api/firebaseApi';
 import { saveOrder, updateOrder } from '@/lib/api/ordersApi';
+import { calcularTotalPedido } from '@/lib/api/optionalsPricing';
 import { useToast } from '@/components/ui/use-toast';
 import OptionalSelectionModal from '@/components/attention/OptionalSelectionModal';
 import GroupProductSelectionModal from '@/components/attention/GroupProductSelectionModal';
@@ -303,7 +304,14 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     }
   };
   
-  const total = orderItems.reduce((sum, item) => sum + parseFloat(item.valor || 0) * item.quantity, 0);
+  // Total con opcionales pagos incluidos. Antes era Σ valor × quantity, que
+  // ignoraba por completo el precio de los opcionales. Ahora usa el cálculo
+  // centralizado (mismo módulo en Desktop, Tablet y DLV Pedidos), que suma el
+  // adicional exactamente una vez: `valor` sigue siendo SIEMPRE el precio base.
+  const total = useMemo(
+    () => calcularTotalPedido(orderItems, { onWarn: (w) => console.warn('[opcionales] importe inválido', w) }).total,
+    [orderItems]
+  );
 
   const allowedPaymentMethods = useMemo(() => {
     if (!orderItems.length || !departments.length || !paymentMethods.length) {
