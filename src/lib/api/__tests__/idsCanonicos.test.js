@@ -128,4 +128,46 @@ check('un snapshot nuevo NO habilita el camino legado', () => {
   assert.strictEqual(r.id, null, 'un ID moderno inexistente es un error, no un alias');
 });
 
+console.log('\nSerialización DLV → Desktop/Tablet (sin normalización destructiva):');
+check('el ID de departamento llega COMPLETO tras serializar el pedido', () => {
+  // Lo que DLV escribe en Firebase para un opcional de departamento.
+  const opcionalEnPedido = {
+    nombre: 'Rocklets',
+    grupoId: 'G-TOP',
+    departamentoId: 'D12',
+    articleId: 'A-0203',
+    precioUnitario: 1700, cantidad: 1, total: 1700,
+  };
+  const json = JSON.stringify({ items: [{ selectedOptionals: { 'G-TOP': [opcionalEnPedido] } }] });
+  const recibido = JSON.parse(json).items[0].selectedOptionals['G-TOP'][0];
+
+  assert.strictEqual(recibido.departamentoId, 'D12', 'no puede llegar como "12"');
+  assert.strictEqual(recibido.articleId, 'A-0203', 'no puede llegar como "203"');
+  assert.strictEqual(esIdLegado(recibido.departamentoId), false);
+  assert.strictEqual(esIdLegado(recibido.articleId), false);
+});
+check('el receptor lo resuelve por coincidencia EXACTA, sin habilitar el legado', () => {
+  const catalogoDeptos = ['D12', 'D30'];
+  const catalogoArts = ['A-0203', 'A-0007'];
+  const r1 = resolverId('D12', catalogoDeptos, { permitirLegado: esIdLegado('D12') });
+  const r2 = resolverId('A-0203', catalogoArts, { permitirLegado: esIdLegado('A-0203') });
+  assert.strictEqual(r1.via, 'exacto');
+  assert.strictEqual(r2.via, 'exacto');
+});
+check('un ID reducido a dígitos delata un emisor viejo y NO se acepta como nuevo', () => {
+  // Si un pedido NUEVO trajera "12", eso significa que alguien volvió a
+  // normalizar destructivamente: se detecta en vez de resolverse en silencio.
+  const recibido = { departamentoId: '12', esPedidoNuevo: true };
+  const legado = esIdLegado(recibido.departamentoId);
+  assert.strictEqual(legado, true, 'se reconoce como forma legada');
+  const r = resolverId(recibido.departamentoId, ['D12'], { permitirLegado: !recibido.esPedidoNuevo });
+  assert.strictEqual(r.id, null, 'un pedido nuevo no puede apoyarse en el alias');
+});
+check('nunca se elige el primer candidato arbitrariamente', () => {
+  const r = resolverId('12', ['D12', 'X12'], { permitirLegado: true });
+  assert.strictEqual(r.id, null);
+  assert.strictEqual(r.ambiguo, true);
+  assert.notStrictEqual(r.id, 'D12', 'no se toma el primero por descarte');
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

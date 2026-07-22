@@ -1,253 +1,305 @@
 // ---------------------------------------------------------------------------
-// APLICACIÓN ATÓMICA DEL IMPACTO DE STOCK
+// APLICACIÓN IDEMPOTENTE DEL IMPACTO DE STOCK
 //
-// PROBLEMA QUE RESUELVE
-// --------------------
-// El motor anterior hacía: tomar lock → N runTransaction() independientes (una
-// por artículo) → N push() de movimiento → marcar `completed`. Eso deja una
-// ventana real: si el proceso muere después de descontar el kilo base pero
-// antes de descontar Rocklets, el referenceId queda en `processing` con el
-// pedido A MEDIO APLICAR. Reintentar "porque el lock venció" descontaría el
-// kilo base por segunda vez.
+// HISTORIA DE ESTE ARCHIVO (importante para no repetir el error)
+// --------------------------------------------------------------
+// Intento 1: N runTransaction() sueltas + marcar `completed` al final.
+//   Roto: si el proceso muere entre medio, el pedido queda a medio descontar y
+//   reintentar duplica lo ya aplicado.
 //
-// DISEÑO ELEGIDO
-// --------------
-// Realtime Database soporta `increment(delta)` (ServerValue.increment) DENTRO de
-// un `update()` multi-ruta, y un update multi-ruta es ATÓMICO: se aplica entero
-// o no se aplica nada. Entonces TODO el efecto del pedido va en UNA sola
-// escritura:
+// Intento 2: un único update() multi-ruta con increment(), incluyendo la marca
+//   `completed`. Elimina el estado parcial DENTRO de una escritura, pero NO
+//   resuelve el problema real:
 //
-//   update(ref(db), {
-//     'LOCAL/ARTICULOS/A-0007/stock/propio':      increment(-1),
-//     'LOCAL/ARTICULOS/A-ROCKLETS/stock/propio':  increment(-2),
-//     'LOCAL/MATERIA_PRIMA/M-3/stock':            increment(-0.5),
-//     'LOCAL/TRANSACCIONES_STOCK/<pushId>':       { ...movimiento },
-//     'LOCAL/PROCESSED_STOCK_IDS/<refId>':        { status: 'completed', ... },
-//   })
+//     A toma el lock → A se suspende → vence el lease → B lo recupera →
+//     A despierta y hace su update completo → B hace el suyo → SE DESCUENTA DOS VECES.
 //
-// La marca `completed` viaja EN LA MISMA escritura que los descuentos. Eso
-// produce el invariante que hace seguro el reintento:
+//   Los dos updates son atómicos por separado; la atomicidad no impide dos
+//   commits de dueños distintos. Y un `update()` normal no puede condicionarse a
+//   que el fencing token siga vigente, así que guardar el token no alcanza.
+//   Cualquier chequeo previo tiene su propia carrera contra la escritura.
 //
-//   status === 'completed'   ⟺  TODOS los descuentos se aplicaron
-//   status !== 'completed'   ⟺  NINGÚN descuento se aplicó
+// DISEÑO ACTUAL: IDEMPOTENCIA POR RECURSO (opción A)
+// --------------------------------------------------
+// La única primitiva de RTDB que da una condición evaluada EN EL SERVIDOR es
+// `runTransaction`: lee, decide y escribe en un compare-and-set con reintento.
+// Entonces la garantía se pone donde está el dato: cada artículo/materia prima
+// registra, DENTRO DE LA MISMA TRANSACCIÓN que cambia su stock, qué
+// referenceId ya se le aplicó.
 //
-// No existe un estado intermedio "algunos aplicados".
+//   ARTICULOS/{id}/stock = {
+//     stockType, propio, receta, heredadoDe,
+//     appliedOps: { "DELIVERY_123": { amount: 2, impactHash: "…", at: … } }
+//   }
 //
-// RESPUESTAS EXIGIDAS (punto 1 del checkpoint)
-// --------------------------------------------
-// · ¿Qué operación es atómica?
-//     La aplicación completa: todos los incrementos de stock + los movimientos
-//     + la marca `completed`, en un único `update()` multi-ruta.
+// La transacción de cada recurso:
+//   · ya aplicado con el MISMO impactHash  → no descuenta (reintento legítimo);
+//   · ya aplicado con OTRO impactHash      → rechaza por inconsistencia;
+//   · no aplicado                          → descuenta y registra la operación.
 //
-// · ¿Qué pasa si el proceso muere ANTES de escribir?
-//     La reserva (`runTransaction` sobre PROCESSED_STOCK_IDS) puede haber
-//     quedado en `processing`. Nada de stock se movió. Un reintento posterior
-//     ve `processing`, comprueba que no hay `appliedAt` y vuelve a intentar la
-//     aplicación completa. No hay doble descuento porque no hubo descuento.
+// Qué garantiza y qué no:
+//   ✔ EXACTLY-ONCE POR RECURSO, impuesto por el servidor. Dos dueños
+//     concurrentes (el caso A/B de arriba) producen UN solo descuento: el
+//     segundo ve `appliedOps` y no aplica.
+//   ✔ Reanudación segura: un reintento vuelve a recorrer todos los recursos;
+//     los ya aplicados no se tocan y los faltantes se completan.
+//   ✔ El lock deja de ser un mecanismo de corrección y pasa a ser solo una
+//     optimización para no hacer trabajo repetido. Recuperarlo por antigüedad
+//     ya no puede causar doble descuento.
+//   ✘ NO hay atomicidad entre recursos: un corte puede dejar el kilo base
+//     aplicado y Rocklets no. Eso es una operación PARCIAL detectable
+//     (`appliedOps` por recurso) y RESOLUBLE reintentando. No es doble cobro.
 //
-// · ¿Qué pasa si muere DURANTE la escritura?
-//     RTDB aplica el update entero o nada. Si se aplicó, quedó `completed` y el
-//     reintento se rechaza. Si no se aplicó, quedó `processing` y el reintento
-//     lo completa. En los dos casos el resultado final es un solo descuento.
+// Por eso este motor NO se describe como "exactly once" a nivel pedido, sino
+// como "exactly once por recurso, con reanudación idempotente".
 //
-// · ¿Cómo se reintenta sin descontar dos veces?
-//     El reintento solo procede si `status !== 'completed'`. Como `completed` se
-//     escribe junto con los descuentos, "no completed" garantiza "no aplicado".
-//
-// · ¿Cómo se detecta una operación parcial?
-//     No puede haberla. Lo que sí se detecta es una RESERVA HUÉRFANA:
-//     `status === 'processing'` con antigüedad mayor a RESERVA_VENCIDA_MS. Eso
-//     significa "alguien reservó y nunca aplicó", y es seguro reintentar.
-//
-// LÍMITE CONOCIDO
-// ---------------
-// `increment` no puede leer el valor previo, así que esta operación NO valida
-// stock disponible al aplicar. Eso NO es un cambio de política: el motor actual
-// tampoco lo hacía (permitía negativo). El bloqueo por falta de stock sigue
-// ocurriendo antes, en la selección.
-//
-// Módulo puro: construye el payload y decide si se puede aplicar. No importa
-// Firebase ni escribe nada; quien lo usa le pasa la función `increment`.
+// Módulo puro: no importa Firebase. Expone los reductores de transacción para
+// poder probarlos, y quien lo usa provee `runTransaction`.
 // ---------------------------------------------------------------------------
 
-/** Una reserva en `processing` más vieja que esto se considera huérfana. */
+/** Una reserva `processing` más vieja que esto se considera huérfana. */
 export const RESERVA_VENCIDA_MS = 2 * 60 * 1000;
 
-/**
- * Decide si corresponde aplicar el impacto, a partir de la marca ya existente.
- *
- * @param {object|null} marca  valor actual de PROCESSED_STOCK_IDS/{referenceId}
- * @param {number} ahora
- * @returns {{ aplicar: boolean, motivo: string }}
- */
-export function decidirAplicacion(marca, ahora = Date.now()) {
-  if (!marca) return { aplicar: true, motivo: 'sin-marca' };
-
-  if (marca.status === 'completed') {
-    // Invariante: completed ⇒ todo aplicado. Nunca se reaplica.
-    return { aplicar: false, motivo: 'ya-procesado' };
-  }
-
-  if (marca.status === 'processing') {
-    const edad = ahora - (Number(marca.timestamp) || 0);
-    if (edad > RESERVA_VENCIDA_MS) {
-      // Reserva huérfana. Es SEGURO reintentar porque `processing` implica que
-      // la escritura atómica no llegó a aplicarse.
-      return { aplicar: true, motivo: 'reserva-huerfana' };
-    }
-    return { aplicar: false, motivo: 'en-curso' };
-  }
-
-  return { aplicar: true, motivo: 'marca-desconocida' };
-}
+// ---------------------------------------------------------------------------
+// Impacto canónico y hash
+// ---------------------------------------------------------------------------
 
 /**
- * Construye el payload del `update()` multi-ruta que aplica TODO el impacto.
- *
- * @param {object} params
- *   localId        — local sobre el que se aplica (aislamiento)
- *   referenceId    — identificador idempotente de la operación
- *   impactMap      — { [itemId]: { quantity, type: 'ARTICULO'|'MATERIA_PRIMA' } }
- *                    `quantity` es lo que se RESTA (positivo = descuento)
- *   movimientoId   — clave ya generada para el movimiento (push key)
- *   increment      — función de incremento atómico del backend
- *   source, fecha, timestamp, intento
- * @returns {{ payload: object, rutas: string[], totalItems: number }}
+ * Representación canónica y ORDENADA del impacto. Es la entrada del hash, así
+ * que el orden no puede depender del recorrido del pedido.
  */
-export function construirPayloadAtomico({
-  localId,
-  referenceId,
-  impactMap,
-  movimientoId,
-  increment,
-  source = 'Venta',
-  fecha = new Date().toISOString(),
-  timestamp = Date.now(),
-  intento = 1,
-}) {
-  if (!localId) throw new Error('localId requerido');
-  if (!referenceId) throw new Error('referenceId requerido: sin él no hay idempotencia');
-  if (typeof increment !== 'function') throw new Error('increment requerido');
-
-  const payload = {};
-  const detalles = [];
-
-  for (const [itemId, data] of Object.entries(impactMap || {})) {
+export function construirImpactoCanonico(impactMap) {
+  const salida = [];
+  for (const [id, data] of Object.entries(impactMap || {})) {
     const cantidad = Number(data && data.quantity);
     if (!Number.isFinite(cantidad) || cantidad === 0) continue;
-
-    const ruta = data.type === 'ARTICULO'
-      ? `${localId}/ARTICULOS/${itemId}/stock/propio`
-      : `${localId}/MATERIA_PRIMA/${itemId}/stock`;
-
-    // Si el mismo itemId apareciera dos veces ya vendría agregado en impactMap;
-    // esta guarda evita pisar una ruta en silencio si algo cambia más adelante.
-    if (payload[ruta] !== undefined) {
-      throw new Error(`ruta de stock duplicada: ${ruta} (el impacto debe venir agregado por artículo)`);
-    }
-
-    payload[ruta] = increment(-cantidad);
-    detalles.push({ itemId, cantidad, tipo: data.type });
+    salida.push({ tipo: data.type, id: String(id), cantidad });
   }
-
-  // El movimiento y la marca viajan en la MISMA escritura que los descuentos.
-  if (detalles.length > 0 && movimientoId) {
-    payload[`${localId}/TRANSACCIONES_STOCK/${movimientoId}`] = {
-      tipo: 'salida',
-      motivo: source,
-      referenceId,
-      fecha,
-      timestamp,
-      detalles,
-    };
-  }
-
-  payload[`${localId}/PROCESSED_STOCK_IDS/${referenceId}`] = {
-    status: 'completed',
-    timestamp,
-    appliedAt: timestamp,
-    source,
-    intento,
-    // Ledger del impacto exacto que se aplicó: permite calcular deltas de una
-    // edición posterior y revertir con precisión, sin recomponer el pedido.
-    impacto: detalles,
-  };
-
-  return { payload, rutas: Object.keys(payload), totalItems: detalles.length };
+  return salida.sort((a, b) => (a.tipo === b.tipo ? a.id.localeCompare(b.id) : a.tipo.localeCompare(b.tipo)));
 }
 
 /**
- * Payload de REVERSIÓN. Devuelve el stock exactamente según el ledger de la
- * operación original, bajo su propio referenceId (`REVERSAL_...`), sin borrar
- * ni reutilizar la marca original.
+ * Hash estable del impacto (FNV-1a de 32 bits sobre la forma canónica).
+ * No necesita ser criptográfico: solo tiene que detectar que un mismo
+ * referenceId se está usando con un contenido distinto.
  */
-export function construirPayloadReversion({
-  localId,
-  referenceIdOriginal,
-  marcaOriginal,
-  referenceIdReversion,
-  movimientoId,
-  increment,
-  source = 'Reversión',
-  fecha = new Date().toISOString(),
-  timestamp = Date.now(),
-}) {
-  if (!localId) throw new Error('localId requerido');
-  if (!referenceIdReversion) throw new Error('referenceIdReversion requerido');
-  if (typeof increment !== 'function') throw new Error('increment requerido');
-
-  // Solo se puede revertir lo que realmente se aplicó.
-  if (!marcaOriginal || marcaOriginal.status !== 'completed') {
-    return { payload: null, motivo: 'original-no-completada', totalItems: 0 };
+export function calcularImpactHash(impactMap) {
+  const canonico = construirImpactoCanonico(impactMap);
+  const texto = canonico.map((d) => `${d.tipo}:${d.id}:${d.cantidad}`).join('|');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < texto.length; i += 1) {
+    h ^= texto.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
   }
-  const impacto = Array.isArray(marcaOriginal.impacto) ? marcaOriginal.impacto : [];
-  if (impacto.length === 0) {
-    return { payload: null, motivo: 'sin-impacto-registrado', totalItems: 0 };
-  }
-
-  const payload = {};
-  const detalles = [];
-  for (const d of impacto) {
-    const cantidad = Number(d && d.cantidad);
-    if (!Number.isFinite(cantidad) || cantidad === 0) continue;
-    const ruta = d.tipo === 'ARTICULO'
-      ? `${localId}/ARTICULOS/${d.itemId}/stock/propio`
-      : `${localId}/MATERIA_PRIMA/${d.itemId}/stock`;
-    if (payload[ruta] !== undefined) {
-      throw new Error(`ruta de stock duplicada en la reversión: ${ruta}`);
-    }
-    payload[ruta] = increment(cantidad); // devuelve lo descontado
-    detalles.push({ itemId: d.itemId, cantidad, tipo: d.tipo });
-  }
-
-  if (detalles.length > 0 && movimientoId) {
-    payload[`${localId}/TRANSACCIONES_STOCK/${movimientoId}`] = {
-      tipo: 'entrada',
-      motivo: source,
-      referenceId: referenceIdReversion,
-      revierteA: referenceIdOriginal,
-      fecha,
-      timestamp,
-      detalles,
-    };
-  }
-
-  payload[`${localId}/PROCESSED_STOCK_IDS/${referenceIdReversion}`] = {
-    status: 'completed',
-    timestamp,
-    appliedAt: timestamp,
-    source,
-    revierteA: referenceIdOriginal,
-    impacto: detalles,
-  };
-
-  return { payload, motivo: 'ok', totalItems: detalles.length };
+  return `h${h.toString(16).padStart(8, '0')}_${canonico.length}`;
 }
 
-/** Identificadores determinísticos: la misma venta produce siempre el mismo id. */
+// ---------------------------------------------------------------------------
+// Identidades determinísticas
+// ---------------------------------------------------------------------------
 export const refDelivery = (orderId) => `DELIVERY_${orderId}`;
 export const refMostrador = (saleId) => `MOSTRADOR_${saleId}`;
 export const refReversionMostrador = (saleId) => `REVERSAL_MOSTRADOR_${saleId}`;
 export const refReversionDelivery = (orderId) => `REVERSAL_DELIVERY_${orderId}`;
-/** Ajuste por edición posterior: determinístico por pedido y versión de edición. */
 export const refAjuste = (referenceIdOriginal, version) => `ADJUST_${referenceIdOriginal}_v${version}`;
+
+/**
+ * Identidad ESTABLE del movimiento: se deriva del referenceId, no de un push()
+ * nuevo por intento. Un reintento reescribe el mismo nodo en vez de crear un
+ * movimiento duplicado.
+ */
+export const movimientoIdDe = (referenceId) => `MOV_${referenceId}`;
+
+// ---------------------------------------------------------------------------
+// Validación del plan antes de tocar nada
+// ---------------------------------------------------------------------------
+
+/** Ruta física de stock de un recurso. */
+export function rutaRecurso(localId, id, tipo) {
+  return tipo === 'ARTICULO'
+    ? `${localId}/ARTICULOS/${id}/stock`
+    : `${localId}/MATERIA_PRIMA/${id}`;
+}
+
+/**
+ * Valida el plan de impacto antes de ejecutarlo. Devuelve los problemas
+ * encontrados; si hay alguno, NO debe aplicarse nada.
+ */
+export function validarPlan({ localId, impactMap, idsValidos = null }) {
+  const problemas = [];
+  if (!localId) problemas.push({ tipo: 'sin-local' });
+
+  const rutasVistas = new Map();
+  for (const [id, data] of Object.entries(impactMap || {})) {
+    const tipo = data && data.type;
+    const cantidad = Number(data && data.quantity);
+
+    if (tipo !== 'ARTICULO' && tipo !== 'MATERIA_PRIMA') {
+      problemas.push({ tipo: 'tipo-invalido', id, valor: tipo });
+      continue;
+    }
+    if (!Number.isFinite(cantidad)) { problemas.push({ tipo: 'cantidad-no-finita', id, valor: data.quantity }); continue; }
+    if (cantidad < 0) { problemas.push({ tipo: 'cantidad-negativa', id, valor: cantidad }); continue; }
+    if (cantidad === 0) { problemas.push({ tipo: 'cantidad-cero', id }); continue; }
+    if (idsValidos && !idsValidos.includes(String(id))) {
+      problemas.push({ tipo: 'id-no-validado', id });
+      continue;
+    }
+
+    // Recetas y stock heredado pueden terminar apuntando al MISMO nodo físico:
+    // eso tiene que venir agregado, no como dos entradas.
+    const ruta = rutaRecurso(localId, id, tipo);
+    if (rutasVistas.has(ruta)) {
+      problemas.push({ tipo: 'ruta-duplicada', ruta, ids: [rutasVistas.get(ruta), id] });
+    } else {
+      rutasVistas.set(ruta, id);
+    }
+    if (String(id).includes('/')) problemas.push({ tipo: 'id-con-barra', id });
+  }
+
+  return { valido: problemas.length === 0, problemas, rutas: [...rutasVistas.keys()] };
+}
+
+// ---------------------------------------------------------------------------
+// Reductores de transacción (el corazón de la garantía)
+// ---------------------------------------------------------------------------
+
+/** Lee el stock actual distinguiendo "ausente" de "corrupto". */
+export function leerStockActual(nodo, tipo) {
+  const crudo = tipo === 'ARTICULO' ? (nodo && nodo.propio) : (nodo && nodo.stock);
+  if (crudo === null || crudo === undefined) return { valor: 0, estado: 'ausente' };
+  if (typeof crudo === 'number') {
+    return Number.isFinite(crudo) ? { valor: crudo, estado: 'ok' } : { valor: 0, estado: 'corrupto' };
+  }
+  if (typeof crudo === 'string') {
+    const n = Number(crudo.replace(',', '.'));
+    // Un stock guardado como string es un dato histórico: se acepta, pero
+    // avisando, para no convertir basura en un número en silencio.
+    return Number.isFinite(n) ? { valor: n, estado: 'string-historico' } : { valor: 0, estado: 'corrupto' };
+  }
+  return { valor: 0, estado: 'corrupto' };
+}
+
+/**
+ * Reductor de la transacción de UN recurso. Es la función que se le pasa a
+ * `runTransaction`, y por eso la decisión se evalúa en el servidor.
+ *
+ * @returns {{ nodo: object|undefined, resultado: string, aviso: object|null }}
+ *   nodo === undefined ⇒ abortar la transacción (no escribir).
+ */
+export function aplicarEnRecurso(nodoActual, { referenceId, cantidad, impactHash, tipo, ahora = Date.now() }) {
+  const nodo = nodoActual ? { ...nodoActual } : {};
+  const aplicadas = { ...(nodo.appliedOps || {}) };
+  const yaAplicada = aplicadas[referenceId];
+
+  if (yaAplicada) {
+    if (yaAplicada.impactHash !== impactHash) {
+      // Mismo referenceId, contenido distinto: el pedido cambió y alguien está
+      // reutilizando la referencia. No se procesa como si fuera el mismo.
+      return { nodo: undefined, resultado: 'conflicto-de-hash', aviso: { esperado: impactHash, encontrado: yaAplicada.impactHash } };
+    }
+    // Reintento legítimo: ya estaba aplicado. No se vuelve a descontar.
+    return { nodo: undefined, resultado: 'ya-aplicado', aviso: null };
+  }
+
+  const { valor, estado } = leerStockActual(nodo, tipo);
+  const aviso = (estado === 'corrupto' || estado === 'string-historico')
+    ? { tipo: 'stock-no-numerico', estado, crudo: tipo === 'ARTICULO' ? nodo.propio : nodo.stock }
+    : null;
+
+  const nuevo = valor - cantidad;
+  if (tipo === 'ARTICULO') nodo.propio = nuevo; else nodo.stock = nuevo;
+
+  aplicadas[referenceId] = { amount: cantidad, impactHash, at: ahora };
+  nodo.appliedOps = aplicadas;
+
+  return { nodo, resultado: 'aplicado', aviso, stockAnterior: valor, stockNuevo: nuevo, estadoStock: estado };
+}
+
+/**
+ * Reductor de REVERSIÓN: devuelve lo aplicado por la operación original.
+ *
+ * ⚠ COMPORTAMIENTO REAL DE RTDB (verificado contra el emulador): el reductor de
+ * `runTransaction` se invoca la PRIMERA vez con el valor cacheado, que es `null`
+ * aunque el nodo exista en el servidor. Un `get()` previo NO lo evita: `get()`
+ * no puebla el árbol de sincronización que usa la transacción.
+ *
+ * Si en esa primera llamada se devuelve `undefined`, la transacción ABORTA y
+ * nunca se reejecuta con el dato real. Eso hacía que la reversión no repusiera
+ * nada y el stock quedara en 18 en vez de 20.
+ *
+ * Por eso, ante `null` se devuelve un nodo vacío en lugar de abortar: RTDB
+ * reejecuta el reductor con los datos del servidor y esa segunda pasada es la
+ * que decide. Si el nodo realmente no existiera, escribir `{}` equivale a null
+ * en RTDB, así que no deja basura.
+ *
+ * El camino de aplicación no sufría esto porque `aplicarEnRecurso` sí devuelve
+ * un nodo cuando recibe `null`, y por eso la reejecución ocurría sola.
+ */
+export function revertirEnRecurso(nodoActual, { referenceIdOriginal, referenceIdReversion, impactHash, tipo, ahora = Date.now() }) {
+  if (nodoActual === null || nodoActual === undefined) {
+    return { nodo: {}, resultado: 'esperando-datos-del-servidor', aviso: null };
+  }
+  const nodo = { ...nodoActual };
+  const aplicadas = { ...(nodo.appliedOps || {}) };
+
+  if (aplicadas[referenceIdReversion]) {
+    return { nodo: undefined, resultado: 'ya-revertido', aviso: null };
+  }
+  const original = aplicadas[referenceIdOriginal];
+  if (!original) {
+    // No se puede devolver lo que nunca se descontó en este recurso.
+    return { nodo: undefined, resultado: 'original-no-aplicada', aviso: null };
+  }
+
+  const { valor, estado } = leerStockActual(nodo, tipo);
+  const nuevo = valor + Number(original.amount || 0);
+  if (tipo === 'ARTICULO') nodo.propio = nuevo; else nodo.stock = nuevo;
+
+  aplicadas[referenceIdReversion] = {
+    amount: -Number(original.amount || 0),
+    impactHash: impactHash || original.impactHash,
+    revierteA: referenceIdOriginal,
+    at: ahora,
+  };
+  nodo.appliedOps = aplicadas;
+
+  return { nodo, resultado: 'revertido', aviso: null, stockAnterior: valor, stockNuevo: nuevo, estadoStock: estado };
+}
+
+// ---------------------------------------------------------------------------
+// Reserva (optimización, NO mecanismo de corrección)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide si conviene intentar la operación. Recuperar una reserva vencida ya no
+ * puede causar doble descuento: la corrección la garantiza `appliedOps` en cada
+ * recurso. Esto solo evita trabajo repetido.
+ */
+export function decidirIntento(marca, ahora = Date.now()) {
+  if (!marca) return { intentar: true, motivo: 'sin-marca' };
+  if (marca.status === 'completed') return { intentar: false, motivo: 'ya-procesado' };
+  if (marca.status === 'processing') {
+    const edad = ahora - (Number(marca.timestamp) || 0);
+    return edad > RESERVA_VENCIDA_MS
+      ? { intentar: true, motivo: 'reserva-huerfana' }
+      : { intentar: false, motivo: 'en-curso' };
+  }
+  return { intentar: true, motivo: 'marca-desconocida' };
+}
+
+/** Marca final de la operación, con el ledger de lo realmente aplicado. */
+export function construirMarcaFinal({ referenceId, impactHash, impacto, source, ownerId, intento = 1, timestamp = Date.now(), parcial = false }) {
+  return {
+    status: parcial ? 'partial' : 'completed',
+    referenceId,
+    impactHash,
+    source,
+    ownerId: ownerId || null,
+    intento,
+    timestamp,
+    appliedAt: timestamp,
+    movementId: movimientoIdDe(referenceId),
+    impacto,
+  };
+}

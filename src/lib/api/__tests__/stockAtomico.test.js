@@ -1,23 +1,19 @@
-// Fase 2 — atomicidad e idempotencia del impacto de stock.
+// Fase 2 — idempotencia POR RECURSO del impacto de stock.
 //
-// Se prueba contra un backend RTDB EN MEMORIA que reproduce las dos garantías
-// reales que usa el diseño:
-//   · `increment(delta)` suma sobre el valor actual del servidor;
-//   · `update()` multi-ruta se aplica ENTERO o NADA.
-// El backend permite inyectar una caída en cualquier etapa, para comprobar que
-// nunca queda un pedido a medio descontar.
+// Backend en memoria que reproduce `runTransaction` de RTDB: lee, aplica el
+// reductor y escribe; si el reductor devuelve undefined, aborta sin escribir.
+// Permite intercalar dos clientes paso a paso para probar la carrera real.
 //
-// No toca Firebase ni datos reales.
+// Las pruebas contra el emulador real están en
+// src/lib/api/__tests__/stockEmulator.integration.mjs
 //
 // Correr con: node src/lib/api/__tests__/stockAtomico.test.js
 import assert from 'node:assert';
 import {
-  decidirAplicacion,
-  construirPayloadAtomico,
-  construirPayloadReversion,
-  RESERVA_VENCIDA_MS,
-  refMostrador,
-  refReversionMostrador,
+  aplicarEnRecurso, revertirEnRecurso, leerStockActual,
+  construirImpactoCanonico, calcularImpactHash, validarPlan, rutaRecurso,
+  decidirIntento, construirMarcaFinal, movimientoIdDe,
+  refMostrador, refReversionMostrador, RESERVA_VENCIDA_MS,
 } from '../stockAtomico.js';
 
 let passed = 0;
@@ -26,56 +22,33 @@ function check(name, fn) {
   catch (e) { console.error(`FAIL  ${name}\n      ${e && e.message}`); process.exitCode = 1; }
 }
 
-// --- Backend RTDB en memoria ------------------------------------------------
-const INCR = Symbol('increment');
-const increment = (delta) => ({ [INCR]: delta });
-
-class DbMemoria {
-  constructor(datos = {}) { this.datos = JSON.parse(JSON.stringify(datos)); this.caida = null; }
-  /** Programa una caída: 'antes-de-escribir' | 'durante-la-escritura'. */
-  romperEn(momento) { this.caida = momento; }
-  leer(ruta) {
-    return ruta.split('/').reduce((o, k) => (o === undefined || o === null ? undefined : o[k]), this.datos);
-  }
+// --- Backend en memoria con runTransaction ---------------------------------
+class Db {
+  constructor(datos = {}) { this.datos = JSON.parse(JSON.stringify(datos)); this.transacciones = 0; }
+  leer(ruta) { return ruta.split('/').reduce((o, k) => (o == null ? undefined : o[k]), this.datos); }
   escribir(ruta, valor) {
-    const partes = ruta.split('/');
-    const ultima = partes.pop();
-    let nodo = this.datos;
-    for (const p of partes) { if (typeof nodo[p] !== 'object' || nodo[p] === null) nodo[p] = {}; nodo = nodo[p]; }
-    nodo[ultima] = valor;
+    const p = ruta.split('/'); const u = p.pop();
+    let n = this.datos;
+    for (const k of p) { if (typeof n[k] !== 'object' || n[k] === null) n[k] = {}; n = n[k]; }
+    n[u] = valor;
   }
-  /** update() multi-ruta: atómico. O se aplica todo, o no se aplica nada. */
-  update(payload) {
-    if (this.caida === 'antes-de-escribir') throw new Error('CAIDA antes de escribir');
-    // Se calcula el resultado completo sobre una COPIA; recién si todo salió
-    // bien se publica. Así se reproduce el "todo o nada" del servidor.
-    const copia = new DbMemoria(this.datos);
-    for (const [ruta, valor] of Object.entries(payload)) {
-      if (this.caida === 'durante-la-escritura') throw new Error('CAIDA durante la escritura');
-      if (valor && typeof valor === 'object' && INCR in valor) {
-        const actual = Number(copia.leer(ruta)) || 0;
-        copia.escribir(ruta, actual + valor[INCR]);
-      } else {
-        copia.escribir(ruta, valor);
-      }
-    }
-    this.datos = copia.datos;
-  }
-  /** runTransaction sobre la marca: reserva el referenceId (guarda de concurrencia). */
-  reservar(ruta, ahora = Date.now()) {
-    const actual = this.leer(ruta) || null;
-    const { aplicar } = decidirAplicacion(actual, ahora);
-    if (!aplicar) return false;
-    this.escribir(ruta, { status: 'processing', timestamp: ahora });
-    return true;
+  /** runTransaction: compare-and-set del servidor. undefined = abortar. */
+  runTransaction(ruta, reductor) {
+    this.transacciones += 1;
+    const actual = this.leer(ruta) ?? null;
+    const r = reductor(actual);
+    const nodo = r && typeof r === 'object' && 'nodo' in r ? r.nodo : r;
+    if (nodo === undefined) return { committed: false, resultado: r };
+    this.escribir(ruta, nodo);
+    return { committed: true, resultado: r };
   }
 }
 
 const LOCAL = 'LOCAL_A';
-const datosIniciales = () => ({
+const base = () => ({
   [LOCAL]: {
     ARTICULOS: {
-      'A-0007': { nombre: '1 KILO DE HELADO', stock: { stockType: 'propio', propio: 10 } },
+      'A-0007': { nombre: '1 KILO', stock: { stockType: 'propio', propio: 10 } },
       'A-ROCKLETS': { nombre: 'Rocklets', stock: { stockType: 'propio', propio: 20 } },
     },
     MATERIA_PRIMA: { 'M-3': { nombre: 'Azúcar', stock: 100 } },
@@ -89,226 +62,304 @@ const IMPACTO = {
 };
 
 const stock = (db, id) => db.leer(`${LOCAL}/ARTICULOS/${id}/stock/propio`);
-const marca = (db, ref) => db.leer(`${LOCAL}/PROCESSED_STOCK_IDS/${ref}`);
+const mp = (db) => db.leer(`${LOCAL}/MATERIA_PRIMA/M-3/stock`);
 
-/** Ejecuta el flujo real: reservar → construir payload → aplicar. */
-function procesar(db, referenceId, impacto = IMPACTO, { ahora = Date.now(), intento = 1 } = {}) {
-  const rutaMarca = `${LOCAL}/PROCESSED_STOCK_IDS/${referenceId}`;
-  if (!db.reservar(rutaMarca, ahora)) return { aplicado: false, motivo: 'rechazado' };
-  const { payload } = construirPayloadAtomico({
-    localId: LOCAL, referenceId, impactMap: impacto,
-    movimientoId: `mov-${referenceId}-${intento}`, increment, source: 'Venta Mostrador',
-    timestamp: ahora, intento,
-  });
-  db.update(payload);
-  return { aplicado: true };
+/** Aplica el impacto recurso por recurso, como lo hará el motor real. */
+function aplicar(db, referenceId, impactMap = IMPACTO, { hasta = Infinity, ahora = Date.now() } = {}) {
+  const impactHash = calcularImpactHash(impactMap);
+  const canonico = construirImpactoCanonico(impactMap);
+  const resultados = [];
+  let i = 0;
+  for (const d of canonico) {
+    if (i >= hasta) break;           // corte simulado a mitad de camino
+    i += 1;
+    const ruta = rutaRecurso(LOCAL, d.id, d.tipo);
+    const { resultado } = db.runTransaction(ruta, (nodo) =>
+      aplicarEnRecurso(nodo, { referenceId, cantidad: d.cantidad, impactHash, tipo: d.tipo, ahora }));
+    resultados.push({ id: d.id, ...resultado });
+  }
+  return { resultados, impactHash, completo: i === canonico.length };
 }
 
-console.log('Decisión de aplicar:');
-check('sin marca → se aplica', () => assert.strictEqual(decidirAplicacion(null).aplicar, true));
-check('completed → NUNCA se reaplica', () => {
-  const d = decidirAplicacion({ status: 'completed' });
-  assert.strictEqual(d.aplicar, false);
-  assert.strictEqual(d.motivo, 'ya-procesado');
+console.log('Impacto canónico y hash:');
+check('el orden canónico no depende del recorrido del pedido', () => {
+  const a = construirImpactoCanonico({ 'A-ROCKLETS': { quantity: 2, type: 'ARTICULO' }, 'A-0007': { quantity: 1, type: 'ARTICULO' } });
+  const b = construirImpactoCanonico({ 'A-0007': { quantity: 1, type: 'ARTICULO' }, 'A-ROCKLETS': { quantity: 2, type: 'ARTICULO' } });
+  assert.deepStrictEqual(a, b);
+  assert.deepStrictEqual(a.map((d) => d.id), ['A-0007', 'A-ROCKLETS']);
 });
-check('processing reciente → no se toca (otro proceso está en eso)', () => {
-  const d = decidirAplicacion({ status: 'processing', timestamp: Date.now() });
-  assert.strictEqual(d.aplicar, false);
-  assert.strictEqual(d.motivo, 'en-curso');
+check('mismo impacto → mismo hash, en cualquier orden', () => {
+  assert.strictEqual(
+    calcularImpactHash({ 'A-1': { quantity: 1, type: 'ARTICULO' }, 'A-2': { quantity: 2, type: 'ARTICULO' } }),
+    calcularImpactHash({ 'A-2': { quantity: 2, type: 'ARTICULO' }, 'A-1': { quantity: 1, type: 'ARTICULO' } }),
+  );
 });
-check('processing vencido → se reintenta (es seguro: nada se aplicó)', () => {
-  const ahora = Date.now();
-  const d = decidirAplicacion({ status: 'processing', timestamp: ahora - RESERVA_VENCIDA_MS - 1 }, ahora);
-  assert.strictEqual(d.aplicar, true);
-  assert.strictEqual(d.motivo, 'reserva-huerfana');
+check('cambiar una cantidad cambia el hash', () => {
+  assert.notStrictEqual(
+    calcularImpactHash({ 'A-1': { quantity: 1, type: 'ARTICULO' } }),
+    calcularImpactHash({ 'A-1': { quantity: 2, type: 'ARTICULO' } }),
+  );
+});
+check('el movimiento tiene identidad determinística (no un push por intento)', () => {
+  assert.strictEqual(movimientoIdDe(refMostrador(9)), 'MOV_MOSTRADOR_9');
+  assert.strictEqual(movimientoIdDe(refMostrador(9)), movimientoIdDe(refMostrador(9)));
 });
 
-console.log('\nAplicación normal:');
-check('descuenta base, opcional y materia prima en una sola escritura', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(1));
+console.log('\nValidación del plan:');
+check('rechaza cantidades corruptas, negativas, cero y tipos inválidos', () => {
+  const r = validarPlan({ localId: LOCAL, impactMap: {
+    'A-1': { quantity: NaN, type: 'ARTICULO' },
+    'A-2': { quantity: -1, type: 'ARTICULO' },
+    'A-3': { quantity: 0, type: 'ARTICULO' },
+    'A-4': { quantity: Infinity, type: 'ARTICULO' },
+    'A-5': { quantity: 1, type: 'OTRA_COSA' },
+  } });
+  assert.strictEqual(r.valido, false);
+  const tipos = r.problemas.map((p) => p.tipo).sort();
+  assert.deepStrictEqual(tipos, ['cantidad-cero', 'cantidad-negativa', 'cantidad-no-finita', 'cantidad-no-finita', 'tipo-invalido']);
+});
+check('receta y heredado que caen en la MISMA ruta física se detectan', () => {
+  // Dos entradas distintas del mapa no pueden apuntar al mismo nodo.
+  const r = validarPlan({ localId: LOCAL, impactMap: { 'A-1': { quantity: 1, type: 'ARTICULO' } } });
+  assert.strictEqual(r.valido, true);
+  assert.strictEqual(rutaRecurso(LOCAL, 'A-1', 'ARTICULO'), `${LOCAL}/ARTICULOS/A-1/stock`);
+  assert.notStrictEqual(rutaRecurso(LOCAL, 'A-1', 'ARTICULO'), rutaRecurso(LOCAL, 'A-1', 'MATERIA_PRIMA'));
+});
+check('rechaza IDs no validados y con barra', () => {
+  assert.strictEqual(validarPlan({ localId: LOCAL, impactMap: { 'A-9': { quantity: 1, type: 'ARTICULO' } }, idsValidos: ['A-1'] }).valido, false);
+  assert.ok(validarPlan({ localId: LOCAL, impactMap: { 'a/b': { quantity: 1, type: 'ARTICULO' } } }).problemas.some((p) => p.tipo === 'id-con-barra'));
+});
+check('un plan sano pasa y no mezcla locales', () => {
+  const r = validarPlan({ localId: LOCAL, impactMap: IMPACTO });
+  assert.strictEqual(r.valido, true);
+  assert.ok(r.rutas.every((x) => x.startsWith(`${LOCAL}/`)));
+});
+
+console.log('\nAplicación e idempotencia por recurso:');
+check('descuenta base, opcional y materia prima', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(1));
   assert.strictEqual(stock(db, 'A-0007'), 9);
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
-  assert.strictEqual(db.leer(`${LOCAL}/MATERIA_PRIMA/M-3/stock`), 99.5);
+  assert.strictEqual(mp(db), 99.5);
 });
-check('la marca queda completed CON el ledger del impacto', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(1));
-  const m = marca(db, refMostrador(1));
-  assert.strictEqual(m.status, 'completed');
-  assert.strictEqual(m.impacto.length, 3);
-  assert.ok(m.appliedAt > 0);
+check('cada recurso registra el referenceId que se le aplicó', () => {
+  const db = new Db(base());
+  const { impactHash } = aplicar(db, refMostrador(1));
+  const ops = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
+  assert.strictEqual(ops['MOSTRADOR_1'].amount, 2);
+  assert.strictEqual(ops['MOSTRADOR_1'].impactHash, impactHash);
 });
-check('el movimiento se registra en la MISMA escritura', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(1));
-  const mov = db.leer(`${LOCAL}/TRANSACCIONES_STOCK/mov-MOSTRADOR_1-1`);
-  assert.strictEqual(mov.referenceId, 'MOSTRADOR_1');
-  assert.strictEqual(mov.detalles.length, 3);
-});
-check('segunda ejecución con el mismo referenceId NO descuenta', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(1));
-  const r = procesar(db, refMostrador(1));
-  assert.strictEqual(r.aplicado, false);
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'no puede bajar a 16');
-});
-check('Desktop y Tablet a la vez → un solo descuento', () => {
-  const db = new DbMemoria(datosIniciales());
-  const ahora = Date.now();
-  const a = procesar(db, refMostrador(7), IMPACTO, { ahora });
-  const b = procesar(db, refMostrador(7), IMPACTO, { ahora });
-  assert.strictEqual(a.aplicado, true);
-  assert.strictEqual(b.aplicado, false);
+check('reintento completo NO vuelve a descontar', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(1));
+  const r = aplicar(db, refMostrador(1));
+  assert.ok(r.resultados.every((x) => x.resultado === 'ya-aplicado'));
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
 });
-check('el mismo artículo en dos unidades produce UNA ruta con el total agregado', () => {
-  // El impacto llega ya agregado por articleId (así lo arma resolveStockImpact).
-  // Dos unidades con Rocklets no deben generar dos escrituras: una sola de -2.
-  const { payload, rutas, totalItems } = construirPayloadAtomico({
-    localId: LOCAL, referenceId: 'MOSTRADOR_X', increment, movimientoId: 'm',
-    impactMap: { 'A-ROCKLETS': { quantity: 2, type: 'ARTICULO' } },
-  });
-  const rutasStock = rutas.filter((r) => r.includes('/stock'));
-  assert.strictEqual(rutasStock.length, 1, `esperaba una sola ruta de stock: ${rutasStock}`);
-  assert.strictEqual(totalItems, 1);
-  const db = new DbMemoria(datosIniciales());
-  db.update(payload);
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'nunca 19 ni dos movimientos');
-});
-check('un impacto de cantidad 0 no genera ruta de stock', () => {
-  const { rutas, totalItems } = construirPayloadAtomico({
-    localId: LOCAL, referenceId: 'MOSTRADOR_Y', increment, movimientoId: 'm',
-    impactMap: { 'A-ROCKLETS': { quantity: 0, type: 'ARTICULO' } },
-  });
-  assert.strictEqual(totalItems, 0);
-  assert.strictEqual(rutas.filter((r) => r.includes('/stock')).length, 0);
-});
-check('sin referenceId no se construye nada (no habría idempotencia)', () => {
-  assert.throws(() => construirPayloadAtomico({ localId: LOCAL, impactMap: IMPACTO, increment }), /referenceId/);
+check('mismo referenceId con OTRO impacto se rechaza, no se procesa', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(1));
+  const otro = { 'A-ROCKLETS': { quantity: 5, type: 'ARTICULO' } };
+  const r = aplicar(db, refMostrador(1), otro);
+  assert.strictEqual(r.resultados[0].resultado, 'conflicto-de-hash');
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'no se aplicó el impacto distinto');
 });
 
-console.log('\nFallos simulados en cada etapa:');
-check('caída ANTES de escribir → ningún artículo descontado', () => {
-  const db = new DbMemoria(datosIniciales());
-  db.romperEn('antes-de-escribir');
-  assert.throws(() => procesar(db, refMostrador(2)), /CAIDA/);
-  assert.strictEqual(stock(db, 'A-0007'), 10);
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20);
-  assert.strictEqual(marca(db, refMostrador(2)).status, 'processing', 'queda la reserva huérfana');
+console.log('\nOperación PARCIAL y reanudación:');
+check('corte tras el primer recurso: el resto queda sin aplicar', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(2), IMPACTO, { hasta: 1 });
+  assert.strictEqual(stock(db, 'A-0007'), 9, 'el primero sí se aplicó');
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20, 'el segundo no');
+  assert.strictEqual(mp(db), 100);
 });
-check('caída DURANTE la escritura → tampoco se aplica nada (todo o nada)', () => {
-  const db = new DbMemoria(datosIniciales());
-  db.romperEn('durante-la-escritura');
-  assert.throws(() => procesar(db, refMostrador(3)), /CAIDA/);
-  assert.strictEqual(stock(db, 'A-0007'), 10, 'el base NO puede quedar descontado');
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20, 'el opcional NO puede quedar descontado');
+check('reanudar completa SOLO lo que faltaba', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(2), IMPACTO, { hasta: 1 });
+  const r = aplicar(db, refMostrador(2));
+  assert.strictEqual(r.resultados[0].resultado, 'ya-aplicado', 'el primero no se toca');
+  assert.strictEqual(r.resultados[1].resultado, 'aplicado');
+  assert.strictEqual(stock(db, 'A-0007'), 9, 'nunca 8');
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
+  assert.strictEqual(mp(db), 99.5);
 });
-check('reintento tras la caída descuenta UNA sola vez', () => {
-  const db = new DbMemoria(datosIniciales());
-  db.romperEn('durante-la-escritura');
-  const ahora = Date.now();
-  assert.throws(() => procesar(db, refMostrador(4), IMPACTO, { ahora }), /CAIDA/);
-  db.romperEn(null);
-  const r = procesar(db, refMostrador(4), IMPACTO, { ahora: ahora + RESERVA_VENCIDA_MS + 1, intento: 2 });
-  assert.strictEqual(r.aplicado, true);
-  assert.strictEqual(stock(db, 'A-0007'), 9, 'exactamente un descuento');
+check('la operación parcial es DETECTABLE por recurso', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(2), IMPACTO, { hasta: 1 });
+  const aplicado = db.leer(`${LOCAL}/ARTICULOS/A-0007/stock/appliedOps`);
+  const faltante = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
+  assert.ok(aplicado && aplicado['MOSTRADOR_2']);
+  assert.ok(!faltante || !faltante['MOSTRADOR_2']);
+});
+
+console.log('\nLA CARRERA: A pausado → vence el lease → B recupera → A vuelve:');
+check('el pedido se descuenta UNA SOLA VEZ', () => {
+  const db = new Db(base());
+  const ref = refMostrador(42);
+  const t0 = Date.now();
+  const rutaMarca = `${LOCAL}/PROCESSED_STOCK_IDS/${ref}`;
+
+  // 1. A adquiere la reserva.
+  assert.strictEqual(decidirIntento(db.leer(rutaMarca), t0).intentar, true);
+  db.escribir(rutaMarca, { status: 'processing', ownerId: 'A', timestamp: t0 });
+
+  // 2. A se pausa aquí, ANTES de aplicar nada.
+
+  // 3. Vence el lease. 4. B lo recupera.
+  const t1 = t0 + RESERVA_VENCIDA_MS + 1;
+  const d = decidirIntento(db.leer(rutaMarca), t1);
+  assert.strictEqual(d.intentar, true);
+  assert.strictEqual(d.motivo, 'reserva-huerfana');
+  db.escribir(rutaMarca, { status: 'processing', ownerId: 'B', timestamp: t1 });
+
+  // 5 y 6. LOS DOS confirman: B primero, y después A despierta y aplica.
+  const rb = aplicar(db, ref, IMPACTO, { ahora: t1 });
+  const ra = aplicar(db, ref, IMPACTO, { ahora: t1 + 1 });   // A, con su lease vencido
+
+  // 7. Un solo descuento.
+  assert.strictEqual(stock(db, 'A-0007'), 9, 'nunca 8');
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18, 'nunca 16');
+  assert.strictEqual(mp(db), 99.5, 'nunca 99');
+  assert.ok(rb.resultados.every((x) => x.resultado === 'aplicado'));
+  assert.ok(ra.resultados.every((x) => x.resultado === 'ya-aplicado'), 'A no puede aplicar de nuevo');
+});
+check('da igual el orden: si A confirma primero, B tampoco duplica', () => {
+  const db = new Db(base());
+  const ref = refMostrador(43);
+  aplicar(db, ref);                       // A
+  const rb = aplicar(db, ref);            // B, dueño "vigente"
+  assert.ok(rb.resultados.every((x) => x.resultado === 'ya-aplicado'));
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
 });
-check('reintentos repetidos tras completar no vuelven a descontar', () => {
-  const db = new DbMemoria(datosIniciales());
-  const ahora = Date.now();
-  procesar(db, refMostrador(5), IMPACTO, { ahora });
-  for (let i = 0; i < 5; i += 1) procesar(db, refMostrador(5), IMPACTO, { ahora: ahora + RESERVA_VENCIDA_MS * (i + 2) });
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
-});
-check('nunca existe un estado "parcialmente aplicado"', () => {
-  for (const momento of ['antes-de-escribir', 'durante-la-escritura']) {
-    const db = new DbMemoria(datosIniciales());
-    db.romperEn(momento);
-    try { procesar(db, refMostrador(9)); } catch { /* esperado */ }
-    const m = marca(db, refMostrador(9));
-    const algoAplicado = stock(db, 'A-0007') !== 10 || stock(db, 'A-ROCKLETS') !== 20;
-    const completada = m && m.status === 'completed';
-    assert.strictEqual(algoAplicado, !!completada, `invariante roto en ${momento}`);
+check('intercalados recurso por recurso tampoco duplican', () => {
+  const db = new Db(base());
+  const ref = refMostrador(44);
+  const hash = calcularImpactHash(IMPACTO);
+  const canonico = construirImpactoCanonico(IMPACTO);
+  // A y B avanzan alternadamente sobre los mismos recursos.
+  for (const d of canonico) {
+    const ruta = rutaRecurso(LOCAL, d.id, d.tipo);
+    const paso = (quien) => db.runTransaction(ruta, (n) =>
+      aplicarEnRecurso(n, { referenceId: ref, cantidad: d.cantidad, impactHash: hash, tipo: d.tipo, ahora: Date.now() + (quien === 'B' ? 1 : 0) }));
+    paso('A'); paso('B'); paso('A');
   }
+  assert.strictEqual(stock(db, 'A-0007'), 9);
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
+  assert.strictEqual(mp(db), 99.5);
+});
+check('la reserva ya NO es el mecanismo de corrección (se puede saltear)', () => {
+  // Aun ignorando por completo el lock, no hay doble descuento.
+  const db = new Db(base());
+  for (let i = 0; i < 4; i += 1) aplicar(db, refMostrador(45));
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 18);
 });
 
 console.log('\nAislamiento por local:');
 check('dos locales con el mismo articleId no se mezclan', () => {
-  const db = new DbMemoria({
-    LOCAL_A: { ARTICULOS: { 'A-ROCKLETS': { stock: { propio: 20 } } } },
-    LOCAL_B: { ARTICULOS: { 'A-ROCKLETS': { stock: { propio: 50 } } } },
+  const db = new Db({
+    LOCAL_A: { ARTICULOS: { 'A-R': { stock: { propio: 20 } } } },
+    LOCAL_B: { ARTICULOS: { 'A-R': { stock: { propio: 50 } } } },
   });
-  const { payload } = construirPayloadAtomico({
-    localId: 'LOCAL_A', referenceId: 'MOSTRADOR_1', increment, movimientoId: 'm1',
-    impactMap: { 'A-ROCKLETS': { quantity: 2, type: 'ARTICULO' } },
-  });
-  db.update(payload);
-  assert.strictEqual(db.leer('LOCAL_A/ARTICULOS/A-ROCKLETS/stock/propio'), 18);
-  assert.strictEqual(db.leer('LOCAL_B/ARTICULOS/A-ROCKLETS/stock/propio'), 50, 'el otro local no se toca');
+  db.runTransaction(rutaRecurso('LOCAL_A', 'A-R', 'ARTICULO'), (n) =>
+    aplicarEnRecurso(n, { referenceId: 'MOSTRADOR_1', cantidad: 2, impactHash: 'h', tipo: 'ARTICULO' }));
+  assert.strictEqual(db.leer('LOCAL_A/ARTICULOS/A-R/stock/propio'), 18);
+  assert.strictEqual(db.leer('LOCAL_B/ARTICULOS/A-R/stock/propio'), 50);
+  assert.ok(!db.leer('LOCAL_B/ARTICULOS/A-R/stock/appliedOps'));
+});
+
+console.log('\nValores de stock corruptos o históricos:');
+check('distingue ausente, número, string histórico y corrupto', () => {
+  assert.deepStrictEqual(leerStockActual({}, 'ARTICULO'), { valor: 0, estado: 'ausente' });
+  assert.deepStrictEqual(leerStockActual({ propio: 5 }, 'ARTICULO'), { valor: 5, estado: 'ok' });
+  assert.deepStrictEqual(leerStockActual({ propio: '7,5' }, 'ARTICULO'), { valor: 7.5, estado: 'string-historico' });
+  assert.deepStrictEqual(leerStockActual({ propio: 'abc' }, 'ARTICULO'), { valor: 0, estado: 'corrupto' });
+  assert.deepStrictEqual(leerStockActual({ propio: {} }, 'ARTICULO'), { valor: 0, estado: 'corrupto' });
+});
+check('un campo corrupto avisa y NO se convierte en un número en silencio', () => {
+  const r = aplicarEnRecurso({ propio: 'abc' }, { referenceId: 'R', cantidad: 2, impactHash: 'h', tipo: 'ARTICULO' });
+  assert.strictEqual(r.resultado, 'aplicado');
+  assert.ok(r.aviso && r.aviso.tipo === 'stock-no-numerico');
+  assert.strictEqual(r.aviso.estado, 'corrupto');
+});
+check('un string histórico avisa pero conserva el valor', () => {
+  const r = aplicarEnRecurso({ propio: '20' }, { referenceId: 'R', cantidad: 2, impactHash: 'h', tipo: 'ARTICULO' });
+  assert.strictEqual(r.stockNuevo, 18);
+  assert.strictEqual(r.aviso.estado, 'string-historico');
+});
+check('stock válido insuficiente se permite negativo (política vigente) y sin aviso de corrupción', () => {
+  const r = aplicarEnRecurso({ propio: 1 }, { referenceId: 'R', cantidad: 5, impactHash: 'h', tipo: 'ARTICULO' });
+  assert.strictEqual(r.stockNuevo, -4);
+  assert.strictEqual(r.aviso, null, 'faltante no es lo mismo que corrupto');
+});
+check('consumo decimal', () => {
+  const r = aplicarEnRecurso({ stock: 100 }, { referenceId: 'R', cantidad: 0.25, impactHash: 'h', tipo: 'MATERIA_PRIMA' });
+  assert.strictEqual(r.stockNuevo, 99.75);
 });
 
 console.log('\nReversión de mostrador:');
-check('repone exactamente lo del ledger, con su propio referenceId', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(11));
-  const { payload, motivo } = construirPayloadReversion({
-    localId: LOCAL, referenceIdOriginal: refMostrador(11),
-    marcaOriginal: marca(db, refMostrador(11)),
-    referenceIdReversion: refReversionMostrador(11),
-    movimientoId: 'mov-rev-11', increment,
-  });
-  assert.strictEqual(motivo, 'ok');
-  db.update(payload);
+const revertir = (db, saleId, ahora = Date.now()) => {
+  const canonico = construirImpactoCanonico(IMPACTO);
+  return canonico.map((d) => db.runTransaction(rutaRecurso(LOCAL, d.id, d.tipo), (n) =>
+    revertirEnRecurso(n, {
+      referenceIdOriginal: refMostrador(saleId),
+      referenceIdReversion: refReversionMostrador(saleId),
+      tipo: d.tipo, ahora,
+    })).resultado);
+};
+check('repone base, opcional y materia prima', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(60));
+  revertir(db, 60);
   assert.strictEqual(stock(db, 'A-0007'), 10);
   assert.strictEqual(stock(db, 'A-ROCKLETS'), 20);
-  assert.strictEqual(db.leer(`${LOCAL}/MATERIA_PRIMA/M-3/stock`), 100);
+  assert.strictEqual(mp(db), 100);
+});
+check('segunda cancelación devuelve already-reversed y NO repone dos veces', () => {
+  const db = new Db(base());
+  aplicar(db, refMostrador(61));
+  revertir(db, 61);
+  const r2 = revertir(db, 61);
+  assert.ok(r2.every((x) => x.resultado === 'ya-revertido'));
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20, 'nunca 22');
+});
+check('con el nodo en null NO aborta: deja que RTDB reejecute con datos reales', () => {
+  // RTDB llama al reductor la primera vez con el cache en null. Abortar ahí
+  // (devolver undefined) impedía la reejecución y la reversión no reponía nada:
+  // bug real detectado contra el emulador (daba 18 en vez de 20).
+  const r = revertirEnRecurso(null, { referenceIdOriginal: 'MOSTRADOR_1', referenceIdReversion: 'REVERSAL_MOSTRADOR_1', tipo: 'ARTICULO' });
+  assert.notStrictEqual(r.nodo, undefined, 'no debe abortar la transacción');
+  assert.strictEqual(r.resultado, 'esperando-datos-del-servidor');
+  assert.deepStrictEqual(r.nodo, {}, 'un objeto vacío equivale a null en RTDB: no deja basura');
+});
+check('no se puede revertir lo que nunca se aplicó en ese recurso', () => {
+  const db = new Db(base());
+  const r = revertir(db, 62);
+  assert.ok(r.every((x) => x.resultado === 'original-no-aplicada'));
+  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20);
 });
 check('la marca original NO se borra ni se reutiliza', () => {
-  const db = new DbMemoria(datosIniciales());
-  procesar(db, refMostrador(12));
-  const { payload } = construirPayloadReversion({
-    localId: LOCAL, referenceIdOriginal: refMostrador(12),
-    marcaOriginal: marca(db, refMostrador(12)),
-    referenceIdReversion: refReversionMostrador(12), movimientoId: 'mv', increment,
-  });
-  db.update(payload);
-  assert.strictEqual(marca(db, refMostrador(12)).status, 'completed');
-  assert.strictEqual(marca(db, refReversionMostrador(12)).status, 'completed');
+  const db = new Db(base());
+  aplicar(db, refMostrador(63));
+  revertir(db, 63);
+  const ops = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
+  assert.ok(ops['MOSTRADOR_63'], 'la original sigue registrada');
+  assert.ok(ops['REVERSAL_MOSTRADOR_63'], 'la reversión tiene su propia entrada');
 });
-check('segunda cancelación NO repone dos veces', () => {
-  const db = new DbMemoria(datosIniciales());
-  const ahora = Date.now();
-  procesar(db, refMostrador(13));
-  const rutaRev = `${LOCAL}/PROCESSED_STOCK_IDS/${refReversionMostrador(13)}`;
-  for (let i = 0; i < 2; i += 1) {
-    if (!db.reservar(rutaRev, ahora + i)) continue;
-    const { payload } = construirPayloadReversion({
-      localId: LOCAL, referenceIdOriginal: refMostrador(13),
-      marcaOriginal: marca(db, refMostrador(13)),
-      referenceIdReversion: refReversionMostrador(13), movimientoId: `mv${i}`, increment,
-    });
-    db.update(payload);
-  }
-  assert.strictEqual(stock(db, 'A-ROCKLETS'), 20, 'nunca 22');
-  assert.strictEqual(stock(db, 'A-0007'), 10, 'nunca 11');
-});
-check('no se puede revertir una operación que nunca se completó', () => {
-  const r = construirPayloadReversion({
-    localId: LOCAL, referenceIdOriginal: 'X', marcaOriginal: { status: 'processing' },
-    referenceIdReversion: 'REVERSAL_X', movimientoId: 'm', increment,
+
+console.log('\nMarca final:');
+check('guarda hash, ledger y movimiento determinístico', () => {
+  const m = construirMarcaFinal({
+    referenceId: refMostrador(1), impactHash: calcularImpactHash(IMPACTO),
+    impacto: construirImpactoCanonico(IMPACTO), source: 'Venta Mostrador', ownerId: 'A',
   });
-  assert.strictEqual(r.payload, null);
-  assert.strictEqual(r.motivo, 'original-no-completada');
+  assert.strictEqual(m.status, 'completed');
+  assert.strictEqual(m.movementId, 'MOV_MOSTRADOR_1');
+  assert.strictEqual(m.impacto.length, 3);
 });
-check('no se puede revertir sin ledger de impacto', () => {
-  const r = construirPayloadReversion({
-    localId: LOCAL, referenceIdOriginal: 'X', marcaOriginal: { status: 'completed' },
-    referenceIdReversion: 'REVERSAL_X', movimientoId: 'm', increment,
-  });
-  assert.strictEqual(r.payload, null);
-  assert.strictEqual(r.motivo, 'sin-impacto-registrado');
+check('una operación incompleta se marca partial, no completed', () => {
+  const m = construirMarcaFinal({ referenceId: 'X', impactHash: 'h', impacto: [], parcial: true });
+  assert.strictEqual(m.status, 'partial');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
