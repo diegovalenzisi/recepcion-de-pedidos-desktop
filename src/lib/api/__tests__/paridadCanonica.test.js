@@ -29,8 +29,10 @@ const otrosRepos = REPOS
 const NUCLEO = [
   'src/lib/api/optionalsPricing.js',
   'src/lib/api/unidadesPedido.js',
+  'src/lib/api/idsCanonicos.js',                  // identidad de departamentos/artículos
   'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato
   'src/lib/api/__tests__/fixturesComunes.test.js', // ejecutor del contrato
+  'src/lib/api/__tests__/idsCanonicos.test.js',
 ];
 
 // COMPARTIDOS ENTRE RECEPTORES: solo aplican a Desktop y Tablet (DLV no imprime
@@ -39,7 +41,9 @@ const NUCLEO = [
 const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
+  'src/lib/api/stockAtomico.js',
   'src/lib/api/__tests__/ingestaConectada.test.js',
+  'src/lib/api/__tests__/stockAtomico.test.js',
   'src/lib/print/orderPrintDetail.js',
   'src/lib/print/counterTicketHtml.js',
 ];
