@@ -5,6 +5,13 @@ import { Loader2 } from 'lucide-react';
 import { fetchData } from '@/lib/api/firebaseApi';
 import { saveOrder, updateOrder } from '@/lib/api/ordersApi';
 import { calcularTotalPedido, detectarOpcionalesConPrecioInvalido } from '@/lib/api/optionalsPricing';
+import {
+  esLineaConfigurable,
+  quitarUnidad,
+  contarUnidadesConfiguradas,
+  baseParaUnidadNueva,
+  agregarUnidadConfigurada,
+} from '@/lib/api/unidadesPedido';
 import { useToast } from '@/components/ui/use-toast';
 import OptionalSelectionModal from '@/components/attention/OptionalSelectionModal';
 import GroupProductSelectionModal from '@/components/attention/GroupProductSelectionModal';
@@ -72,22 +79,6 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     }
   }, [isOpen]);
 
-  // Cada unidad configurada con opcionales es su propia línea (quantity: 1).
-  // Renumera unidadIndice/unidadTotal por artículo para mostrar "Unidad N de M".
-  // Solo afecta la PRESENTACIÓN: no toca uniqueId ni las selecciones existentes.
-  const renumerarUnidades = useCallback((items) => {
-    const totales = {};
-    items.forEach((it) => {
-      if (it.selectedOptionals) totales[it.id] = (totales[it.id] || 0) + 1;
-    });
-    const vistos = {};
-    return items.map((it) => {
-      if (!it.selectedOptionals) return it;
-      vistos[it.id] = (vistos[it.id] || 0) + 1;
-      return { ...it, unidadIndice: vistos[it.id], unidadTotal: totales[it.id] };
-    });
-  }, []);
-
   const addArticleToOrder = useCallback((article) => {
     const uniqueId = (article.selectedOptionals || article.promoDetails)
       ? `${article.id}-${Date.now()}` 
@@ -106,9 +97,9 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       }
       // Las líneas configurables (con opcionales) SIEMPRE entran con quantity: 1
       // y se renumeran para mostrar "Unidad N de M".
-      return renumerarUnidades([...prevItems, { ...article, valor: priceToUse, quantity: 1, uniqueId }]);
+      return agregarUnidadConfigurada(prevItems, { ...article, valor: priceToUse }, uniqueId);
     });
-  }, [renumerarUnidades]);
+  }, []);
 
   const handlePromoUnavailable = useCallback(() => {
     toast({
@@ -271,22 +262,21 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     if (!target) return;
 
     // Producto CON opcionales: no se comparte una selección entre unidades.
-    if (target.selectedOptionals) {
+    if (esLineaConfigurable(target)) {
       if (change > 0) {
         // Aumentar = configurar una unidad NUEVA. No se copia la unidad 1 ni se
         // agrega nada hasta confirmar (confirmación incremental segura: si el
         // usuario cancela, el carrito queda como estaba).
         const base = allArticles.find((a) => a.id === target.id) || target;
-        const yaConfiguradas = orderItems.filter((i) => i.id === target.id && i.selectedOptionals).length;
+        const yaConfiguradas = contarUnidadesConfiguradas(orderItems, target.id);
         setPendingUnitInfo({ unidadIndice: yaConfiguradas + 1, unidadTotal: yaConfiguradas + 1 });
-        const { selectedOptionals, uniqueId: _u, quantity: _q, unidadIndice: _ui, unidadTotal: _ut, ...limpio } = base;
-        setArticleForSelection(limpio);
+        setArticleForSelection(baseParaUnidadNueva(base));
         setIsOptionalModalOpen(true);
         return;
       }
       // Disminuir = quitar ESTA línea concreta (no "la última"), conservando
       // intactas las selecciones de las demás unidades.
-      setOrderItems((prev) => renumerarUnidades(prev.filter((i) => i.uniqueId !== uniqueId)));
+      setOrderItems((prev) => quitarUnidad(prev, uniqueId));
       return;
     }
 
@@ -302,7 +292,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         })
         .filter(Boolean)
     );
-  }, [orderItems, allArticles, renumerarUnidades]);
+  }, [orderItems, allArticles]);
 
   const handleUpdatePrice = useCallback((uniqueId, newPrice) => {
     setOrderItems(prevItems => 
