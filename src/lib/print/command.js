@@ -36,7 +36,13 @@ export const printCommand = async (order, optionalGroups = []) => {
         subItemsHtml = generateOptionalsHtml(item.selectedOptionals, optionalGroups);
     }
     
-    const itemName = item.isPromo ? `PROMO ${item.nombre.toUpperCase()}` : item.nombre;
+    // La COMANDA no lleva importes (diseño actual del sistema, ver auditoría en
+    // orderPrintDetail.js). Sí debe identificar a qué unidad pertenece cada
+    // configuración cuando el pedido tiene varias unidades del mismo artículo.
+    const etiquetaUnidad = (Number(item.unidadTotal) > 1 && Number.isFinite(Number(item.unidadIndice)))
+      ? ` — UNIDAD ${item.unidadIndice} DE ${item.unidadTotal}`
+      : '';
+    const itemName = (item.isPromo ? `PROMO ${item.nombre.toUpperCase()}` : item.nombre) + etiquetaUnidad;
 
     itemsHtml += `
       <tr>

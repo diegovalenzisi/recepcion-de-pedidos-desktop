@@ -1,0 +1,196 @@
+// ---------------------------------------------------------------------------
+// Detalle de impresión de un pedido — FUNCIÓN PURA basada EXCLUSIVAMENTE en el
+// snapshot guardado. No consulta catálogo, ni precios actuales, ni stock, ni
+// configuración de grupos, ni Firebase. No escribe nada. Por eso la reimpresión
+// es una operación de lectura pura: llamar a estas funciones no puede producir
+// efectos secundarios.
+//
+// AUDITORÍA DE SALIDAS (condición 9) — estado actual del sistema:
+//   · lib/print/command.js      → COMANDA DE COCINA: NO lleva importes (diseño
+//     actual del sistema). Se le agrega la UNIDAD y los opcionales, sin precios.
+//   · lib/print/counterTicket.js→ ticket de mostrador: hoy no lleva importes ni
+//     opcionales (ticket mínimo con QR).
+//   · lib/print/safeTicket.js   → caja fuerte, no aplica.
+// El detalle CON importes se genera acá (conImportes: true) para el resumen
+// económico; no se inyectan precios en la comanda para no romper su diseño.
+// ---------------------------------------------------------------------------
+
+import { normalizarImporte } from '../api/optionalsPricing.js';
+
+const fmt = (n) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n);
+
+/** Nombre seguro: nunca undefined / null / [object Object]. */
+function nombreSeguro(x) {
+  if (typeof x === 'string') return x;
+  if (x && typeof x === 'object' && typeof x.nombre === 'string') return x.nombre;
+  if (x && typeof x === 'object' && typeof x.name === 'string') return x.name;
+  return '';
+}
+
+/**
+ * Importe a imprimir de un opcional, SOLO desde el snapshot.
+ * Prioridad: `total` válido → `precioUnitario × cantidad` → nada.
+ * NUNCA consulta el catálogo actual. Devuelve null si no hay importe imprimible
+ * (opcional gratuito o histórico sin precio) para no imprimir +$0 ni NaN.
+ */
+export function importeOpcionalImprimible(op) {
+  if (!op || typeof op !== 'object') return null;
+
+  const rTotal = normalizarImporte(op.total);
+  if (rTotal.valido && !rTotal.ausente && rTotal.valor > 0) return rTotal.valor;
+
+  const rUnit = normalizarImporte(op.precioUnitario !== undefined ? op.precioUnitario : op.precio);
+  if (rUnit.valido && !rUnit.ausente && rUnit.valor > 0) {
+    const cant = Number(op.cantidad ?? op.quantity ?? 1) || 1;
+    return rUnit.valor * cant;
+  }
+  return null; // gratuito, histórico sin precio, o inválido → sin importe
+}
+
+/** Lista plana y ordenada de los opcionales de una línea (respeta numeroOrden). */
+export function opcionalesOrdenados(selectedOptionals) {
+  if (!selectedOptionals || typeof selectedOptionals !== 'object') return [];
+  const grupos = [];
+  for (const gid of Object.keys(selectedOptionals)) {
+    const lista = selectedOptionals[gid];
+    if (!Array.isArray(lista) || lista.length === 0) continue;
+    const ops = lista
+      .filter((o) => o && nombreSeguro(o))
+      .slice()
+      .sort((a, b) => {
+        const na = Number(a.numeroOrden); const nb = Number(b.numeroOrden);
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;   // orden explícito
+        return 0;                                                         // si no, orden de selección
+      });
+    if (ops.length === 0) continue;
+    grupos.push({
+      grupoId: gid,
+      grupoNombre: nombreSeguro(ops[0].grupoNombre || ops[0].groupName) || '',
+      opcionales: ops,
+    });
+  }
+  return grupos;
+}
+
+/**
+ * Líneas de texto de UNA línea del pedido (una unidad).
+ * @param {object} item  línea persistida (con snapshot si es nueva)
+ * @param {{conImportes?:boolean}} opts
+ * @returns {string[]}
+ */
+export function lineasDeItem(item, { conImportes = true } = {}) {
+  if (!item || typeof item !== 'object') return [];
+  const out = [];
+
+  const nombre = (nombreSeguro(item.nombre) || 'ARTÍCULO').toUpperCase();
+  const esPromo = !!item.isPromo;
+  const titulo = esPromo ? `PROMO ${nombre}` : nombre;
+
+  // Encabezado con unidad SOLO cuando la línea forma parte de varias unidades.
+  const ui = Number(item.unidadIndice);
+  const ut = Number(item.unidadTotal);
+  out.push(Number.isFinite(ui) && Number.isFinite(ut) && ut > 1
+    ? `${titulo} — UNIDAD ${ui} DE ${ut}`
+    : titulo);
+
+  if (conImportes) {
+    const rBase = normalizarImporte(item.precioBaseUnitario !== undefined ? item.precioBaseUnitario : item.valor);
+    if (rBase.valido && !rBase.ausente) out.push(`Precio base|${fmt(rBase.valor)}`);
+  }
+
+  // Opcionales del propio ítem (agrupados, con nombre de grupo si existe).
+  for (const grupo of opcionalesOrdenados(item.selectedOptionals)) {
+    const etiqueta = grupo.grupoNombre ? `${grupo.grupoNombre}: ` : '';
+    const gratuitos = [];
+    for (const op of grupo.opcionales) {
+      const imp = conImportes ? importeOpcionalImprimible(op) : null;
+      const cant = Number(op.cantidad ?? op.quantity ?? 1) || 1;
+      const nom = nombreSeguro(op);
+      if (imp !== null && imp > 0) {
+        // Pago: se imprime con importe (ya multiplicado; nunca se vuelve a multiplicar).
+        out.push(`+ ${nom}${cant > 1 ? ` x${cant}` : ''}|${fmt(imp)}`);
+      } else {
+        // Gratuito / histórico sin precio: nombre solo, jamás "+$0".
+        gratuitos.push(`${nom}${cant > 1 ? ` x${cant}` : ''}`);
+      }
+    }
+    if (gratuitos.length > 0) out.push(`${etiqueta}${gratuitos.join(' / ')}`);
+  }
+
+  // Hijos de promoción: cada uno con SUS propios opcionales (nunca mezclados).
+  const hijos = item.promoItems || item.promoDetails;
+  if (Array.isArray(hijos)) {
+    hijos.forEach((hijo, idx) => {
+      out.push(`${(nombreSeguro(hijo) || `ITEM ${idx + 1}`).toUpperCase()}`);
+      for (const grupo of opcionalesOrdenados(hijo.selectedOptionals)) {
+        const etiqueta = grupo.grupoNombre ? `${grupo.grupoNombre}: ` : '';
+        const gratuitos = [];
+        for (const op of grupo.opcionales) {
+          const imp = conImportes ? importeOpcionalImprimible(op) : null;
+          const nom = nombreSeguro(op);
+          if (imp !== null && imp > 0) out.push(`+ ${nom}|${fmt(imp)}`);
+          else gratuitos.push(nom);
+        }
+        if (gratuitos.length > 0) out.push(`${etiqueta}${gratuitos.join(' / ')}`);
+      }
+    });
+  }
+
+  if (conImportes) {
+    // Subtotal SOLO desde el snapshot; si no hay, se omite (histórico sin desglose).
+    const rSub = normalizarImporte(item.subtotalLinea);
+    if (rSub.valido && !rSub.ausente) out.push(`Subtotal|${fmt(rSub.valor)}`);
+  }
+
+  return out;
+}
+
+/**
+ * Detalle completo del pedido para imprimir. Solo lectura, solo snapshot.
+ * @returns {{ lineas: string[], total: number|null }}
+ */
+export function construirDetalleImpresionPedido(order, { conImportes = true } = {}) {
+  const items = Array.isArray(order && order.items) ? order.items : [];
+  const lineas = [];
+
+  items.forEach((item, i) => {
+    if (i > 0) lineas.push('');
+    lineas.push(...lineasDeItem(item, { conImportes }));
+  });
+
+  let total = null;
+  if (conImportes) {
+    // El total sale del snapshot del pedido (lo que se cobró), no del catálogo.
+    const rTotalGuardado = normalizarImporte(order && (order.payment?.total ?? order.total));
+    if (rTotalGuardado.valido && !rTotalGuardado.ausente) {
+      total = rTotalGuardado.valor;
+    } else {
+      // Sin total guardado: se suma el subtotal congelado de cada línea.
+      const suma = items.reduce((s, it) => {
+        const r = normalizarImporte(it && it.subtotalLinea);
+        return r.valido && !r.ausente ? s + r.valor : s;
+      }, 0);
+      total = suma > 0 ? suma : null;
+    }
+    if (total !== null) {
+      lineas.push('');
+      lineas.push(`TOTAL PEDIDO|${fmt(total)}`);
+    }
+  }
+
+  return { lineas, total };
+}
+
+/** Render de texto plano a dos columnas (para comparar en pruebas y depurar). */
+export function detalleATexto(lineas, ancho = 44) {
+  return lineas
+    .map((l) => {
+      const i = l.indexOf('|');
+      if (i === -1) return l;
+      const izq = l.slice(0, i);
+      const der = l.slice(i + 1);
+      const relleno = Math.max(1, ancho - izq.length - der.length);
+      return izq + ' '.repeat(relleno) + der;
+    })
+    .join('\n');
+}
