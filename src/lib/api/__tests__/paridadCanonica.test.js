@@ -44,6 +44,8 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',
+  'src/lib/api/stockLedger.js',
+  'src/lib/api/__tests__/stockLedger.test.js',
   'src/lib/api/__tests__/ingestaConectada.test.js',
   'src/lib/api/__tests__/stockAtomico.test.js',
   'src/lib/print/orderPrintDetail.js',
