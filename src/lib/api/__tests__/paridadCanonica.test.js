@@ -30,6 +30,8 @@ const NUCLEO = [
   'src/lib/api/optionalsPricing.js',
   'src/lib/api/unidadesPedido.js',
   'src/lib/api/idsCanonicos.js',                  // identidad de departamentos/artículos
+  'src/lib/api/sha256.js',                        // hashing portable del impacto
+  'src/lib/api/__tests__/sha256.test.js',
   'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato
   'src/lib/api/__tests__/fixturesComunes.test.js', // ejecutor del contrato
   'src/lib/api/__tests__/idsCanonicos.test.js',

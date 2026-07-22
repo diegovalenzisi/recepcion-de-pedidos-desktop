@@ -14,6 +14,7 @@ import {
   construirImpactoCanonico, calcularImpactHash, validarPlan, rutaRecurso,
   decidirIntento, construirMarcaFinal, movimientoIdDe,
   refMostrador, refReversionMostrador, RESERVA_VENCIDA_MS,
+  construirDocumentoImpacto, operationKey, esClaveFirebaseValida, construirEntradaOperacion, podarAppliedOps,
 } from '../stockAtomico.js';
 
 let passed = 0;
@@ -88,17 +89,90 @@ check('el orden canónico no depende del recorrido del pedido', () => {
   assert.deepStrictEqual(a, b);
   assert.deepStrictEqual(a.map((d) => d.id), ['A-0007', 'A-ROCKLETS']);
 });
-check('mismo impacto → mismo hash, en cualquier orden', () => {
+const hashDe = (impactMap, opts = {}) => calcularImpactHash(impactMap, { localId: LOCAL, operation: 'decrement', ...opts });
+
+check('el hash es SHA-256, no un entero de 32 bits', () => {
+  const h = hashDe({ 'A-1': { quantity: 1, type: 'ARTICULO' } });
+  assert.match(h, /^sha256:[0-9a-f]{64}$/);
+});
+check('mismo impacto en distinto orden → MISMO SHA-256', () => {
   assert.strictEqual(
-    calcularImpactHash({ 'A-1': { quantity: 1, type: 'ARTICULO' }, 'A-2': { quantity: 2, type: 'ARTICULO' } }),
-    calcularImpactHash({ 'A-2': { quantity: 2, type: 'ARTICULO' }, 'A-1': { quantity: 1, type: 'ARTICULO' } }),
+    hashDe({ 'A-1': { quantity: 1, type: 'ARTICULO' }, 'A-2': { quantity: 2, type: 'ARTICULO' } }),
+    hashDe({ 'A-2': { quantity: 2, type: 'ARTICULO' }, 'A-1': { quantity: 1, type: 'ARTICULO' } }),
   );
 });
-check('cambiar una cantidad cambia el hash', () => {
+check('cambio mínimo de cantidad → hash diferente', () => {
   assert.notStrictEqual(
-    calcularImpactHash({ 'A-1': { quantity: 1, type: 'ARTICULO' } }),
-    calcularImpactHash({ 'A-1': { quantity: 2, type: 'ARTICULO' } }),
+    hashDe({ 'A-1': { quantity: 1, type: 'ARTICULO' } }),
+    hashDe({ 'A-1': { quantity: 1.000001, type: 'ARTICULO' } }),
   );
+});
+check('local diferente → hash diferente', () => {
+  const impacto = { 'A-1': { quantity: 1, type: 'ARTICULO' } };
+  assert.notStrictEqual(hashDe(impacto, { localId: 'LOCAL_A' }), hashDe(impacto, { localId: 'LOCAL_B' }));
+});
+check('decremento y reversión → hashes diferentes', () => {
+  const impacto = { 'A-1': { quantity: 1, type: 'ARTICULO' } };
+  assert.notStrictEqual(hashDe(impacto, { operation: 'decrement' }), hashDe(impacto, { operation: 'increment' }));
+});
+check('mismo id en ARTICULO y en MATERIA_PRIMA → hashes diferentes (ruta física distinta)', () => {
+  assert.notStrictEqual(
+    hashDe({ 'X-1': { quantity: 1, type: 'ARTICULO' } }),
+    hashDe({ 'X-1': { quantity: 1, type: 'MATERIA_PRIMA' } }),
+  );
+});
+check('cantidades decimales equivalentes se normalizan igual', () => {
+  assert.strictEqual(
+    hashDe({ 'A-1': { quantity: 0.5, type: 'ARTICULO' } }),
+    hashDe({ 'A-1': { quantity: 0.50, type: 'ARTICULO' } }),
+  );
+  assert.strictEqual(
+    hashDe({ 'A-1': { quantity: 0.1 + 0.2, type: 'ARTICULO' } }),
+    hashDe({ 'A-1': { quantity: 0.3, type: 'ARTICULO' } }),
+  );
+});
+check('el documento canónico lleva versión, local, operación y ruta física', () => {
+  const doc = construirDocumentoImpacto({ localId: LOCAL, impactMap: { 'A-1': { quantity: 1, type: 'ARTICULO' } } });
+  assert.strictEqual(doc.version, 1);
+  assert.strictEqual(doc.localId, LOCAL);
+  assert.strictEqual(doc.operation, 'decrement');
+  assert.strictEqual(doc.impacts[0].stockPath, 'ARTICULOS/A-1/stock/propio');
+  assert.strictEqual(doc.impacts[0].amount, '1');
+  assert.strictEqual(doc.impacts[0].sign, '-');
+});
+check('el hash no depende del locale ni de formato monetario', () => {
+  const doc = construirDocumentoImpacto({ localId: LOCAL, impactMap: { 'A-1': { quantity: 1234.5, type: 'ARTICULO' } } });
+  assert.strictEqual(doc.impacts[0].amount, '1234.5');
+  assert.ok(!doc.impacts[0].amount.includes(','));
+  assert.ok(!doc.impacts[0].amount.includes('$'));
+});
+
+console.log('\nClave determinística y segura para Firebase:');
+check('un referenceId con caracteres prohibidos produce una clave válida', () => {
+  for (const ref of ['DELIVERY_1', 'a.b#c$d[e]f/g', 'PEDIDO 12', 'x'.repeat(300)]) {
+    const k = operationKey('stock', ref);
+    assert.ok(esClaveFirebaseValida(k), `clave inválida para "${ref}": ${k}`);
+  }
+});
+check('el mismo referenceId produce SIEMPRE la misma clave', () => {
+  assert.strictEqual(operationKey('stock', 'DELIVERY_1'), operationKey('stock', 'DELIVERY_1'));
+});
+check('distinto tipo o distinto referenceId → clave distinta', () => {
+  assert.notStrictEqual(operationKey('stock', 'DELIVERY_1'), operationKey('reversal', 'DELIVERY_1'));
+  assert.notStrictEqual(operationKey('stock', 'DELIVERY_1'), operationKey('stock', 'DELIVERY_2'));
+});
+check('el referenceId original NO se pierde: va dentro del valor', () => {
+  const e = construirEntradaOperacion({ tipo: 'stock', referenceId: 'a.b#c/d', impactHash: 'sha256:x', amount: 2 });
+  assert.strictEqual(e.referenceId, 'a.b#c/d');
+  assert.strictEqual(e.tipo, 'stock');
+  assert.strictEqual(e.amount, 2);
+  assert.ok(esClaveFirebaseValida(e.operationKey));
+});
+check('esClaveFirebaseValida rechaza lo que Firebase rechaza', () => {
+  for (const mala of ['a.b', 'a#b', 'a$b', 'a[b', 'a]b', 'a/b', '']) {
+    assert.strictEqual(esClaveFirebaseValida(mala), false, mala);
+  }
+  assert.strictEqual(esClaveFirebaseValida('DELIVERY_1'), true);
 });
 check('el movimiento tiene identidad determinística (no un push por intento)', () => {
   assert.strictEqual(movimientoIdDe(refMostrador(9)), 'MOV_MOSTRADOR_9');
@@ -147,8 +221,37 @@ check('cada recurso registra el referenceId que se le aplicó', () => {
   const db = new Db(base());
   const { impactHash } = aplicar(db, refMostrador(1));
   const ops = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
-  assert.strictEqual(ops['MOSTRADOR_1'].amount, 2);
-  assert.strictEqual(ops['MOSTRADOR_1'].impactHash, impactHash);
+  const e = ops[operationKey('stock', refMostrador(1))];
+  assert.strictEqual(e.amount, 2);
+  assert.strictEqual(e.impactHash, impactHash);
+  assert.strictEqual(e.referenceId, 'MOSTRADOR_1', 'trazabilidad: no se pierde el original');
+});
+
+console.log('\nRetención acotada de appliedOps (medida, no supuesta):');
+check('poda a las N más recientes y conserva las nuevas', () => {
+  const muchas = {};
+  for (let i = 0; i < 1000; i += 1) muchas[`k${i}`] = { at: i, amount: 1 };
+  const podadas = podarAppliedOps(muchas, 300);
+  assert.strictEqual(Object.keys(podadas).length, 300);
+  assert.ok(podadas.k999, 'la más nueva se conserva');
+  assert.ok(!podadas.k0, 'la más vieja se descarta');
+});
+check('la poda es determinística: dos clientes podan igual', () => {
+  const muchas = {};
+  for (let i = 0; i < 500; i += 1) muchas[`k${i}`] = { at: 1000, amount: 1 };  // todas empatadas
+  assert.deepStrictEqual(Object.keys(podarAppliedOps(muchas, 100)), Object.keys(podarAppliedOps(muchas, 100)));
+});
+check('por debajo del límite no se poda nada', () => {
+  const pocas = { a: { at: 1 }, b: { at: 2 } };
+  assert.strictEqual(podarAppliedOps(pocas, 300), pocas);
+});
+check('aplicar sobre un recurso con historial largo lo mantiene acotado', () => {
+  const historial = {};
+  for (let i = 0; i < 400; i += 1) historial[`k${i}`] = { at: i, amount: 1 };
+  const r = aplicarEnRecurso({ propio: 100, appliedOps: historial },
+    { referenceId: 'MOSTRADOR_NUEVA', cantidad: 1, impactHash: 'sha256:x', tipo: 'ARTICULO' });
+  assert.strictEqual(Object.keys(r.nodo.appliedOps).length, 300);
+  assert.ok(r.nodo.appliedOps[operationKey('stock', 'MOSTRADOR_NUEVA')], 'la nueva siempre entra');
 });
 check('reintento completo NO vuelve a descontar', () => {
   const db = new Db(base());
@@ -187,10 +290,12 @@ check('reanudar completa SOLO lo que faltaba', () => {
 check('la operación parcial es DETECTABLE por recurso', () => {
   const db = new Db(base());
   aplicar(db, refMostrador(2), IMPACTO, { hasta: 1 });
+  const clave = operationKey('stock', refMostrador(2));
   const aplicado = db.leer(`${LOCAL}/ARTICULOS/A-0007/stock/appliedOps`);
   const faltante = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
-  assert.ok(aplicado && aplicado['MOSTRADOR_2']);
-  assert.ok(!faltante || !faltante['MOSTRADOR_2']);
+  assert.ok(aplicado && aplicado[clave]);
+  assert.strictEqual(aplicado[clave].referenceId, 'MOSTRADOR_2', 'el referenceId original se conserva');
+  assert.ok(!faltante || !faltante[clave]);
 });
 
 console.log('\nLA CARRERA: A pausado → vence el lease → B recupera → A vuelve:');
@@ -343,8 +448,8 @@ check('la marca original NO se borra ni se reutiliza', () => {
   aplicar(db, refMostrador(63));
   revertir(db, 63);
   const ops = db.leer(`${LOCAL}/ARTICULOS/A-ROCKLETS/stock/appliedOps`);
-  assert.ok(ops['MOSTRADOR_63'], 'la original sigue registrada');
-  assert.ok(ops['REVERSAL_MOSTRADOR_63'], 'la reversión tiene su propia entrada');
+  assert.ok(ops[operationKey('stock', refMostrador(63))], 'la original sigue registrada');
+  assert.ok(ops[operationKey('stock', refReversionMostrador(63))], 'la reversión tiene su propia entrada');
 });
 
 console.log('\nMarca final:');
