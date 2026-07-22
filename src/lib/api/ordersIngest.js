@@ -6,6 +6,28 @@
 // Solo decide qué total mostrar/usar y deja constancia si el total recibido no
 // coincide con el que se reconstruye desde los snapshots.
 //
+// ⚠ LÍMITE DE SEGURIDAD CONOCIDO (F1.7, punto 6) — LEER ANTES DE CONFIAR EN ESTO.
+//
+// Lo que hace esta verificación: detecta que el TOTAL declarado no coincida con
+// la suma de los renglones del propio pedido. Sirve contra inconsistencias y
+// contra manipular únicamente el campo `total`.
+//
+// Lo que NO puede hacer: DLV Pedidos corre en el navegador del cliente. Alguien
+// con DevTools puede alterar el snapshot ENTERO de forma coherente —
+// `precioUnitario`, `total` del opcional, `subtotalLinea` y `payment.total` a la
+// vez. En ese caso el pedido queda internamente consistente y esta función lo
+// aprueba, aunque sea económicamente falso: Rocklets a $1 con todo cuadrado.
+//
+// Es decir: recalcular desde el snapshot recibido garantiza COHERENCIA, no
+// AUTENTICIDAD. La autenticidad exige contrastar contra una fuente que el
+// cliente no controle.
+//
+// Solución (Fase 2, punto 20): validar los pedidos NUEVOS de origen externo
+// contra el catálogo/configuración vigente del local antes de aceptarlos, y
+// registrar toda discrepancia de forma visible para el operador. Preferentemente
+// en backend/Cloud Function; si no, en el receptor. Esa validación NO debe
+// aplicarse a pedidos históricos ni a reimpresiones.
+//
 // Regla (F1.5, punto 6):
 //   · Snapshot COMPLETO  → se reconstruye el total canónico, se compara con el
 //     recibido y MANDA el canónico. Un navegador manipulado no puede imponer un

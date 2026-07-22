@@ -358,6 +358,20 @@ export function construirLineaPersistible(item, { formaPago = null, onWarn = nul
   delete base.totalOpcionales;
   delete base.subtotalLinea;
   delete base.opcionalesIncluidosEnValor;
+
+  // COMPATIBILIDAD: si la línea venía con el adicional YA metido dentro de
+  // `valor` (formato viejo), volver a sumarlo sería cobrarlo dos veces. Se
+  // normaliza restándolo una sola vez, de modo que la línea persistida quede
+  // siempre con `valor` = precio base y el subtotal intacto.
+  // Sin esto, reabrir y volver a guardar un pedido así lo inflaba en cada
+  // guardado (16.200 → 17.900 → 19.600 …).
+  if (item.opcionalesIncluidosEnValor === true) {
+    const adicional = calcularTotalOpcionalesUnidad(item.selectedOptionals, { formaPago, onWarn });
+    const rValor = normalizarImporte(item.valor !== undefined ? item.valor : item.precio);
+    base.valor = (rValor.valido ? rValor.valor : 0) - adicional;
+    delete base.precio;
+  }
+
   const { precioBase, cantidad, totalOpcionales, subtotal } = calcularSubtotalLinea(base, { formaPago, onWarn });
 
   const snapshotPorGrupo = {};
@@ -372,13 +386,21 @@ export function construirLineaPersistible(item, { formaPago = null, onWarn = nul
 
   const linea = {
     ...item,
+    valor: precioBase,                 // normalizado: `valor` es SIEMPRE base
     quantity: cantidad,
     precioBaseUnitario: precioBase,
     totalOpcionales,
     subtotalLinea: subtotal,
     opcionalesIncluidosEnValor: false, // `valor` es SIEMPRE base
   };
-  if (Object.keys(snapshotPorGrupo).length > 0) linea.selectedOptionals = snapshotPorGrupo;
+  // `selectedOptionals` se REEMPLAZA siempre por el snapshot recalculado cuando
+  // la línea es configurable. Así no quedan grupos vacíos colgando en Firebase
+  // (p. ej. { TOPPING: [] } tras deseleccionar el topping) y los tres proyectos
+  // persisten exactamente la misma estructura. La CLAVE se conserva aunque
+  // quede vacía: la línea sigue siendo una unidad configurable.
+  if (item.selectedOptionals && typeof item.selectedOptionals === 'object') {
+    linea.selectedOptionals = snapshotPorGrupo;
+  }
   return linea;
 }
 

@@ -59,3 +59,4 @@ Thumbs.db
 
 # Claude Code (configuración local, no subir)
 .claude/
+fixtures-resultados.json

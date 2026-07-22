@@ -29,13 +29,17 @@ const otrosRepos = REPOS
 const NUCLEO = [
   'src/lib/api/optionalsPricing.js',
   'src/lib/api/unidadesPedido.js',
+  'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato
+  'src/lib/api/__tests__/fixturesComunes.test.js', // ejecutor del contrato
 ];
 
 // COMPARTIDOS ENTRE RECEPTORES: solo aplican a Desktop y Tablet (DLV no imprime
-// tickets ni calcula costo/ganancia). Donde existan en dos repos, deben coincidir.
+// tickets, no calcula costo/ganancia y no ingiere pedidos: los emite).
+// Donde existan en dos repos, deben coincidir.
 const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
+  'src/lib/api/__tests__/ingestaConectada.test.js',
   'src/lib/print/orderPrintDetail.js',
   'src/lib/print/counterTicketHtml.js',
 ];
@@ -44,6 +48,8 @@ const COMPARTIDOS_RECEPTORES = [
 const PRUEBAS_COMPARTIDAS = [
   'src/lib/api/__tests__/contratoPrecios.test.js',
   'src/lib/api/__tests__/paridadCanonica.test.js',
+  'src/lib/api/__tests__/optionalsPricing.test.js',
+  'src/lib/api/__tests__/unidadesPedido.test.js',
 ];
 
 // Normaliza fin de línea: git puede checkoutear CRLF en un repo y LF en otro,
@@ -105,6 +111,35 @@ check('están exactamente los exports pactados', () => {
 check('no sobra ningún export sin acordar', () => {
   const extra = Object.keys(precios).filter((n) => !EXPORTS_CANONICOS.includes(n));
   assert.strictEqual(extra.length, 0, `no pactados: ${extra.join(', ')}`);
+});
+
+console.log('\nVersión del contrato de fixtures:');
+const fixtures = await import('./fixturesCanonicos.js');
+check('los tres repos declaran la misma versión de contrato', () => {
+  assert.ok(fixtures.CONTRATO_VERSION, 'falta CONTRATO_VERSION');
+  for (const otro of otrosRepos) {
+    const rel = 'src/lib/api/__tests__/fixturesCanonicos.js';
+    const alla = path.join(otro, rel);
+    if (!fs.existsSync(alla)) continue;
+    const version = (fs.readFileSync(alla, 'utf8').match(/CONTRATO_VERSION = '([^']+)'/) || [])[1];
+    assert.strictEqual(version, fixtures.CONTRATO_VERSION,
+      `${nombre(otro)} declara v${version} y ${nombre(esteRepo)} v${fixtures.CONTRATO_VERSION}`);
+  }
+});
+// Los nombres de los casos ya quedan garantizados por la igualdad byte a byte
+// del archivo de fixtures (está en NUCLEO). Acá se verifica lo que esa igualdad
+// no cubre: que el contrato en sí sea sano.
+check('los casos tienen nombres únicos y no vacíos', () => {
+  const nombres = fixtures.CASOS.map((c) => c.nombre);
+  assert.ok(nombres.length >= 21, `esperaba al menos 21 casos, hay ${nombres.length}`);
+  assert.ok(nombres.every((n) => typeof n === 'string' && n.trim().length > 0), 'hay casos sin nombre');
+  assert.strictEqual(new Set(nombres).size, nombres.length, 'hay nombres de caso repetidos');
+});
+check('todos los casos declaran un total esperado numérico', () => {
+  for (const c of fixtures.CASOS) {
+    assert.ok(Number.isFinite(c.totalEsperado), `${c.nombre} no declara totalEsperado`);
+    assert.ok(Array.isArray(c.items) && c.items.length > 0, `${c.nombre} no tiene items`);
+  }
 });
 
 console.log('\nExports del módulo de unidades:');
