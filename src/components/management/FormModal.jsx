@@ -7,6 +7,8 @@ import OptionalFormFields from './forms/OptionalFormFields';
 import DepartmentFormFields from './forms/DepartmentFormFields';
 import TachoFormFields from './forms/TachoFormFields';
 import ProductGroupFormFields from './forms/ProductGroupFormFields';
+import OptionalGroupFormFields from './forms/OptionalGroupFormFields';
+import { valoresInicialesGrupo, validarGrupoOpcional, construirGrupoParaGuardar } from '@/lib/api/grupoOpcionalForm';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
@@ -98,6 +100,13 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
       
       const finalData = { ...defaultData, ...initialData };
 
+      // Fase 2 — punto 8: el grupo se lee sin migrarlo. valoresInicialesGrupo
+      // deja `origenOriginal` en null cuando el grupo viejo no traía `origen`,
+      // y así construirGrupoParaGuardar no lo escribe al guardar.
+      if (activeTab === 'grupos-opcionales') {
+        Object.assign(finalData, valoresInicialesGrupo(initialData));
+      }
+
       if (activeTab === 'articulos') {
         if (finalData.activo === false) {
           finalData.activoDelivery = false;
@@ -179,8 +188,26 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
   const handleSubmit = (e) => {
     e.preventDefault();
     
-    const dataToSave = { ...formData };
-    
+    let dataToSave = { ...formData };
+
+    if (activeTab === 'grupos-opcionales') {
+      const departamentosMapa = {};
+      (allData?.departamentos || []).forEach((d) => { const k = d?.codigo || d?.id; if (k) departamentosMapa[String(k)] = d; });
+      const { valido, errores } = validarGrupoOpcional(formData, { departamentos: departamentosMapa, articulos: {} });
+      if (!valido) {
+        toast({
+          variant: 'destructive',
+          title: 'No se puede guardar el grupo',
+          description: errores.map((e) => e.mensaje).join(' '),
+        });
+        return;
+      }
+      dataToSave = construirGrupoParaGuardar(formData, editingItem || {});
+      delete dataToSave.origenTocado;
+      onSave(dataToSave);
+      return;
+    }
+
     if (activeTab === 'articulos') {
       dataToSave.activoDelivery = Boolean(dataToSave.activoDelivery);
       dataToSave.activoMostrador = Boolean(dataToSave.activoMostrador);
@@ -262,12 +289,11 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
                   onFieldChange={handleFieldChange} 
                 />;
       case 'grupos-opcionales':
-        return <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
-                    <input name="nombre" type="text" className="input-field" value={formData.nombre || ''} onChange={(e) => handleFieldChange(e.target.name, e.target.value)} />
-                  </div>
-               </div>;
+        return <OptionalGroupFormFields
+                  formData={formData}
+                  onFieldChange={handleFieldChange}
+                  allData={allData}
+                />;
       case 'grupos-productos':
         return <ProductGroupFormFields
                   formData={formData}

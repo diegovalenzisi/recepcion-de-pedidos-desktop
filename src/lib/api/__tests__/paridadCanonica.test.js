@@ -45,6 +45,11 @@ const NUCLEO = [
 // tickets, no calcula costo/ganancia y no ingiere pedidos: los emite).
 // Donde existan en dos repos, deben coincidir.
 const COMPARTIDOS_RECEPTORES = [
+  // La configuración de grupos vive en las pantallas de administración, que sólo
+  // existen en Desktop y Tablet. DLV consume el resultado vía opcionalesDepartamento.
+  'src/lib/api/grupoOpcionalForm.js',
+  'src/lib/api/__tests__/grupoOpcionalForm.test.js',
+  'src/lib/api/__tests__/grupoFormConectado.test.js',
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',
