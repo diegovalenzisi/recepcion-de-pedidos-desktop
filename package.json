@@ -10,6 +10,7 @@
     "test:stock-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/stockEmulator.integration.mjs\"",
     "test:electron-runtime": "electron electron/lib/__tests__/electronRuntimeGlobals.cjs",
     "test:dlvimg-integration": "electron electron/lib/__tests__/dlvimgProtocol.integration.cjs",
+    "test:negocio-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/negocioEmulator.integration.mjs\"",
     "build": "node tools/generate-llms.js & npx vite build",
     "preview": "vite preview --host :: --port 3000",
     "lint": "eslint . --quiet",

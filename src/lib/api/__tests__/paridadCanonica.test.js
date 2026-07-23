@@ -62,6 +62,7 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/__tests__/stockPlan.test.js',
   'src/lib/api/__tests__/stockImpactConectado.test.js',
   'src/lib/api/__tests__/stockEmulator.integration.mjs',
+  'src/lib/api/__tests__/negocioEmulator.integration.mjs',
   'src/lib/api/validacionPedidoExterno.js',
   'src/lib/api/__tests__/validacionPedidoExterno.test.js',
   'src/lib/api/__tests__/paridadValidacionExterna.test.js',

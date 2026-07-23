@@ -26,6 +26,7 @@
 
 import { idCanonico, mismoIdExacto, esIdLegado, resolverId } from './idsCanonicos.js';
 import { normalizarImporte, calcularSubtotalLinea, calcularTotalPedido } from './optionalsPricing.js';
+import { combinarConfigDeGrupo } from './opcionesDeGrupo.js';
 import {
   origenDeGrupo, configDepartamento, consumoEfectivo, costoEfectivo,
   ORIGEN_DEPARTAMENTO, ORIGEN_MANUAL,
@@ -171,8 +172,18 @@ export function validarPedidoExterno(order, catalogo = {}, { canal = 'delivery',
       }
 
       // 5. El origen del grupo coincide con lo declarado en el snapshot.
-      const origenOficial = origenDeGrupo(configEnArticulo);
-      const cfgDepto = configDepartamento(configEnArticulo);
+      // El origen lo declara el GRUPO del catálogo, no la config dentro del
+      // artículo: ahí sólo viven activo/min/max/obligatorio y, en los manuales,
+      // la lista de opciones. Sin combinar, un grupo por departamento se leería
+      // como manual y toda opción dinámica legítima caería en invalid-option.
+      // Si el grupo del catálogo declara su origen, manda él. Si no declara nada
+      // (grupo viejo, o catálogo de grupos no disponible), se respeta lo que
+      // traiga la config del artículo, que es donde vivía antes.
+      const configEfectiva = grupoInfo && typeof grupoInfo.origen === 'string' && grupoInfo.origen.trim() !== ''
+        ? combinarConfigDeGrupo(configEnArticulo, grupoInfo)
+        : configEnArticulo;
+      const origenOficial = origenDeGrupo(configEfectiva);
+      const cfgDepto = configDepartamento(configEfectiva);
       const opsCanonicas = [];
 
       for (const op of opsRecibidas) {
@@ -283,7 +294,7 @@ export function validarPedidoExterno(order, catalogo = {}, { canal = 'delivery',
           }));
         }
         // 7g. Consumo permitido y 7h. control de stock coherente.
-        const { consumo: consumoOficialUnit } = consumoEfectivo(configEnArticulo, articleId);
+        const { consumo: consumoOficialUnit } = consumoEfectivo(configEfectiva, articleId);
         const controlaStockOficial = cfgDepto.controlarStock && artOpcional.controlStock !== false;
         const consumoOficial = controlaStockOficial ? consumoOficialUnit : 0;
         const consumoRecibido = Number(op.consumoStockUnitario);
