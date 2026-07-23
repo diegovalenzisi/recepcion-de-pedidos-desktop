@@ -37,6 +37,9 @@ const NUCLEO = [
   'src/lib/api/__tests__/idsCanonicos.test.js',
   'src/lib/api/bloqueoPrecioInvalido.js',
   'src/lib/api/__tests__/bloqueoPrecioInvalido.test.js',
+  'src/lib/api/opcionesDeGrupo.js',
+  'src/lib/api/__tests__/opcionesDeGrupo.test.js',
+  'src/lib/api/__tests__/selectorDinamicoConectado.test.js',
   'src/lib/api/opcionalesDepartamento.js',
   'src/lib/api/__tests__/opcionalesDepartamento.test.js',
 ];
