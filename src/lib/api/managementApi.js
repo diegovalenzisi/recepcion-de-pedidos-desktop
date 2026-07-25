@@ -347,6 +347,10 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
         dataToSave.costoUnitario = Math.round((dataToSave.unidadesPorBulto > 0 ? dataToSave.precioBulto / dataToSave.unidadesPorBulto : 0) * 1000) / 1000;
         dataToSave.unidadMedida = finalData.unidadMedida || 'unidad';
         dataToSave.unidad = dataToSave.unidadMedida;
+        // MATERIA_PRIMA/{id}/ignoraStock: SIEMPRE booleano real (nunca string).
+        // Ausente en el formulario o en Firebase = false. No se migra nada en
+        // masa: el campo se persiste al crear o editar cada materia prima.
+        dataToSave.ignoraStock = finalData.ignoraStock === true;
     }
 
     if (tabId === 'articulos' && !isEditing) {
@@ -550,6 +554,17 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
     // según el stock (encender con stock 0 no habilita; apagar durante el
     // agotamiento cancela la restauración). El cascadeo a los artículos y el
     // caso puramente de stock los asegura la reconciliación posterior al set().
+    //
+    // El interruptor "Ignora Stock" entra por `base.ignoraStock` (valor NUEVO) y
+    // por eso se resuelve EN ESTE MISMO GUARDADO, sin necesidad de otra venta ni
+    // de reiniciar la aplicación:
+    //   · encenderlo con stock agotado → la materia prima deja de estar agotada;
+    //     si el apagado había sido AUTOMÁTICO y antes estaba activa, vuelve a
+    //     `activo = true` y se borran sus marcadores. Si la había apagado el
+    //     usuario a mano, sigue apagada.
+    //   · apagarlo con stock agotado → se aplica el bloqueo normal en el acto
+    //     (activo = false, marcadores guardados) y la reconciliación posterior
+    //     apaga el delivery de los artículos que la usan.
     if (tabId === 'materia-prima') {
         let existente = {};
         if (isEditing) {

@@ -291,4 +291,38 @@ check('artículo sin receta no se bloquea por materias primas', () => {
   assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
 });
 
+console.log('\n"Ignora Stock" al validar el pedido externo:');
+const conIgnoraStock = (stock, extra = {}) => ({
+  ...CATALOGO_RECETA,
+  materiaPrima: {
+    ...CATALOGO_RECETA.materiaPrima,
+    'M-CHIPAS': { nombre: 'CHIPAS', stock, activo: true, ignoraStock: true, ...extra },
+  },
+});
+check('stock 0 con ignoraStock → VALID (no se marca como no disponible)', () => {
+  const r = validarPedidoExterno(pedidoReceta(), conIgnoraStock(0), { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
+});
+check('stock negativo y 5 unidades pedidas → sigue VALID', () => {
+  const p = pedidoReceta(); p.items[0].quantity = 5; p.items[0].subtotalLinea = 2500; p.payment.total = 2500;
+  const r = validarPedidoExterno(p, conIgnoraStock(-20), { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
+});
+check('la otra materia prima de la receta sí sigue bloqueando', () => {
+  const cat = conIgnoraStock(-20);
+  cat.materiaPrima['M-QUESO'] = { nombre: 'QUESO', stock: 0, activo: true };
+  const r = validarPedidoExterno(pedidoReceta(), cat, { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
+  const i = r.issues.find((x) => x.estado === ESTADOS_VALIDACION.UNAVAILABLE);
+  assert.deepStrictEqual(i.faltantesStock.map((f) => f.materiaPrimaId), ['M-QUESO']);
+});
+check('materia prima desactivada a mano: ignoraStock no la exime', () => {
+  const r = validarPedidoExterno(pedidoReceta(), conIgnoraStock(0, { activo: false }), { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
+});
+check('ignoraStock:false se comporta como hasta ahora', () => {
+  const cat = conIgnoraStock(0, { ignoraStock: false });
+  assert.strictEqual(validarPedidoExterno(pedidoReceta(), cat, { canal: 'delivery' }).status, ESTADOS_VALIDACION.UNAVAILABLE);
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

@@ -61,6 +61,8 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
             initialData.precioBulto = initialData.precioBulto || 0;
             initialData.unidadesPorBulto = initialData.unidadesPorBulto || 1;
             initialData.costoUnitario = initialData.costoUnitario || 0;
+            // "Ignora Stock": campo ausente = false (interruptor en OFF).
+            initialData.ignoraStock = initialData.ignoraStock === true;
             break;
           case 'tachos':
             initialData.stock = initialData.stock || 0;
@@ -93,6 +95,8 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
             initialData.precioBulto = initialData.precioBulto || 0;
             initialData.unidadesPorBulto = initialData.unidadesPorBulto || 1;
             initialData.costoUnitario = initialData.costoUnitario || 0;
+            // "Ignora Stock": se carga el valor guardado; ausente = OFF.
+            initialData.ignoraStock = initialData.ignoraStock === true;
          }
       }
       
@@ -188,6 +192,11 @@ const FormModal = ({ showForm, setShowForm, editingItem, activeTab, tabs, onSave
       ['origen', 'departamentoId', 'articulosSeleccionados', 'usarPrecioArticulo',
        'controlarStock', 'consumoStockUnitarioDefault', 'consumosPorArticulo',
        'configDepartamento'].forEach((campo) => delete dataToSave[campo]);
+    }
+
+    // "Ignora Stock": booleano real, nunca string. No toca ningún otro dato.
+    if (activeTab === 'materia-prima') {
+      dataToSave.ignoraStock = dataToSave.ignoraStock === true;
     }
 
     if (activeTab === 'articulos') {

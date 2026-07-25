@@ -10,12 +10,21 @@
 // usuario apagó manualmente. Un artículo puede depender de varias materias primas
 // (mapa `materiasPrimasBloqueantes`): recién se restaura cuando NO queda ninguna.
 //
+// IGNORA STOCK (`MATERIA_PRIMA/{id}/ignoraStock`): una materia prima marcada así
+// deja de considerarse agotada. Su stock se sigue descontando y puede quedar
+// negativo (se ve tal cual para reponer), pero ni ella ni los artículos que la
+// usan se apagan por falta de stock. Campo AUSENTE = false. "Ignora Stock" solo
+// ignora el STOCK: jamás una desactivación MANUAL (`activo === false`).
+//
+//   disponible = activo !== false && (ignoraStock === true || stock suficiente)
+//
 // NUNCA se toca `ARTICULOS/{id}/activo`. NUNCA se escribe
 // `MATERIA_PRIMA/{id}/activoDelivery` (esa automatización anterior era incorrecta
 // y fue reemplazada).
 //
 // Campos técnicos:
-//   MATERIA_PRIMA/{id}: activo, apagadoAutomaticoPorStock, activoAntesDeAgotarse
+//   MATERIA_PRIMA/{id}: activo, ignoraStock,
+//                       apagadoAutomaticoPorStock, activoAntesDeAgotarse
 //   ARTICULOS/{id}:     activoDelivery,
 //                       apagadoDeliveryAutomaticoPorMateriaPrima,
 //                       activoDeliveryAntesDeFaltaMateriaPrima,
@@ -43,6 +52,34 @@ export function stockAgotado(v) {
 }
 
 // ---------------------------------------------------------------------------
+// IGNORA STOCK
+// ---------------------------------------------------------------------------
+
+/**
+ * ¿La materia prima tiene el interruptor "Ignora Stock" encendido? Lectura
+ * cruda del campo: AUSENTE (o cualquier valor que no sea `true`) = false. Se usa
+ * donde todavía se está DECIDIENDO `activo` — por eso no mira `activo`.
+ */
+export function tieneIgnoraStock(nodoMP) {
+  return !!(nodoMP && typeof nodoMP === 'object' && nodoMP.ignoraStock === true);
+}
+
+/**
+ * ¿Hay que ignorar el stock de esta materia prima al evaluar disponibilidad y
+ * consumo? Es la regla ÚNICA que comparten Desktop, Tablet y DLV Pedidos:
+ *
+ *     ignora = ignoraStock === true && activo !== false
+ *
+ * La segunda condición es la que impide que "Ignora Stock" pise una
+ * desactivación MANUAL: si el usuario apagó la materia prima, sigue apagada y
+ * su stock vuelve a evaluarse exactamente como antes de existir esta opción.
+ */
+export function materiaPrimaIgnoraStock(nodoMP) {
+  if (!tieneIgnoraStock(nodoMP)) return false;
+  return nodoMP.activo !== false;
+}
+
+// ---------------------------------------------------------------------------
 // MATERIA PRIMA: activo según stock
 // ---------------------------------------------------------------------------
 
@@ -50,13 +87,20 @@ export function stockAgotado(v) {
  * Transición de `activo` de una materia prima según su stock. No muta el nodo:
  * devuelve `{ patch }` con los campos a escribir (null = borrar en Firebase).
  * Idempotente.
+ *
+ * Con `ignoraStock === true` la materia prima NUNCA cuenta como agotada, así que
+ * cae siempre en la rama de "reposición": si estaba apagada AUTOMÁTICAMENTE y
+ * antes estaba activa, se restaura y se borran sus marcadores; si la había
+ * apagado el usuario a mano (sin marcadores), sigue apagada. Acá se lee el campo
+ * CRUDO (`tieneIgnoraStock`) y no la regla efectiva, justamente porque esta
+ * función es la que decide `activo`.
  */
 export function aplicarReglaMateriaPrima(nodo) {
   const n = obj(nodo);
   const patch = {};
   const set = (k, v) => { const a = n[k] === undefined ? null : n[k]; if (a !== v) patch[k] = v; };
 
-  if (stockAgotado(n.stock)) {
+  if (!tieneIgnoraStock(n) && stockAgotado(n.stock)) {
     if (n.activo === true && n.apagadoAutomaticoPorStock !== true) {
       set('activoAntesDeAgotarse', true);
       set('apagadoAutomaticoPorStock', true);
@@ -82,7 +126,9 @@ export function aplicarReglaMateriaPrimaANodo(nodo) {
 
 /**
  * Edición MANUAL de `activo` de una materia prima.
- *  - stock > 0: aplica el valor deseado y limpia marcadores.
+ *  - stock > 0 (o `ignoraStock === true`): aplica el valor deseado y limpia
+ *    marcadores. Con "Ignora Stock" encendido, encender la materia prima
+ *    funciona aunque su stock esté en 0 o negativo.
  *  - stock <= 0 y ENCIENDE: queda `activo=false` pero registra intención de
  *    restaurar al reponer.
  *  - stock <= 0 y APAGA: cancela la restauración automática (limpia marcadores).
@@ -91,7 +137,7 @@ export function resolverToggleManualMateriaPrima(nodo, activoDeseado) {
   const n = obj(nodo);
   const deseado = activoDeseado === true;
   const patch = {};
-  if (!stockAgotado(n.stock)) {
+  if (tieneIgnoraStock(n) || !stockAgotado(n.stock)) {
     patch.activo = deseado;
     patch.apagadoAutomaticoPorStock = null;
     patch.activoAntesDeAgotarse = null;
@@ -111,12 +157,18 @@ export function resolverToggleManualMateriaPrima(nodo, activoDeseado) {
 /**
  * ¿Una materia prima está DISPONIBLE para producir? Se usa para decidir si
  * bloquea a los artículos que la usan. `controlStock === false` = ilimitada.
+ *
+ *     disponible = activo !== false && (ignoraStock === true || stock suficiente)
+ *
+ * Una materia prima con "Ignora Stock" nunca bloquea por stock (aunque esté en
+ * 0 o negativo), pero una desactivación MANUAL la sigue bloqueando.
  */
 export function materiaPrimaDisponible(nodoMP) {
   const n = nodoMP;
   if (!n || typeof n !== 'object') return false;
   if (n.controlStock === false) return true;
   if (n.activo === false) return false;
+  if (tieneIgnoraStock(n)) return true;
   return !stockAgotado(n.stock);
 }
 

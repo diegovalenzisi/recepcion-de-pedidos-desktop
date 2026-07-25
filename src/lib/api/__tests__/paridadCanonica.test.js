@@ -34,6 +34,7 @@ const NUCLEO = [
   'src/lib/api/__tests__/disponibilidadReceta.test.js',
   'src/lib/api/deliveryPorStock.js',              // auto-toggle de activoDelivery de materia prima
   'src/lib/api/__tests__/deliveryPorStock.test.js',
+  'src/lib/api/__tests__/ignoraStock.test.js',    // "Ignora Stock" de materia prima
   'src/lib/api/sha256.js',                        // hashing portable del impacto
   'src/lib/api/__tests__/sha256.test.js',
   'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato

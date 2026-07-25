@@ -5,7 +5,15 @@
  *
  * Used only when an article's `stock.descuentaPorArticulo` flag is true.
  * Promotions/articles without that flag are not affected by this module.
+ *
+ * "Ignora Stock" (MATERIA_PRIMA/{id}/ignoraStock): se respeta la MISMA regla
+ * canónica que usan Desktop, Tablet y DLV (materiaPrimaIgnoraStock, en
+ * deliveryPorStock.js). Una materia prima marcada así no limita ni deja sin
+ * disponibilidad a los artículos que la usan, aunque su stock sea 0 o negativo;
+ * una desactivación manual (`activo === false`) sí la sigue limitando.
  */
+
+import { materiaPrimaIgnoraStock } from './deliveryPorStock';
 
 const getStockType = (stock) => {
     if (!stock) return 'propio';
@@ -54,6 +62,7 @@ export const isArticleAvailable = (articleId, articlesData = {}, materiaPrimaDat
     const rawMaterial = materiaPrimaData[articleId];
     if (rawMaterial) {
         if (rawMaterial.controlStock === false) return true;
+        if (materiaPrimaIgnoraStock(rawMaterial)) return true; // "Ignora Stock"
         if (rawMaterial.heredadoDe) {
             return isArticleAvailable(rawMaterial.heredadoDe, articlesData, materiaPrimaData, context, visited);
         }
@@ -211,6 +220,7 @@ export const getAvailableUnits = (articleId, articlesData = {}, materiaPrimaData
     const rawMaterial = materiaPrimaData[articleId];
     if (rawMaterial) {
         if (rawMaterial.controlStock === false) return Infinity;
+        if (materiaPrimaIgnoraStock(rawMaterial)) return Infinity; // "Ignora Stock": no limita
         if (rawMaterial.heredadoDe) {
             return getAvailableUnits(rawMaterial.heredadoDe, articlesData, materiaPrimaData, nextVisited);
         }

@@ -3,6 +3,7 @@ import React from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 
 const RawMaterialFormFields = ({ formData, onFieldChange }) => {
   const handleChange = (e) => {
@@ -90,11 +91,27 @@ const RawMaterialFormFields = ({ formData, onFieldChange }) => {
 
       <div className="space-y-2 md:col-span-2">
         <Label>Costo por Unidad (Calculado)</Label>
-        <Input 
-          readOnly 
-          value={`$ ${Number(formData.costoUnitario || 0).toFixed(2)}`} 
-          className="bg-gray-100 text-gray-500 cursor-not-allowed font-medium" 
+        <Input
+          readOnly
+          value={`$ ${Number(formData.costoUnitario || 0).toFixed(2)}`}
+          className="bg-gray-100 text-gray-500 cursor-not-allowed font-medium"
         />
+      </div>
+
+      {/* Campo ausente en Firebase = OFF. Se guarda siempre como booleano real. */}
+      <div className="space-y-2 md:col-span-2 pt-2 border-t border-gray-200">
+        <div className="flex items-center">
+          <Switch
+            id="ignoraStock"
+            checked={formData.ignoraStock === true}
+            onCheckedChange={(checked) => onFieldChange('ignoraStock', checked === true)}
+            aria-label="Ignora Stock"
+          />
+          <Label htmlFor="ignoraStock" className="ml-2">Ignora Stock</Label>
+        </div>
+        <p className="text-xs text-gray-500">
+          Permite seguir utilizando esta materia prima aunque su stock llegue a cero o quede negativo. El descuento de stock continúa registrándose.
+        </p>
       </div>
     </div>
   );

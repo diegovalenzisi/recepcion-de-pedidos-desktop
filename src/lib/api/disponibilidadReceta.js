@@ -13,6 +13,13 @@
 //     && (art.activo !== false)             // artículo activo
 //     && recetaConStockSuficiente(id, articulos, materiaPrima, 1)
 //
+// IGNORA STOCK: una materia prima con `ignoraStock === true` (y que no esté
+// desactivada a mano) NO limita ni bloquea: se comporta como ilimitada en todos
+// los cálculos de este módulo, aunque su stock sea 0 o negativo. La regla vive
+// en `deliveryPorStock.js` (`materiaPrimaIgnoraStock`) y se importa desde acá
+// para que Desktop, Tablet y DLV la interpreten EXACTAMENTE igual. El descuento
+// de stock NO pasa por este módulo: se sigue registrando siempre.
+//
 // Identidad SIEMPRE por ID canónico (la clave real de Firebase), nunca por
 // nombre. Se lee exclusivamente el catálogo del local actual: la separación por
 // local la garantiza quien provee `articulos` y `materiaPrima`.
@@ -20,6 +27,8 @@
 // Módulo puro: sin Firebase, sin React, sin DOM, sin import.meta. Idéntico en
 // Desktop, Tablet y DLV Pedidos.
 // ---------------------------------------------------------------------------
+
+import { materiaPrimaIgnoraStock } from './deliveryPorStock.js';
 
 /** Cantidad numérica tolerante a coma decimal y strings históricos. Nunca NaN. */
 function numero(v) {
@@ -65,6 +74,8 @@ function entradasDeReceta(receta) {
  *
  * Reglas:
  * - `controlStock === false` (artículo o materia prima) → Infinity (ilimitado).
+ * - materia prima con "Ignora Stock" → Infinity (no limita, igual que la
+ *   anterior): su faltante no debe reducir las unidades fabricables.
  * - stock propio → `stock.propio` (nunca negativo, nunca NaN).
  * - stock heredado → disponibilidad del padre (misma unidad, sin dividir).
  * - stock por receta → para cada ingrediente:
@@ -117,6 +128,7 @@ export function unidadesFabricables(articleId, articulos = {}, materiaPrima = {}
   const mp = materiaPrima[articleId];
   if (mp) {
     if (mp.controlStock === false) return Infinity;
+    if (materiaPrimaIgnoraStock(mp)) return Infinity; // "Ignora Stock": no limita
     if (mp.heredadoDe) return unidadesFabricables(mp.heredadoDe, articulos, materiaPrima, next);
     return stockNoNegativo(mp.stock); // cantidad continua, sin redondear
   }
@@ -146,6 +158,11 @@ export function recetaConStockSuficiente(articleId, articulos = {}, materiaPrima
  * Evaluación DETALLADA para el registro técnico y la validación del pedido.
  * Recorre la receta y reporta, por materia prima que no alcanza, el stock actual
  * y la cantidad requerida (`unidades × cantidadEnReceta`, incluso anidada).
+ *
+ * Las materias primas con "Ignora Stock" quedan FUERA del consumo evaluado, así
+ * que nunca aparecen como faltantes: no bloquean el catálogo, ni el carrito, ni
+ * la confirmación, ni la validación del pedido al recibirlo. Las demás materias
+ * primas de la misma receta se siguen evaluando igual que siempre.
  *
  * @returns {{ suficiente: boolean,
  *             faltantes: Array<{ materiaPrimaId, stockActual, requerido }>,
@@ -192,6 +209,10 @@ export function evaluarRecetaPedido(articleId, unidades, articulos = {}, materia
     const mp = materiaPrima[id];
     if (mp) {
       if (mp.controlStock === false) return;
+      // "Ignora Stock": no se acumula su consumo, así que jamás puede figurar
+      // como faltante. El descuento real se sigue haciendo aparte (stockPlan /
+      // stockAtomico) y puede dejar el stock negativo.
+      if (materiaPrimaIgnoraStock(mp)) { avisos.push({ tipo: 'ignora-stock', id }); return; }
       if (mp.heredadoDe) { acumular(mp.heredadoDe, cantidad, next); return; }
       consumo[id] = consumo[id] || { tipo: 'MATERIA_PRIMA', cantidad: 0 };
       consumo[id].cantidad += cantidad;

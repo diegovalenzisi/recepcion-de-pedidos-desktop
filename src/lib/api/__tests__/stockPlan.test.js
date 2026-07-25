@@ -190,4 +190,40 @@ check('resolverRutasFisicas tolera entradas basura', () => {
   assert.deepStrictEqual(acc, {});
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n"Ignora Stock": el descuento se sigue planificando igual:');
+// El plan de impacto NO consulta el nivel de stock: `ignoraStock` no puede
+// omitir el descuento, ni recortarlo a cero, ni sacar el renglón del ledger.
+// ---------------------------------------------------------------------------
+const MP_IGNORA = {
+  'M-3': { nombre: 'Azúcar', stock: 100 },
+  'M-9': { nombre: 'Cacao', stock: 50 },
+  'M-CHIPAS': { nombre: 'CHIPAS', stock: 2, activo: true, ignoraStock: true },
+};
+const ART_IGNORA = {
+  ...ARTICULOS,
+  'A-CHIPA': { nombre: 'Chipa', stock: { stockType: 'receta', receta: { 'M-CHIPAS': 6 } } },
+};
+const planIgnora = (items) => construirPlanDeStock({ items, articulos: ART_IGNORA, materiaPrima: MP_IGNORA });
+
+check('descuenta el consumo completo aunque el stock no alcance', () => {
+  const { impactMap } = planIgnora([{ codigo: 'A-CHIPA', quantity: 1 }]);
+  // stock 2 − 6 = −4: el plan pide los 6, sin recortes.
+  assert.deepStrictEqual(impactMap['M-CHIPAS'], { quantity: 6, type: 'MATERIA_PRIMA' });
+});
+check('el stock negativo no frena el pedido siguiente ni cambia el plan', () => {
+  const mp = { ...MP_IGNORA, 'M-CHIPAS': { ...MP_IGNORA['M-CHIPAS'], stock: -4 } };
+  const { impactMap } = construirPlanDeStock({ items: [{ codigo: 'A-CHIPA', quantity: 2 }], articulos: ART_IGNORA, materiaPrima: mp });
+  assert.deepStrictEqual(impactMap['M-CHIPAS'], { quantity: 12, type: 'MATERIA_PRIMA' });
+});
+check('la reversión devuelve exactamente lo descontado (cantidad negativa)', () => {
+  const mp = { ...MP_IGNORA, 'M-CHIPAS': { ...MP_IGNORA['M-CHIPAS'], stock: -4 } };
+  const { impactMap } = construirPlanDeStock({ items: [{ codigo: 'A-CHIPA', quantity: -1 }], articulos: ART_IGNORA, materiaPrima: mp });
+  assert.deepStrictEqual(impactMap['M-CHIPAS'], { quantity: -6, type: 'MATERIA_PRIMA' });
+});
+check('preflight: la materia prima existe, así que el descuento se ejecuta', () => {
+  const { impactMap } = planIgnora([{ codigo: 'A-CHIPA', quantity: 1 }]);
+  assert.strictEqual(preflight({ impactMap, articulos: ART_IGNORA, materiaPrima: MP_IGNORA }).listo, true);
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
