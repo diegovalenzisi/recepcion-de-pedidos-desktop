@@ -37,8 +37,6 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   const [allOptionals, setAllOptionals] = useState([]);
   const [allOptionalGroups, setAllOptionalGroups] = useState([]);
   const [allProductGroups, setAllProductGroups] = useState([]);
-  // Fase 2 — punto 9: hace falta para el costo real de un opcional por receta.
-  const [allRawMaterials, setAllRawMaterials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDepartment, setSelectedDepartment] = useState(null);
@@ -127,13 +125,12 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     // la limpieza (requisito 11).
     const catalogLocalId = getLocalId();
     try {
-      const [fetchedDepartments, fetchedArticles, fetchedOptionals, fetchedOptionalGroups, fetchedProductGroups, fetchedRawMaterials, fetchedAccounts] = await Promise.all([
+      const [fetchedDepartments, fetchedArticles, fetchedOptionals, fetchedOptionalGroups, fetchedProductGroups, fetchedAccounts] = await Promise.all([
         fetchData('departamentos'),
         fetchData('articulos'),
         fetchData('opcionales'),
         fetchData('grupos-opcionales'),
         fetchData('grupos-productos'),
-        fetchData('materia-prima'),
         fetchAccounts()
       ]);
 
@@ -148,7 +145,6 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       setAllOptionals(fetchedOptionals);
       setAllOptionalGroups(fetchedOptionalGroups);
       setAllProductGroups(fetchedProductGroups);
-      setAllRawMaterials(fetchedRawMaterials || []);
 
       const electronicMethods = (fetchedAccounts || []).map(acc => acc.nombre).filter(Boolean);
       setPaymentMethods(['Efectivo', ...new Set(electronicMethods)]);
@@ -565,9 +561,6 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         article={articleForSelection}
         allOptionals={allOptionals}
         allOptionalGroups={allOptionalGroups}
-        allArticles={allArticles}
-        allRawMaterials={allRawMaterials}
-        canal={isCounterMode ? 'mostrador' : 'delivery'}
         onConfirm={handleConfirmOptionals}
         isPromoItem={promoConfig.isConfiguring}
         promoItemIndex={promoConfig.currentIndex}

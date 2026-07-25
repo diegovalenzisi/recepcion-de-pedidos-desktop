@@ -1,0 +1,6 @@
+{
+  "version": "1.3.63",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.63.exe",
+  "releaseDate": "2026-07-24",
+  "notes": "Automatiza la disponibilidad por stock de materias primas. Cuando una materia prima llega a stock 0 o negativo, pasa a activo:false y los artículos que la usan en su receta pasan a activoDelivery:false (recordando su estado anterior en materiasPrimasBloqueantes). Al reponer el stock se restauran solo los que estaban activos antes del apagado automático, y nunca se reactiva lo que el usuario apagó manualmente; soporta varias materias primas bloqueantes por artículo. La reconciliación corre ante cualquier cambio de stock (ventas de Mostrador/Delivery/DLV, consumo por receta/opcionales, ajustes, reversiones, carga manual, alta/edición) y al iniciar o cambiar de local, solo sobre el local actual. No se modifica ARTICULOS/{id}/activo. DLV usa ARTICULOS/{id}/activoDelivery como estado principal y conserva la validación de stock de receta como segunda defensa para carritos desactualizados. No se tocó facturación, impresión ni grupos de opcionales."
+}

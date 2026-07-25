@@ -1,4 +1,4 @@
-// Fase 2 — punto 7: validación autoritativa de pedidos externos (DLV).
+// Validación autoritativa de pedidos externos (DLV) — grupos MANUALES.
 // Idéntico en Desktop y Tablet: mismo JSON debe dar exactamente el mismo resultado.
 //
 // Correr con: node src/lib/api/__tests__/validacionPedidoExterno.test.js
@@ -14,47 +14,35 @@ function check(name, fn) {
   catch (e) { console.error(`FAIL  ${name}\n      ${e && e.message}`); process.exitCode = 1; }
 }
 
-// --- Catálogo oficial del local -------------------------------------------
+// --- Catálogo oficial del local (solo grupos manuales) --------------------
 const CATALOGO = {
-  departamentos: { 'D-TOP': { nombre: 'TOPPING' }, 'D-HELADO': { nombre: 'HELADOS' } },
   articulos: {
     'A-0007': {
-      nombre: '1 KILO DE HELADO', departamento: 'D-HELADO', valor: 14500,
+      nombre: '1 KILO DE HELADO', valor: 14500,
       activoDelivery: true, activoMostrador: true, stock: { stockType: 'propio', propio: 50 },
       opcionalesConfig: {
         'G-SAB': { activo: true, obligatorio: true, min: 1, max: 4, opcionales: ['O-11', 'O-13'] },
-        'G-TOP': {
-          activo: true, obligatorio: false, min: 0, max: 3,
-          origen: 'departamento', departamentoId: 'D-TOP',
-          usarPrecioArticulo: true, controlarStock: true,
-          consumoStockUnitarioDefault: 1, consumosPorArticulo: { 'A-VASITOS': 2 },
-        },
+        'G-TOP': { activo: true, obligatorio: false, min: 0, max: 3, opcionales: ['O-21', 'O-22'] },
       },
     },
-    'A-ROCKLETS': { nombre: 'Rocklets', departamento: 'D-TOP', valor: 1700, costoUnitario: 400, controlStock: true, activoDelivery: true, activoMostrador: true, stock: { stockType: 'propio', propio: 20 } },
-    'A-VASITOS': { nombre: 'Vasitos', departamento: 'D-TOP', valor: 0, costoUnitario: 50, controlStock: true, activoDelivery: true, activoMostrador: true, stock: { stockType: 'propio', propio: 100 } },
-    'A-OREO': { nombre: 'Oreo', departamento: 'D-TOP', valor: 900, activoDelivery: false, activoMostrador: true, stock: { propio: 5 } },
-    'A-OTRO-DEPTO': { nombre: 'Cucurucho', departamento: 'D-HELADO', valor: 300, activoDelivery: true, stock: { propio: 5 } },
   },
-  gruposOpcionales: { 'G-SAB': { nombre: 'SABORES' }, 'G-TOP': { nombre: 'TOPPING' } },
+  gruposOpcionales: { 'G-SAB': { nombre: 'SABORES' }, 'G-TOP': { nombre: 'TOPPINGS' } },
   opcionales: {
     'O-11': { nombre: 'Chocolate', grupo: 'G-SAB', precio: 0, activo: true },
     'O-13': { nombre: 'Frutilla', grupo: 'G-SAB', precio: 0, activo: true },
+    'O-21': { nombre: 'Rocklets', grupo: 'G-TOP', precio: 1700, activo: true },
+    'O-22': { nombre: 'Granas', grupo: 'G-TOP', precio: 0, activo: true },
     'O-99': { nombre: 'Inactivo', grupo: 'G-SAB', precio: 0, activo: false },
   },
-  materiaPrima: {},
 };
 
-const sabor = (id = 'O-11', nombre = 'Chocolate') => ({ id, nombre, precioUnitario: 0, precio: 0, cantidad: 1, quantity: 1, total: 0, origen: 'manual' });
-const rocklets = (over = {}) => ({
-  id: 'A-ROCKLETS', nombre: 'Rocklets', origen: 'departamento',
-  articleId: 'A-ROCKLETS', departamentoId: 'D-TOP',
-  precioUnitario: 1700, precio: 1700, cantidad: 1, quantity: 1, total: 1700,
-  costoUnitarioAplicado: 400, costoTotal: 400,
-  controlaStock: true, consumoStockUnitario: 1, consumoStockTotal: 1, ...over,
+const sabor = (id = 'O-11', nombre = 'Chocolate') => ({ id, nombre, precioUnitario: 0, precio: 0, cantidad: 1, quantity: 1, total: 0 });
+const topping = (over = {}) => ({
+  id: 'O-21', nombre: 'Rocklets',
+  precioUnitario: 1700, precio: 1700, cantidad: 1, quantity: 1, total: 1700, ...over,
 });
 
-const pedido = (over = {}, opcionalesTop = [rocklets()]) => ({
+const pedido = (over = {}, opcionalesTop = [topping()]) => ({
   id: 1001, origen: 'DLV', status: { main: 'ACEPTADO' },
   items: [{
     id: 'A-0007', codigo: 'A-0007', nombre: '1 KILO DE HELADO',
@@ -95,19 +83,18 @@ check('status valid, sin issues, total 16.200', () => {
   assert.strictEqual(r.canonicalTotal, 16200);
   assert.strictEqual(r.receivedTotal, 16200);
 });
-check('el opcional gratuito de departamento también valida', () => {
-  const vasitos = rocklets({ id: 'A-VASITOS', nombre: 'Vasitos', articleId: 'A-VASITOS', precioUnitario: 0, precio: 0, total: 0, costoUnitarioAplicado: 50, costoTotal: 50, consumoStockUnitario: 2, consumoStockTotal: 2 });
-  const r = validar(pedido({}, [vasitos]));
+check('un opcional gratuito también valida y no suma', () => {
+  const granas = topping({ id: 'O-22', nombre: 'Granas', precioUnitario: 0, precio: 0, total: 0 });
+  const r = validar(pedido({}, [granas]));
   assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
   assert.strictEqual(r.canonicalTotal, 14500, 'no suma precio');
-  assert.strictEqual(r.canonicalItems[0].selectedOptionals['G-TOP'][0].consumoStockTotal, 2, 'pero sí consume');
 });
 
 console.log('\nprice-mismatch:');
 check('Rocklets enviado a 100 en vez de 1700', () => {
-  const r = validar(pedido({}, [rocklets({ precioUnitario: 100, precio: 100, total: 100 })]));
+  const r = validar(pedido({}, [topping({ precioUnitario: 100, precio: 100, total: 100 })]));
   assert.strictEqual(r.status, ESTADOS_VALIDACION.PRICE_MISMATCH);
-  const i = r.issues.find((x) => x.articleId === 'A-ROCKLETS');
+  const i = r.issues.find((x) => x.optionId === 'O-21');
   assert.strictEqual(i.precioRecibido, 100);
   assert.strictEqual(i.precioOficial, 1700);
   assert.strictEqual(r.canonicalTotal, 16200, 'el canónico usa el precio oficial');
@@ -140,7 +127,7 @@ check('grupo no habilitado para ese producto', () => {
   p.items[0].selectedOptionals['G-FANTASMA'] = [sabor()];
   assert.strictEqual(validar(p).status, ESTADOS_VALIDACION.INVALID_OPTION);
 });
-check('opción manual que no pertenece al grupo', () => {
+check('opción que no pertenece al grupo', () => {
   const p = pedido();
   p.items[0].selectedOptionals['G-SAB'] = [sabor('O-77', 'Intruso')];
   assert.strictEqual(validar(p).status, ESTADOS_VALIDACION.INVALID_OPTION);
@@ -152,26 +139,8 @@ check('mínimo obligatorio incumplido', () => {
   assert.ok(r.issues.some((i) => /mínimo/i.test(i.motivo)));
 });
 check('máximo superado', () => {
-  const r = validar(pedido({}, [rocklets(), rocklets({ cantidad: 3, quantity: 3, total: 5100 })]));
+  const r = validar(pedido({}, [topping({ cantidad: 4, quantity: 4, total: 6800 })]));
   assert.ok(r.issues.some((i) => /máximo/i.test(i.motivo)));
-});
-check('artículo de otro departamento', () => {
-  const r = validar(pedido({}, [rocklets({ articleId: 'A-OTRO-DEPTO', nombre: 'Cucurucho' })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_OPTION);
-  assert.ok(r.issues.some((i) => /no pertenece al departamento/i.test(i.motivo)));
-});
-check('departamentoId que no coincide con el del grupo', () => {
-  const r = validar(pedido({}, [rocklets({ departamentoId: 'D-HELADO' })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_OPTION);
-});
-check('opcional de departamento SIN articleId', () => {
-  const r = validar(pedido({}, [rocklets({ articleId: undefined })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_OPTION);
-});
-check('origen declarado que no coincide con el oficial', () => {
-  const r = validar(pedido({}, [rocklets({ origen: 'manual' })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_OPTION);
-  assert.ok(r.issues.some((i) => /origen/i.test(i.motivo)));
 });
 check('unidadIndice incoherente', () => {
   const p = pedido();
@@ -180,15 +149,7 @@ check('unidadIndice incoherente', () => {
 });
 
 console.log('\nunavailable:');
-check('artículo no activo para delivery', () => {
-  const r = validar(pedido({}, [rocklets({ articleId: 'A-OREO', nombre: 'Oreo', precioUnitario: 900, precio: 900, total: 900 })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
-});
-check('sin disponibilidad según el motor actual', () => {
-  const r = validar(pedido(), { estaDisponible: (id) => id !== 'A-ROCKLETS' });
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
-});
-check('opción manual inactiva', () => {
+check('opción inactiva', () => {
   const p = pedido();
   p.items[0].selectedOptionals['G-SAB'] = [sabor('O-99', 'Inactivo')];
   const cat = { ...CATALOGO, articulos: { ...CATALOGO.articulos } };
@@ -196,34 +157,17 @@ check('opción manual inactiva', () => {
   assert.strictEqual(validarPedidoExterno(p, cat, { canal: 'delivery' }).status, ESTADOS_VALIDACION.UNAVAILABLE);
 });
 
-console.log('\ninvalid-consumption:');
-check('consumo distinto al configurado', () => {
-  const r = validar(pedido({}, [rocklets({ consumoStockUnitario: 5, consumoStockTotal: 5 })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_CONSUMPTION);
-  const i = r.issues.find((x) => x.consumoOficial !== undefined);
-  assert.strictEqual(i.consumoRecibido, 5);
-  assert.strictEqual(i.consumoOficial, 1);
-});
-check('el override por artículo es el que manda', () => {
-  const vas = rocklets({ articleId: 'A-VASITOS', nombre: 'Vasitos', precioUnitario: 0, precio: 0, total: 0, costoUnitarioAplicado: 50, costoTotal: 50, consumoStockUnitario: 1, consumoStockTotal: 1 });
-  const r = validar(pedido({}, [vas]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_CONSUMPTION);
-  assert.strictEqual(r.issues.find((x) => x.consumoOficial !== undefined).consumoOficial, 2);
-});
-check('controlaStock incoherente', () => {
-  const r = validar(pedido({}, [rocklets({ controlaStock: false })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_CONSUMPTION);
-});
-
 console.log('\nPrioridad de estados:');
 check('un problema de opción manda sobre uno de precio', () => {
-  const r = validar(pedido({}, [rocklets({ articleId: 'A-OTRO-DEPTO', precioUnitario: 1, precio: 1, total: 1 })]));
-  assert.strictEqual(r.status, ESTADOS_VALIDACION.INVALID_OPTION);
+  const p = pedido();
+  p.items[0].selectedOptionals['G-SAB'] = [sabor('O-77', 'Intruso')];
+  p.items[0].selectedOptionals['G-TOP'] = [topping({ precioUnitario: 1, precio: 1, total: 1 })];
+  assert.strictEqual(validar(p).status, ESTADOS_VALIDACION.INVALID_OPTION);
 });
 
 console.log('\nExperiencia del operador:');
 check('describe motivo, producto, unidad, opcional y los DOS importes', () => {
-  const d = describirParaOperador(validar(pedido({}, [rocklets({ precioUnitario: 100, precio: 100, total: 100 })])));
+  const d = describirParaOperador(validar(pedido({}, [topping({ precioUnitario: 100, precio: 100, total: 100 })])));
   assert.strictEqual(d.requiereDecision, true);
   assert.ok(d.titulo.length > 0);
   assert.strictEqual(d.totalRecibido, 14600);
@@ -234,7 +178,7 @@ check('describe motivo, producto, unidad, opcional y los DOS importes', () => {
   assert.deepStrictEqual(d.acciones, ['corregir-a-oficial', 'rechazar']);
 });
 check('NUNCA llama fraude a la diferencia', () => {
-  const d = describirParaOperador(validar(pedido({}, [rocklets({ precioUnitario: 100, precio: 100, total: 100 })])));
+  const d = describirParaOperador(validar(pedido({}, [topping({ precioUnitario: 100, precio: 100, total: 100 })])));
   const texto = `${d.titulo} ${d.aclaracion} ${d.lineas.join(' ')}`.toLowerCase();
   assert.ok(!texto.includes('fraude'));
   assert.ok(d.aclaracion.includes('cambio de precio'), 'contempla el cambio legítimo');
@@ -245,7 +189,7 @@ check('un pedido válido no pide decisión', () => {
 
 console.log('\nDecisión del operador y trazabilidad:');
 check('corregir al oficial deja el total oficial y conserva el original', () => {
-  const p = pedido({}, [rocklets({ precioUnitario: 100, precio: 100, total: 100 })]);
+  const p = pedido({}, [topping({ precioUnitario: 100, precio: 100, total: 100 })]);
   const r = validar(p);
   const corregido = aplicarDecisionOperador(p, r, { decision: 'corregir-a-oficial', operador: 'diego' });
   assert.strictEqual(corregido.payment.total, 16200);
@@ -256,7 +200,7 @@ check('corregir al oficial deja el total oficial y conserva el original', () => 
   assert.ok(corregido.validacionExterna.issues.length > 0, 'la diferencia no se oculta');
 });
 check('rechazar NO modifica los items', () => {
-  const p = pedido({}, [rocklets({ precioUnitario: 100, precio: 100, total: 100 })]);
+  const p = pedido({}, [topping({ precioUnitario: 100, precio: 100, total: 100 })]);
   const r = validar(p);
   const rechazado = aplicarDecisionOperador(p, r, { decision: 'rechazar' });
   assert.strictEqual(rechazado.items[0].selectedOptionals['G-TOP'][0].precioUnitario, 100);
@@ -285,28 +229,66 @@ check('un pedido LOCAL pasa sin restricción', () => {
 });
 
 console.log('\nHistóricos y compatibilidad:');
-check('un opcional histórico sin articleId en grupo manual no rompe', () => {
+check('un opcional histórico sin campos extra en grupo manual no rompe', () => {
   const p = pedido();
-  p.items[0].selectedOptionals = { 'G-SAB': [{ id: 'O-11', nombre: 'Chocolate', origen: 'manual', cantidad: 1 }] };
+  p.items[0].selectedOptionals = { 'G-SAB': [{ id: 'O-11', nombre: 'Chocolate', cantidad: 1 }] };
   p.items[0].subtotalLinea = 14500;
   p.payment.total = 14500;
   const r = validar(p);
   assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
 });
-check('los canonicalItems traen el snapshot corregido completo', () => {
+check('los canonicalItems traen el snapshot recalculado con el precio oficial', () => {
   const r = validar(pedido());
   const op = r.canonicalItems[0].selectedOptionals['G-TOP'][0];
-  for (const campo of ['articleId', 'departamentoId', 'precioUnitario', 'cantidad', 'total',
-    'costoUnitarioAplicado', 'costoTotal', 'controlaStock', 'consumoStockUnitario', 'consumoStockTotal']) {
+  for (const campo of ['id', 'nombre', 'precioUnitario', 'cantidad', 'total']) {
     assert.ok(op[campo] !== undefined, `falta ${campo}`);
   }
-  assert.strictEqual(op.costoUnitarioAplicado, 400);
+  assert.strictEqual(op.precioUnitario, 1700);
   assert.strictEqual(r.canonicalItems[0].subtotalLinea, 16200);
 });
 check('entradas basura no rompen', () => {
   assert.doesNotThrow(() => validarPedidoExterno(null, CATALOGO));
   assert.doesNotThrow(() => validarPedidoExterno({ items: [null, 7] }, CATALOGO));
   assert.doesNotThrow(() => validarPedidoExterno(pedido(), {}));
+});
+
+console.log('\nStock de receta al recibir:');
+const CATALOGO_RECETA = {
+  articulos: {
+    'A-CHIPA': {
+      nombre: 'Chipa rellena', valor: 500, activoDelivery: true, activoMostrador: true,
+      stock: { stockType: 'receta', receta: { 'M-CHIPAS': 1, 'M-QUESO': 0.05 } },
+    },
+  },
+  gruposOpcionales: {},
+  opcionales: {},
+  materiaPrima: { 'M-CHIPAS': { nombre: 'CHIPAS', stock: 10 }, 'M-QUESO': { nombre: 'QUESO', stock: 2 } },
+};
+const pedidoReceta = (over = {}) => ({
+  id: 2002, origen: 'DLV', status: { main: 'ACEPTADO' },
+  items: [{ id: 'A-CHIPA', codigo: 'A-CHIPA', nombre: 'Chipa rellena', valor: 500, precioBaseUnitario: 500, quantity: 1, uniqueId: 'r1', unidadIndice: 1, unidadTotal: 1, subtotalLinea: 500 }],
+  payment: { total: 500 }, ...over,
+});
+check('materia prima con stock → VALID', () => {
+  const r = validarPedidoExterno(pedidoReceta(), CATALOGO_RECETA, { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
+});
+check('materia prima agotada al recibir → UNAVAILABLE con detalle técnico', () => {
+  const cat = { ...CATALOGO_RECETA, materiaPrima: { ...CATALOGO_RECETA.materiaPrima, 'M-CHIPAS': { nombre: 'CHIPAS', stock: 0 } } };
+  const r = validarPedidoExterno(pedidoReceta(), cat, { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
+  const i = r.issues.find((x) => x.estado === ESTADOS_VALIDACION.UNAVAILABLE);
+  assert.ok(i.faltantesStock.some((f) => f.materiaPrimaId === 'M-CHIPAS' && f.stockActual === 0 && f.requerido === 1));
+});
+check('pedido por 5 unidades: stock alcanza para 1 → UNAVAILABLE', () => {
+  const cat = { ...CATALOGO_RECETA, materiaPrima: { ...CATALOGO_RECETA.materiaPrima, 'M-CHIPAS': { nombre: 'CHIPAS', stock: 1 } } };
+  const p = pedidoReceta(); p.items[0].quantity = 5; p.items[0].subtotalLinea = 2500; p.payment.total = 2500;
+  const r = validarPedidoExterno(p, cat, { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.UNAVAILABLE);
+});
+check('artículo sin receta no se bloquea por materias primas', () => {
+  const r = validarPedidoExterno(pedido(), { ...CATALOGO, materiaPrima: {} }, { canal: 'delivery' });
+  assert.strictEqual(r.status, ESTADOS_VALIDACION.VALID, JSON.stringify(r.issues));
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

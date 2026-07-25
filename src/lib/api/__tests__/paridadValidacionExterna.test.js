@@ -1,5 +1,5 @@
-// Fase 2 — punto 7: Desktop y Tablet deben producir EXACTAMENTE el mismo
-// resultado de validación para el mismo JSON de DLV.
+// Desktop y Tablet deben producir EXACTAMENTE el mismo resultado de validación
+// para el mismo JSON de DLV (grupos manuales).
 //
 // Compara la salida completa (status, issues, canonicalItems, totales) contra la
 // del repo vecino, importando su módulo real.
@@ -24,29 +24,23 @@ const OTROS = ['recepcion-de-pedidos-desktop', 'recepcion-de-pedidos-tab']
   .filter((r) => path.resolve(path.join(contenedor, r.nombre)) !== path.resolve(esteRepo) && fs.existsSync(r.ruta));
 
 const CATALOGO = {
-  departamentos: { 'D-TOP': { nombre: 'TOPPING' } },
   articulos: {
     'A-0007': {
-      nombre: '1 KILO DE HELADO', departamento: 'D-HELADO', valor: 14500, activoDelivery: true,
+      nombre: '1 KILO DE HELADO', valor: 14500, activoDelivery: true,
       opcionalesConfig: {
-        'G-TOP': {
-          activo: true, min: 0, max: 3, origen: 'departamento', departamentoId: 'D-TOP',
-          usarPrecioArticulo: true, controlarStock: true, consumoStockUnitarioDefault: 1,
-        },
+        'G-TOP': { activo: true, min: 0, max: 3, opcionales: ['O-21'] },
       },
     },
-    'A-ROCKLETS': { nombre: 'Rocklets', departamento: 'D-TOP', valor: 1700, costoUnitario: 400, controlStock: true, activoDelivery: true, stock: { stockType: 'propio', propio: 20 } },
   },
-  gruposOpcionales: { 'G-TOP': { nombre: 'TOPPING' } },
-  opcionales: {},
-  materiaPrima: {},
+  gruposOpcionales: { 'G-TOP': { nombre: 'TOPPINGS' } },
+  opcionales: { 'O-21': { nombre: 'Rocklets', grupo: 'G-TOP', precio: 1700, activo: true } },
 };
 
 /** Casos que deben dar el mismo resultado en los dos receptores. */
 const CASOS = {
   correcto: 1700,
   manipulado: 100,
-  gratis: 0,
+  cero: 0,
 };
 
 function pedidoCon(precio) {
@@ -59,11 +53,8 @@ function pedidoCon(precio) {
       unidadIndice: 1, unidadTotal: 1,
       selectedOptionals: {
         'G-TOP': [{
-          id: 'A-ROCKLETS', nombre: 'Rocklets', origen: 'departamento',
-          articleId: 'A-ROCKLETS', departamentoId: 'D-TOP',
+          id: 'O-21', nombre: 'Rocklets',
           precioUnitario: precio, precio, cantidad: 1, quantity: 1, total: precio,
-          costoUnitarioAplicado: 400, costoTotal: 400,
-          controlaStock: true, consumoStockUnitario: 1, consumoStockTotal: 1,
         }],
       },
       totalOpcionales: precio, subtotalLinea: total, opcionalesIncluidosEnValor: false,

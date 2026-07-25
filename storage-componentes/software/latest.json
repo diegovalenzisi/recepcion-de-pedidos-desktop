@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.57",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.57%2FRecepcion-de-Pedidos-Setup-1.3.57.exe?alt=media",
-  "sha256": "8c07707fc651e22ac9f8f38ccbcc8c5b63e8b880de352220ed5fb4a7208231dd",
-  "size": 125181258,
+  "latest": "1.3.63",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.63%2FRecepcion-de-Pedidos-Setup-1.3.63.exe?alt=media",
+  "sha256": "d8359e029591d4fbb12000bc3809275240f3f9099f7b54dca45e6acfcea683fb",
+  "size": 125218538,
   "mandatory": false,
-  "releaseDate": "2026-07-19",
-  "notes": "Versión 1.3.57: corrige la facturación automática que no arrancaba sola en Canadá al iniciar la app (esquema HTTPS:// en mayúsculas guardado en la configuración rompía la verificación de ownership del proceso principal). Ver notas completas en storage-componentes/software/1.3.57/version.json."
+  "releaseDate": "2026-07-24",
+  "notes": "Versión 1.3.63: automatiza la disponibilidad por stock de materias primas. Si una materia prima queda con stock 0 o negativo, pasa a activo:false y los artículos que la usan en su receta pasan a activoDelivery:false; al reponer stock se restauran solo los que estaban activos antes del apagado automático (soporta varias materias primas bloqueantes y respeta los cambios manuales). No modifica el activo del artículo. Ver notas completas en storage-componentes/software/1.3.63/version.json."
 }

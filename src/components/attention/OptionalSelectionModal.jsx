@@ -6,8 +6,6 @@ import { useToast } from '@/hooks/use-toast';
 import { Plus, Minus, Search, Loader2 } from 'lucide-react';
 import { fetchAllOptionalOrders, saveOptionalOrder, saveMultipleOptionalOrders } from '@/lib/api/optionalOrderApi';
 import { tienePrecio, obtenerPrecioOpcional, precioOpcionalInvalido } from '@/lib/api/optionalsPricing';
-import { combinarConfigDeGrupo, opcionesVisiblesDeGrupo, opcionSeleccionable, snapshotDeOpcion, ORIGEN_DEPARTAMENTO } from '@/lib/api/opcionesDeGrupo';
-import { isArticleAvailable } from '@/lib/api/stockAvailability';
 
 // Mismo patrón que el resto de los modales de atención (formato local ARS).
 const formatCurrency = (value) => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value);
@@ -17,11 +15,8 @@ function OptionalSelectionModal({
   onOpenChange, 
   article, 
   allOptionals, 
-  allOptionalGroups,
-  allArticles = [],
-  allRawMaterials = [],
-  canal = 'mostrador',
-  onConfirm,
+  allOptionalGroups, 
+  onConfirm, 
   initialSelection, 
   isSubmodal = false,
   isPromoItem = false,
@@ -51,59 +46,32 @@ function OptionalSelectionModal({
   const touchMoveDistance = useRef(0);
   const DRAG_THRESHOLD = 10; // pixels - movement less than this is considered a tap
 
-  // Fase 2 — punto 9: catálogo indexado por ID real, que es como se relacionan
-  // artículo y departamento. Nunca por nombre.
-  const articulosPorId = useMemo(() => {
-    const m = {};
-    (allArticles || []).forEach(a => { const k = a?.codigo || a?.id; if (k) m[String(k)] = a; });
-    return m;
-  }, [allArticles]);
-
-  const materiaPrimaPorId = useMemo(() => {
-    const m = {};
-    (allRawMaterials || []).forEach(mp => { const k = mp?.codigo || mp?.id; if (k) m[String(k)] = mp; });
-    return m;
-  }, [allRawMaterials]);
-
-  // Disponibilidad real del sistema: sirve para stock propio, heredado y receta.
-  const estaDisponible = useCallback(
-    (articleId) => isArticleAvailable(articleId, articulosPorId, materiaPrimaPorId, canal),
-    [articulosPorId, materiaPrimaPorId, canal]
-  );
-
-  // Fase 2 — punto 9: la configuración del grupo en el artículo se combina con
-  // la definición del catálogo, que es la que declara si el grupo es manual o
-  // por departamento. El artículo no puede contradecirla.
   const getArticleOptionalGroupConfig = useMemo(() => {
     if (!article || !article.opcionalesConfig) return [];
-
+    
     return Object.entries(article.opcionalesConfig)
       .map(([key, config]) => {
         if (typeof config !== 'object' || !config.activo) return null;
         const groupId = config.id || key;
-        const grupoDelCatalogo = (allOptionalGroups || []).find(
-          g => g && (g.codigo === groupId || g.id === groupId)
-        );
-        return combinarConfigDeGrupo({ id: groupId, ...config }, grupoDelCatalogo);
+        return { id: groupId, ...config };
       })
       .filter(Boolean);
-  }, [article, allOptionalGroups]);
+  }, [article]);
 
   const allVisibleOptionals = useMemo(() => {
     return getArticleOptionalGroupConfig.flatMap(groupConfig => {
       const groupId = groupConfig.id;
-      const { opciones } = opcionesVisiblesDeGrupo({
-        config: groupConfig,
-        opcionalesManuales: allOptionals || [],
-        articulos: articulosPorId,
-        materiaPrima: materiaPrimaPorId,
-        canal,
-        estaDisponible,
-        ordenPersonalizado: reorderedOptionals[groupId] || null,
-      });
-      return opciones.map(op => ({ ...op, groupId, optionalId: op.optionalId || op.id }));
+      const optionalsForThisConfig = groupConfig.opcionales || [];
+      
+      const orderedOptionalIds = reorderedOptionals[groupId] || optionalsForThisConfig;
+      
+      const optionalsInGroup = orderedOptionalIds
+        .map(id => (allOptionals || []).find(op => op.id === id && op.grupo === groupId))
+        .filter(Boolean);
+      
+      return optionalsInGroup.map(op => ({ ...op, groupId, optionalId: op.id }));
     });
-  }, [getArticleOptionalGroupConfig, allOptionals, reorderedOptionals, articulosPorId, materiaPrimaPorId, canal, estaDisponible]);
+  }, [getArticleOptionalGroupConfig, allOptionals, reorderedOptionals]);
 
   useEffect(() => {
     const loadSavedOrders = async () => {
@@ -121,10 +89,8 @@ function OptionalSelectionModal({
             const groupId = groupConfig.id;
             const savedOrder = savedOrders[groupId];
             
-            // El orden guardado a mano sólo aplica a grupos manuales: los
-            // dinámicos se ordenan por el catálogo vigente.
-            if (savedOrder && Array.isArray(savedOrder) && groupConfig.origen !== ORIGEN_DEPARTAMENTO) {
-              const currentOptionalIds = Array.isArray(groupConfig.opcionales) ? groupConfig.opcionales : [];
+            if (savedOrder && Array.isArray(savedOrder)) {
+              const currentOptionalIds = groupConfig.opcionales || [];
               const validSavedOrder = savedOrder.filter(id => currentOptionalIds.includes(id));
               const newOptionals = currentOptionalIds.filter(id => !validSavedOrder.includes(id));
               
@@ -446,14 +412,10 @@ function OptionalSelectionModal({
             });
         }
         
-        // Fase 2 — punto 9: el snapshot sale de la opción REALMENTE mostrada
-        // (manual o resuelta del departamento), no de una búsqueda en
-        // OPCIONALES: una opción dinámica no tiene registro ahí.
         selectedWithDetails[groupId] = Object.entries(groupSelection).map(([opId, quantity]) => {
-          const opcion = allVisibleOptionals.find(o => o.groupId === groupId && o.optionalId === opId);
-          if (!opcion) return null;
-          return snapshotDeOpcion(opcion, { cantidad: quantity, unidadIndice, unidadTotal });
-        }).filter(Boolean);
+          const optionalInfo = allOptionals?.find(op => op.id === opId);
+          return { ...optionalInfo, quantity };
+        });
     });
 
     if (!allGroupsValid) {
@@ -551,9 +513,13 @@ function OptionalSelectionModal({
             getArticleOptionalGroupConfig.map(groupConfig => {
               const groupId = groupConfig.id;
               const groupInfo = allOptionalGroups?.find(g => g.id === groupId);
-              // Fase 2 — punto 9: la lista que se dibuja es exactamente la ya
-              // resuelta (manual o del departamento). No se rearma acá.
-              const optionalsInGroup = allVisibleOptionals.filter(o => o.groupId === groupId);
+              const optionalsForThisConfig = groupConfig.opcionales || [];
+              
+              const orderedOptionalIds = reorderedOptionals[groupId] || optionalsForThisConfig;
+              
+              const optionalsInGroup = orderedOptionalIds
+                .map(id => (allOptionals || []).find(op => op.id === id && op.grupo === groupId))
+                .filter(Boolean);
 
               const groupName = groupInfo ? groupInfo.nombre : `Grupo ${groupId}`;
               const currentTotal = Object.values(selectedOptionals[groupId] || {}).reduce((sum, qty) => sum + qty, 0);
@@ -591,11 +557,7 @@ function OptionalSelectionModal({
 
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-1.5">
                     {optionalsInGroup.map(opcional => {
-                      // Fase 2 — punto 9: una opción sin stock o con precio
-                      // inválido se muestra igual (agotada, como siempre), pero
-                      // no se puede elegir. Nunca se oculta en silencio.
-                      const isDisabled = opcional.activo === false || opcional.status === false
-                        || !opcionSeleccionable(opcional);
+                      const isDisabled = opcional.activo === false || opcional.status === false;
                       const isFocused = focusedOptional?.optionalId === opcional.id && !isDisabled;
                       const qty = selectedOptionals[groupId]?.[opcional.id] || 0;
                       const isSelected = qty > 0;
@@ -655,7 +617,7 @@ function OptionalSelectionModal({
                                   (+{formatCurrency(obtenerPrecioOpcional(opcional))})
                                 </span>
                               )}
-                              {(opcional.precioInvalido === true || precioOpcionalInvalido(opcional)) && (
+                              {precioOpcionalInvalido(opcional) && (
                                 <span className="ml-1 font-extrabold text-red-600" title="Precio inválido: revisar el opcional">
                                   (precio inválido)
                                 </span>

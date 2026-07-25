@@ -1,7 +1,7 @@
 import { getDatabase, ref, get, runTransaction, update, push, set, onValue } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
-import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus } from './stockDeliveryAutomation';
+import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus, reconciliarMateriaPrima } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
 import { construirPlanDeStock } from './stockPlan';
 import { revertirEnRecurso, resolverResultadoRecurso } from './stockAtomico';
@@ -306,6 +306,13 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
                                     .catch(err => console.error(`[Validation] Failed for inherited stock of ${id}:`, err))
                             );
                         }
+                    } else {
+                        // MATERIA PRIMA: reconciliar activoDelivery según el stock
+                        // recién commiteado (idempotente, lee el estado del nodo).
+                        automationPromises.push(
+                            reconciliarMateriaPrima(id)
+                                .catch(err => console.error(`[MP Delivery] Failed for ${id}:`, err))
+                        );
                     }
 
                     const transaction = {
@@ -444,6 +451,14 @@ export const reverseStockForCounterSale = async (sale) => {
             resultado = resolverResultadoRecurso(resultado, (await get(refNodo)).val());
         }
         resultados.push({ itemId, tipo: datos.type, resultado });
+    }
+
+    // Reconciliar activoDelivery de las materias primas repuestas: la reversión
+    // sube el stock, así que puede corresponder reactivar delivery.
+    for (const r of resultados) {
+      if (r.tipo === 'MATERIA_PRIMA' && r.resultado === 'revertido') {
+        await reconciliarMateriaPrima(r.itemId).catch((e) => console.error('[MP Delivery] reversión', r.itemId, e));
+      }
     }
 
     const repuestos = resultados.filter((r) => r.resultado === 'revertido');

@@ -23,6 +23,7 @@ import { useMpBackendStatus } from '@/hooks/useMpBackendStatus.js';
 import { useMpAccounts } from '@/hooks/useMpAccounts.js';
 import VoicePaymentAlertWidget from '@/components/VoicePaymentAlertWidget.jsx';
 import { useStockStatus, StockStatusContext } from '@/hooks/useStockStatus.js';
+import { reconciliarTodasLasMateriasPrimas } from '@/lib/api/stockDeliveryAutomation';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OutOfStockModal from '@/components/management/OutOfStockModal.jsx';
 import { clearSafeLocalCache } from '@/lib/cache/cacheManager.js';
@@ -568,6 +569,17 @@ function AppContent() {
         return () => unsubscribe();
     }
   }, [localId, user, applySettings, firebaseReadiness.ready]);
+
+  // Reconciliación de MATERIA_PRIMA/{id}/activoDelivery al cargar / cambiar de
+  // local: corrige materias primas con stock <= 0 que hayan quedado en
+  // activoDelivery=true (datos existentes) y restaura las que corresponda.
+  // Idempotente y acotada al local actual. No modifica otros locales.
+  useEffect(() => {
+    if (localId && user && firebaseReadiness.ready) {
+      reconciliarTodasLasMateriasPrimas().catch((e) =>
+        console.warn('[MP Delivery] Reconciliación inicial falló:', e?.message || e));
+    }
+  }, [localId, user, firebaseReadiness.ready]);
 
   const handleSetupComplete = (newLocalId, localName) => {
     saveLocalId(newLocalId);

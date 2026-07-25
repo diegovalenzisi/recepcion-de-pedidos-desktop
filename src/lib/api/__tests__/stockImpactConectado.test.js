@@ -63,7 +63,7 @@ const MP = { 'M-3': { nombre: 'Azúcar', stock: 100 } };
 const plan = (items) => construirPlanDeStock({ items, articulos: ARTICULOS, materiaPrima: MP });
 
 const topping = (over = {}) => ({
-  nombre: 'Rocklets', origen: 'departamento', articleId: 'A-ROCKLETS',
+  nombre: 'Rocklets', articleId: 'A-ROCKLETS',
   controlaStock: true, consumoStockUnitario: 1, cantidad: 1, ...over,
 });
 const unidad = (ops, i, t) => ({
@@ -92,7 +92,7 @@ check('CASO 4 — opcional gratuito basado en artículo igual descuenta', () => 
   assert.strictEqual(impactMap['A-ROCKLETS'].quantity, 1);
 });
 check('opcional manual sin articleId NO mueve stock', () => {
-  const { impactMap } = plan([unidad([{ nombre: 'Rocklets', precio: 1700, origen: 'manual' }], 1, 1)]);
+  const { impactMap } = plan([unidad([{ nombre: 'Rocklets', precio: 1700 }], 1, 1)]);
   assert.ok(!impactMap['A-ROCKLETS']);
   assert.strictEqual(impactMap['A-0007'].quantity, 1);
 });

@@ -1,5 +1,7 @@
-import { getDatabase, ref, get, update } from 'firebase/database';
+import { getDatabase, ref, get, update, runTransaction } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
+import { aplicarReglaMateriaPrimaANodo, reconciliarArticuloDeliveryANodo, materiaPrimaDisponible } from './deliveryPorStock';
+import { materiasPrimasDeArticulo } from './disponibilidadReceta';
 
 /**
  * Stock Delivery Automation Module
@@ -225,6 +227,148 @@ export const fetchAffectedArticles = async () => {
   } catch (error) {
     console.error('[Stock Automation] Error fetching affected articles:', error);
     throw error;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// APAGADO AUTOMÁTICO POR FALTA DE STOCK DE MATERIA PRIMA
+//
+// stock <= 0  →  MATERIA_PRIMA/{id}/activo = false  +  cada ARTÍCULO que la usa
+//               en su receta →  activoDelivery = false (recordando su estado).
+// stock > 0   →  restaura MP y artículos si el apagado fue automático.
+//
+// Cada decisión se computa desde el estado propio del nodo (regla canónica pura)
+// dentro de runTransaction, así dos PCs/Tablets convergen y reprocesar no reactiva
+// de más. NUNCA se toca ARTICULOS/{id}/activo ni MATERIA_PRIMA/{id}/activoDelivery.
+// Identidad SIEMPRE por ID canónico (clave real), nunca por nombre.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconcilia el `activoDelivery` de UN artículo según la disponibilidad ACTUAL
+ * de las materias primas de su receta (leídas del snapshot provisto).
+ */
+const reconciliarArticuloPorMaterias = async (db, LOCAL_ID, articuloId, articulos, materiaPrima) => {
+  const usadas = materiasPrimasDeArticulo(articuloId, articulos, materiaPrima);
+  const bloqueantes = [];
+  for (const mpId of usadas) {
+    if (!materiaPrimaDisponible(materiaPrima[mpId])) bloqueantes.push(mpId);
+  }
+  const artRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articuloId}`);
+  let ultimoPatch = {};
+  await runTransaction(artRef, (nodo) => {
+    if (nodo === null || nodo === undefined || typeof nodo !== 'object') return nodo;
+    const { nodo: nuevo, patch } = reconciliarArticuloDeliveryANodo(nodo, bloqueantes);
+    ultimoPatch = patch;
+    return Object.keys(patch).length > 0 ? nuevo : undefined;
+  });
+  if (Object.keys(ultimoPatch).length > 0) {
+    console.log(`[MP DELIVERY] artículo ${articuloId} reconciliado (bloqueantes: ${bloqueantes.join(',') || 'ninguna'})`, ultimoPatch);
+  }
+  return Object.keys(ultimoPatch).length > 0;
+};
+
+/**
+ * Reconcilia UNA materia prima (activo por stock) y CASCADEA a todos los
+ * artículos que la usan en su receta (activoDelivery). Idempotente.
+ * @param {string} materiaPrimaId  ID canónico (p.ej. "11M")
+ */
+export const reconciliarMateriaPrima = async (materiaPrimaId) => {
+  if (!materiaPrimaId) return { cambio: false };
+  checkLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
+
+  try {
+    // 1) MATERIA_PRIMA/{id}/activo según su stock.
+    const mpRef = ref(db, `${LOCAL_ID}/MATERIA_PRIMA/${materiaPrimaId}`);
+    let patchMP = {};
+    await runTransaction(mpRef, (nodo) => {
+      if (nodo === null || nodo === undefined || typeof nodo !== 'object') return nodo;
+      const { nodo: nuevo, patch } = aplicarReglaMateriaPrimaANodo(nodo);
+      patchMP = patch;
+      return Object.keys(patch).length > 0 ? nuevo : undefined;
+    });
+    if (Object.keys(patchMP).length > 0) console.log(`[MP DELIVERY] materia prima ${materiaPrimaId} → activo`, patchMP);
+
+    // 2) Cascada a los artículos que usan esta materia prima (snapshot fresco).
+    const [artSnap, mpSnap] = await Promise.all([
+      get(ref(db, `${LOCAL_ID}/ARTICULOS`)),
+      get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`)),
+    ]);
+    const articulos = artSnap.val() || {};
+    const materiaPrima = mpSnap.val() || {};
+
+    let cambiados = 0;
+    for (const artId of Object.keys(articulos)) {
+      const usadas = materiasPrimasDeArticulo(artId, articulos, materiaPrima);
+      if (!usadas.has(materiaPrimaId)) continue; // solo los que usan esta MP
+      const cambio = await reconciliarArticuloPorMaterias(db, LOCAL_ID, artId, articulos, materiaPrima);
+      if (cambio) cambiados += 1;
+    }
+    return { cambio: Object.keys(patchMP).length > 0 || cambiados > 0, articulosCambiados: cambiados };
+  } catch (error) {
+    console.error(`[MP DELIVERY] Error reconciliando materia prima ${materiaPrimaId}:`, error);
+    return { cambio: false };
+  }
+};
+
+/**
+ * Reconciliación completa del local actual (arranque / cambio de local /
+ * datos existentes): pone activo=false a las materias primas agotadas y apaga
+ * el activoDelivery de los artículos afectados; restaura lo que corresponda.
+ * Solo el local actual. No afecta otros locales.
+ * @returns {Promise<{ materiasCambiadas: number, articulosCambiados: number }>}
+ */
+export const reconciliarTodasLasMateriasPrimas = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
+  const op = beginFirebaseOperation(LOCAL_ID);
+  const db = op.getDatabaseOrAbort();
+
+  let materiasCambiadas = 0;
+  let articulosCambiados = 0;
+  try {
+    // 1) Pasada de materias primas: activo según stock.
+    const mpSnap0 = await get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`));
+    if (mpSnap0.exists()) {
+      const mp0 = mpSnap0.val() || {};
+      for (const id of Object.keys(mp0)) {
+        const { patch } = aplicarReglaMateriaPrimaANodo(mp0[id] || {});
+        if (Object.keys(patch).length === 0) continue;
+        const mpRef = ref(db, `${LOCAL_ID}/MATERIA_PRIMA/${id}`);
+        let cambio = false;
+        await runTransaction(mpRef, (nodo) => {
+          if (nodo === null || nodo === undefined || typeof nodo !== 'object') return nodo;
+          const r = aplicarReglaMateriaPrimaANodo(nodo);
+          cambio = r.cambio;
+          return r.cambio ? r.nodo : undefined;
+        });
+        if (cambio) materiasCambiadas += 1;
+      }
+    }
+
+    // 2) Pasada de artículos: activoDelivery según materias bloqueantes (snapshot ya actualizado).
+    const [artSnap, mpSnap] = await Promise.all([
+      get(ref(db, `${LOCAL_ID}/ARTICULOS`)),
+      get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`)),
+    ]);
+    const articulos = artSnap.val() || {};
+    const materiaPrima = mpSnap.val() || {};
+    for (const artId of Object.keys(articulos)) {
+      const usadas = materiasPrimasDeArticulo(artId, articulos, materiaPrima);
+      if (usadas.size === 0) continue; // sin receta con materias primas: no aplica
+      const cambio = await reconciliarArticuloPorMaterias(db, LOCAL_ID, artId, articulos, materiaPrima);
+      if (cambio) articulosCambiados += 1;
+    }
+
+    if (materiasCambiadas > 0 || articulosCambiados > 0) {
+      console.log(`[MP DELIVERY] Reconciliación inicial: ${materiasCambiadas} materias primas y ${articulosCambiados} artículos ajustados.`);
+    }
+    return { materiasCambiadas, articulosCambiados };
+  } catch (error) {
+    console.error('[MP DELIVERY] Error en reconciliación total:', error);
+    return { materiasCambiadas, articulosCambiados };
   }
 };
 

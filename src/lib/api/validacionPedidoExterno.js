@@ -20,31 +20,29 @@
 // creación exige un backend/Cloud Function que selle el precio al crear el
 // pedido; queda preparado como pendiente y no se despliega.
 //
+// Los grupos de opcionales son MANUALES: sus opciones salen exclusivamente de
+// los opcionales guardados dentro del grupo (OPCIONALES/{id}). No se consulta
+// ningún departamento ni se resuelven opciones dinámicamente desde el catálogo.
+//
 // Módulo puro: recibe el catálogo ya leído. Idéntico en Desktop y Tablet, y
 // produce exactamente el mismo resultado para el mismo JSON.
 // ---------------------------------------------------------------------------
 
-import { idCanonico, mismoIdExacto, esIdLegado, resolverId } from './idsCanonicos.js';
+import { idCanonico, mismoIdExacto } from './idsCanonicos.js';
 import { normalizarImporte, calcularSubtotalLinea, calcularTotalPedido } from './optionalsPricing.js';
-import { combinarConfigDeGrupo } from './opcionesDeGrupo.js';
-import {
-  origenDeGrupo, configDepartamento, consumoEfectivo, costoEfectivo,
-  ORIGEN_DEPARTAMENTO, ORIGEN_MANUAL,
-} from './opcionalesDepartamento.js';
+import { evaluarRecetaPedido } from './disponibilidadReceta.js';
 
 export const ESTADOS_VALIDACION = Object.freeze({
   VALID: 'valid',
   PRICE_MISMATCH: 'price-mismatch',
   INVALID_OPTION: 'invalid-option',
   UNAVAILABLE: 'unavailable',
-  INVALID_CONSUMPTION: 'invalid-consumption',
 });
 
 /** Prioridad: si hay varios problemas, manda el más grave. */
 const PRIORIDAD = [
   ESTADOS_VALIDACION.INVALID_OPTION,
   ESTADOS_VALIDACION.UNAVAILABLE,
-  ESTADOS_VALIDACION.INVALID_CONSUMPTION,
   ESTADOS_VALIDACION.PRICE_MISMATCH,
 ];
 
@@ -80,21 +78,19 @@ const nuevaIssue = (base, motivo, extra = {}) => ({ ...base, motivo, ...extra })
  * Valida un pedido externo contra el catálogo oficial.
  *
  * @param {object} order
- * @param {object} catalogo  { articulos, departamentos, gruposOpcionales, opcionales }
+ * @param {object} catalogo  { articulos, gruposOpcionales, opcionales, materiaPrima }
  * @param {object} opciones  { canal, estaDisponible }
  * @returns {{status, issues, canonicalItems, canonicalTotal, receivedTotal}}
  */
 export function validarPedidoExterno(order, catalogo = {}, { canal = 'delivery', estaDisponible = null } = {}) {
   const articulos = catalogo.articulos || {};
-  const departamentos = catalogo.departamentos || {};
   const gruposOpcionales = catalogo.gruposOpcionales || {};
   const opcionalesCatalogo = catalogo.opcionales || {};
+  const materiaPrima = catalogo.materiaPrima || {};
 
   const items = Array.isArray(order?.items) ? order.items : [];
   const issues = [];
   const canonicalItems = [];
-
-  const clavesDepto = Object.keys(departamentos);
 
   for (const item of items) {
     // Un renglón corrupto se reporta, no tumba la validación del pedido entero.
@@ -125,6 +121,19 @@ export function validarPedidoExterno(order, catalogo = {}, { canal = 'delivery',
       if (!Number.isFinite(ui) || ui < 1 || ui > base.unidadTotal) {
         issues.push(nuevaIssue(base, `Numeración de unidad incoherente (${ui} de ${base.unidadTotal}).`, { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
       }
+    }
+
+    // Stock de receta al RECIBIR: una materia prima agotada entre el envío y la
+    // recepción bloquea la venta. Considera la cantidad pedida del ítem. El
+    // detalle técnico (materia prima, stock actual, requerido) queda en el issue
+    // para el registro del operador; nunca se expone al cliente.
+    const unidadesItem = Number(item.quantity ?? item.cantidad ?? 1) || 1;
+    const evalStock = evaluarRecetaPedido(productId, unidadesItem, articulos, materiaPrima);
+    if (!evalStock.suficiente) {
+      issues.push(nuevaIssue(base, 'El producto se quedó sin stock suficiente para prepararse.', {
+        estado: ESTADOS_VALIDACION.UNAVAILABLE,
+        faltantesStock: evalStock.faltantes,
+      }));
     }
 
     // Precio base oficial del artículo.
@@ -171,160 +180,46 @@ export function validarPedidoExterno(order, catalogo = {}, { canal = 'delivery',
         issues.push(nuevaIssue(baseGrupo, `Se superó el máximo del grupo: máximo ${max}, recibidas ${total}.`, { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
       }
 
-      // 5. El origen del grupo coincide con lo declarado en el snapshot.
-      // El origen lo declara el GRUPO del catálogo, no la config dentro del
-      // artículo: ahí sólo viven activo/min/max/obligatorio y, en los manuales,
-      // la lista de opciones. Sin combinar, un grupo por departamento se leería
-      // como manual y toda opción dinámica legítima caería en invalid-option.
-      // Si el grupo del catálogo declara su origen, manda él. Si no declara nada
-      // (grupo viejo, o catálogo de grupos no disponible), se respeta lo que
-      // traiga la config del artículo, que es donde vivía antes.
-      const configEfectiva = grupoInfo && typeof grupoInfo.origen === 'string' && grupoInfo.origen.trim() !== ''
-        ? combinarConfigDeGrupo(configEnArticulo, grupoInfo)
-        : configEnArticulo;
-      const origenOficial = origenDeGrupo(configEfectiva);
-      const cfgDepto = configDepartamento(configEfectiva);
+      // Lista oficial de opciones del grupo, tal como se guardó dentro del grupo.
+      const permitidas = Array.isArray(configEnArticulo.opcionales) ? configEnArticulo.opcionales.map(idCanonico) : [];
       const opsCanonicas = [];
 
       for (const op of opsRecibidas) {
         if (!op || typeof op !== 'object') continue;
         const optionId = idCanonico(op.id ?? op.optionId);
-        const articleId = idCanonico(op.articleId);
         const cantidad = Number(op.cantidad ?? op.quantity ?? 1) || 1;
-        const b = { ...baseGrupo, optionId, articleId, departamentoId: idCanonico(op.departamentoId) };
-        const origenRecibido = op.origen === ORIGEN_DEPARTAMENTO ? ORIGEN_DEPARTAMENTO : ORIGEN_MANUAL;
+        const b = { ...baseGrupo, optionId };
 
         const rPrecioRecibido = normalizarImporte(op.precioUnitario !== undefined ? op.precioUnitario : op.precio);
         const precioRecibido = rPrecioRecibido.valido && !rPrecioRecibido.ausente ? rPrecioRecibido.valor : 0;
 
-        if (origenRecibido !== origenOficial) {
-          issues.push(nuevaIssue(b, `El origen del grupo no coincide: recibido "${origenRecibido}", oficial "${origenOficial}".`, { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
+        // 6. La opción pertenece al grupo.
+        const pertenece = optionId && permitidas.some((p) => mismoIdExacto(p, optionId));
+        if (!pertenece) {
+          issues.push(nuevaIssue(b, 'La opción no pertenece a este grupo.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
           continue;
         }
-
-        // ---- Grupo MANUAL ----
-        if (origenOficial === ORIGEN_MANUAL) {
-          // 6. La opción pertenece al grupo.
-          const permitidas = Array.isArray(configEnArticulo.opcionales) ? configEnArticulo.opcionales.map(idCanonico) : [];
-          const pertenece = optionId && permitidas.some((p) => mismoIdExacto(p, optionId));
-          if (!pertenece) {
-            issues.push(nuevaIssue(b, 'La opción no pertenece a este grupo.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
-            continue;
-          }
-          const oficial = opcionalesCatalogo[optionId] || null;
-          if (!oficial) {
-            issues.push(nuevaIssue(b, 'La opción no existe en el catálogo.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
-            continue;
-          }
-          if (oficial.activo === false) {
-            issues.push(nuevaIssue(b, 'La opción está inactiva.', { estado: ESTADOS_VALIDACION.UNAVAILABLE }));
-            continue;
-          }
-          const rOficial = normalizarImporte(oficial.precio);
-          const precioOficial = rOficial.valido && !rOficial.ausente ? rOficial.valor : 0;
-          if (Math.abs(precioOficial - precioRecibido) > TOLERANCIA) {
-            issues.push(nuevaIssue(b, 'El precio del opcional no coincide con el oficial.', {
-              estado: ESTADOS_VALIDACION.PRICE_MISMATCH, precioRecibido, precioOficial,
-            }));
-          }
-          opsCanonicas.push({
-            ...op,
-            nombre: oficial.nombre ?? op.nombre,
-            precioUnitario: precioOficial, precio: precioOficial,
-            cantidad, quantity: cantidad, total: precioOficial * cantidad,
-            origen: ORIGEN_MANUAL,
-            consumoStockUnitario: 0, consumoStockTotal: 0, controlaStock: false,
-          });
+        const oficial = opcionalesCatalogo[optionId] || null;
+        if (!oficial) {
+          issues.push(nuevaIssue(b, 'La opción no existe en el catálogo.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
           continue;
         }
-
-        // ---- Grupo DEPARTAMENTO ----
-        if (!cfgDepto || !cfgDepto.departamentoId) {
-          issues.push(nuevaIssue(b, 'El grupo por departamento no tiene departamento configurado.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
+        if (oficial.activo === false) {
+          issues.push(nuevaIssue(b, 'La opción está inactiva.', { estado: ESTADOS_VALIDACION.UNAVAILABLE }));
           continue;
         }
-        // 7a. departamentoId exacto (con compatibilidad legada solo si el dato es histórico).
-        const rDepto = resolverId(b.departamentoId, clavesDepto, { permitirLegado: esIdLegado(b.departamentoId) });
-        if (rDepto.ambiguo) {
-          issues.push(nuevaIssue(b, 'El identificador de departamento es ambiguo y no puede resolverse.', {
-            estado: ESTADOS_VALIDACION.INVALID_OPTION, departamentoOficial: cfgDepto.departamentoId,
-          }));
-          continue;
-        }
-        if (!rDepto.id || !mismoIdExacto(rDepto.id, cfgDepto.departamentoId)) {
-          issues.push(nuevaIssue(b, 'El departamento del opcional no coincide con el configurado en el grupo.', {
-            estado: ESTADOS_VALIDACION.INVALID_OPTION, departamentoOficial: cfgDepto.departamentoId,
-          }));
-          continue;
-        }
-        // 7b. articleId exacto y existente.
-        if (!articleId) {
-          issues.push(nuevaIssue(b, 'El opcional de departamento no trae articleId.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
-          continue;
-        }
-        const artOpcional = articulos[articleId];
-        if (!artOpcional) {
-          issues.push(nuevaIssue(b, 'El artículo del opcional no existe en el catálogo.', { estado: ESTADOS_VALIDACION.INVALID_OPTION }));
-          continue;
-        }
-        // 7c. Pertenece al departamento.
-        if (!mismoIdExacto(artOpcional.departamento, cfgDepto.departamentoId)) {
-          issues.push(nuevaIssue(b, 'El artículo no pertenece al departamento configurado.', {
-            estado: ESTADOS_VALIDACION.INVALID_OPTION, departamentoOficial: cfgDepto.departamentoId,
-          }));
-          continue;
-        }
-        // 7d. Activo para el canal.
-        const activo = canal === 'delivery' ? artOpcional.activoDelivery !== false : artOpcional.activoMostrador !== false;
-        if (!activo || artOpcional.eliminado === true) {
-          issues.push(nuevaIssue(b, 'El artículo del opcional no está activo para este canal.', { estado: ESTADOS_VALIDACION.UNAVAILABLE }));
-          continue;
-        }
-        // 7e. Disponibilidad según la regla actual del sistema.
-        if (typeof estaDisponible === 'function' && !estaDisponible(articleId)) {
-          issues.push(nuevaIssue(b, 'El artículo del opcional no está disponible (sin stock).', { estado: ESTADOS_VALIDACION.UNAVAILABLE }));
-          continue;
-        }
-        // 7f. Precio oficial (del ARTÍCULO, no de OPCIONALES).
-        const rArt = normalizarImporte(cfgDepto.usarPrecioArticulo ? artOpcional.valor : 0);
-        const precioOficial = rArt.valido && !rArt.ausente ? rArt.valor : 0;
+        const rOficial = normalizarImporte(oficial.precio);
+        const precioOficial = rOficial.valido && !rOficial.ausente ? rOficial.valor : 0;
         if (Math.abs(precioOficial - precioRecibido) > TOLERANCIA) {
-          issues.push(nuevaIssue(b, 'El precio del opcional no coincide con el del artículo oficial.', {
+          issues.push(nuevaIssue(b, 'El precio del opcional no coincide con el oficial.', {
             estado: ESTADOS_VALIDACION.PRICE_MISMATCH, precioRecibido, precioOficial,
           }));
         }
-        // 7g. Consumo permitido y 7h. control de stock coherente.
-        const { consumo: consumoOficialUnit } = consumoEfectivo(configEfectiva, articleId);
-        const controlaStockOficial = cfgDepto.controlarStock && artOpcional.controlStock !== false;
-        const consumoOficial = controlaStockOficial ? consumoOficialUnit : 0;
-        const consumoRecibido = Number(op.consumoStockUnitario);
-        if (!Number.isFinite(consumoRecibido) || Math.abs(consumoRecibido - consumoOficial) > 1e-6) {
-          issues.push(nuevaIssue(b, 'El consumo de stock no coincide con el configurado.', {
-            estado: ESTADOS_VALIDACION.INVALID_CONSUMPTION,
-            consumoRecibido: Number.isFinite(consumoRecibido) ? consumoRecibido : null,
-            consumoOficial,
-          }));
-        }
-        if (!!op.controlaStock !== controlaStockOficial) {
-          issues.push(nuevaIssue(b, 'El control de stock del opcional no coincide con la configuración.', {
-            estado: ESTADOS_VALIDACION.INVALID_CONSUMPTION,
-            consumoRecibido: Number.isFinite(consumoRecibido) ? consumoRecibido : null,
-            consumoOficial,
-          }));
-        }
-
-        const costoUnit = costoEfectivo(articleId, articulos, catalogo.materiaPrima || {});
         opsCanonicas.push({
           ...op,
-          nombre: artOpcional.nombre ?? op.nombre,
-          origen: ORIGEN_DEPARTAMENTO,
-          articleId,
-          departamentoId: cfgDepto.departamentoId,
+          nombre: oficial.nombre ?? op.nombre,
           precioUnitario: precioOficial, precio: precioOficial,
           cantidad, quantity: cantidad, total: precioOficial * cantidad,
-          costoUnitarioAplicado: costoUnit, costoTotal: costoUnit * cantidad,
-          controlaStock: controlaStockOficial,
-          consumoStockUnitario: consumoOficial, consumoStockTotal: consumoOficial * cantidad,
         });
       }
 
@@ -385,18 +280,15 @@ export function describirParaOperador(resultado) {
   }
   const lineas = resultado.issues.map((i) => {
     const unidad = (i.unidadTotal > 1 && i.unidadIndice) ? ` (Unidad ${i.unidadIndice} de ${i.unidadTotal})` : '';
-    const opcional = i.grupoNombre ? ` › ${i.grupoNombre}${i.optionId || i.articleId ? ` › ${i.nombreOpcional || i.articleId || i.optionId}` : ''}` : '';
+    const opcional = i.grupoNombre ? ` › ${i.grupoNombre}${i.optionId ? ` › ${i.nombreOpcional || i.optionId}` : ''}` : '';
     const importes = (i.precioRecibido !== undefined && i.precioOficial !== undefined)
       ? ` — recibido $${i.precioRecibido} · oficial $${i.precioOficial}` : '';
-    const consumo = (i.consumoRecibido !== undefined && i.consumoOficial !== undefined)
-      ? ` — consumo recibido ${i.consumoRecibido} · oficial ${i.consumoOficial}` : '';
-    return `${i.producto || '(sin producto)'}${unidad}${opcional}: ${i.motivo}${importes}${consumo}`;
+    return `${i.producto || '(sin producto)'}${unidad}${opcional}: ${i.motivo}${importes}`;
   });
   const titulos = {
     [ESTADOS_VALIDACION.PRICE_MISMATCH]: 'El pedido llegó con precios distintos a los oficiales',
     [ESTADOS_VALIDACION.INVALID_OPTION]: 'El pedido llegó con opciones que no corresponden',
     [ESTADOS_VALIDACION.UNAVAILABLE]: 'El pedido incluye artículos no disponibles',
-    [ESTADOS_VALIDACION.INVALID_CONSUMPTION]: 'El pedido llegó con un consumo de stock distinto al configurado',
   };
   return {
     requiereDecision: true,

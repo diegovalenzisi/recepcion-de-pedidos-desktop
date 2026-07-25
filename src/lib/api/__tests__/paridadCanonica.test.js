@@ -30,6 +30,10 @@ const NUCLEO = [
   'src/lib/api/optionalsPricing.js',
   'src/lib/api/unidadesPedido.js',
   'src/lib/api/idsCanonicos.js',                  // identidad de departamentos/artículos
+  'src/lib/api/disponibilidadReceta.js',          // disponibilidad derivada por receta
+  'src/lib/api/__tests__/disponibilidadReceta.test.js',
+  'src/lib/api/deliveryPorStock.js',              // auto-toggle de activoDelivery de materia prima
+  'src/lib/api/__tests__/deliveryPorStock.test.js',
   'src/lib/api/sha256.js',                        // hashing portable del impacto
   'src/lib/api/__tests__/sha256.test.js',
   'src/lib/api/__tests__/fixturesCanonicos.js',   // entradas y esperados del contrato
@@ -37,22 +41,12 @@ const NUCLEO = [
   'src/lib/api/__tests__/idsCanonicos.test.js',
   'src/lib/api/bloqueoPrecioInvalido.js',
   'src/lib/api/__tests__/bloqueoPrecioInvalido.test.js',
-  'src/lib/api/opcionesDeGrupo.js',
-  'src/lib/api/__tests__/opcionesDeGrupo.test.js',
-  'src/lib/api/__tests__/selectorDinamicoConectado.test.js',
-  'src/lib/api/opcionalesDepartamento.js',
-  'src/lib/api/__tests__/opcionalesDepartamento.test.js',
 ];
 
 // COMPARTIDOS ENTRE RECEPTORES: solo aplican a Desktop y Tablet (DLV no imprime
 // tickets, no calcula costo/ganancia y no ingiere pedidos: los emite).
 // Donde existan en dos repos, deben coincidir.
 const COMPARTIDOS_RECEPTORES = [
-  // La configuración de grupos vive en las pantallas de administración, que sólo
-  // existen en Desktop y Tablet. DLV consume el resultado vía opcionalesDepartamento.
-  'src/lib/api/grupoOpcionalForm.js',
-  'src/lib/api/__tests__/grupoOpcionalForm.test.js',
-  'src/lib/api/__tests__/grupoFormConectado.test.js',
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',
@@ -62,7 +56,6 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/__tests__/stockPlan.test.js',
   'src/lib/api/__tests__/stockImpactConectado.test.js',
   'src/lib/api/__tests__/stockEmulator.integration.mjs',
-  'src/lib/api/__tests__/negocioEmulator.integration.mjs',
   'src/lib/api/validacionPedidoExterno.js',
   'src/lib/api/__tests__/validacionPedidoExterno.test.js',
   'src/lib/api/__tests__/paridadValidacionExterna.test.js',

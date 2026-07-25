@@ -2,7 +2,8 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, runTransaction, update, onValue, off } from 'firebase/database';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
-import { validateInheritedStockStatus } from './stockDeliveryAutomation';
+import { validateInheritedStockStatus, reconciliarMateriaPrima } from './stockDeliveryAutomation';
+import { aplicarReglaMateriaPrima, resolverToggleManualMateriaPrima } from './deliveryPorStock';
 import { calcularCostoPromo } from '@/lib/utils/promoCosting';
 import { deleteArticleImage, migrateArticleImageIfNeeded } from '@/lib/firebase/storage';
 import { getAvailableUnits } from '@/lib/api/stockAvailability';
@@ -543,9 +544,59 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
             stock: dataToSave.stock,
         });
     }
+    // MATERIA PRIMA: resolver `activo` + marcadores ANTES del set() (que
+    // reemplaza el nodo completo). Se arrastran los flags previos para no perder
+    // la memoria de restauración, y se respeta la intención MANUAL del usuario
+    // según el stock (encender con stock 0 no habilita; apagar durante el
+    // agotamiento cancela la restauración). El cascadeo a los artículos y el
+    // caso puramente de stock los asegura la reconciliación posterior al set().
+    if (tabId === 'materia-prima') {
+        let existente = {};
+        if (isEditing) {
+            try {
+                const s = await get(ref(op.getDatabaseOrAbort(), finalPath));
+                if (s.exists()) existente = s.val() || {};
+            } catch (e) {
+                console.warn('[MP Save] No se pudo leer el estado previo:', e?.message || e);
+            }
+        }
+        const base = { ...existente, ...dataToSave };
+        if (dataToSave.activo === undefined && existente.activo !== undefined) {
+            base.activo = existente.activo;
+        }
+        base.apagadoAutomaticoPorStock = existente.apagadoAutomaticoPorStock;
+        base.activoAntesDeAgotarse = existente.activoAntesDeAgotarse;
+        base.stock = dataToSave.stock;
+
+        const intencionManual = dataToSave.activo !== undefined
+            && Boolean(dataToSave.activo) !== Boolean(existente.activo);
+        const { patch } = intencionManual
+            ? resolverToggleManualMateriaPrima(base, Boolean(dataToSave.activo))
+            : aplicarReglaMateriaPrima(base);
+
+        dataToSave.apagadoAutomaticoPorStock = existente.apagadoAutomaticoPorStock;
+        dataToSave.activoAntesDeAgotarse = existente.activoAntesDeAgotarse;
+        if (base.activo !== undefined) dataToSave.activo = base.activo;
+        for (const [k, v] of Object.entries(patch)) {
+            if (v === null) delete dataToSave[k];
+            else dataToSave[k] = v;
+        }
+        for (const k of ['activo', 'apagadoAutomaticoPorStock', 'activoAntesDeAgotarse']) {
+            if (dataToSave[k] === undefined) delete dataToSave[k];
+        }
+    }
+
     // Revalida antes del set() definitivo: arriba puede haber habido lecturas
     // previas y/o una migración de imagen a Storage (awaits reales).
     await set(ref(op.getDatabaseOrAbort(), finalPath), dataToSave);
+
+    // MATERIA PRIMA: reconciliación idempotente posterior al set — pone
+    // activo=false si el stock quedó en 0 y cascada activoDelivery a los
+    // artículos que la usan (y restaura lo que corresponda).
+    if (tabId === 'materia-prima') {
+        try { await reconciliarMateriaPrima(newKey); }
+        catch (e) { console.warn('[MP Save] reconciliación posterior falló:', e?.message || e); }
+    }
 
     // RTDB ya quedó guardado OK → recién ahora borrar la imagen vieja (best-effort).
     if (oldFotoToDelete && oldFotoToDelete !== dataToSave.foto) {

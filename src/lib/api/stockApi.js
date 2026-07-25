@@ -1,5 +1,5 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
-import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment } from './stockDeliveryAutomation';
+import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, reconciliarMateriaPrima } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
 import { resolveStockImpact } from './transactionsApi';
 
@@ -140,6 +140,13 @@ export const updateStock = async (itemCodigo, newStock, itemType) => {
         } catch (automationError) {
             console.error(`[Stock Automation] Error applying automation for ${itemCodigo}:`, automationError);
         }
+    } else {
+        // MATERIA PRIMA: reconciliar activoDelivery según el nuevo stock (idempotente).
+        try {
+            await reconciliarMateriaPrima(itemCodigo);
+        } catch (automationError) {
+            console.error(`[MP Delivery] Error reconciliando ${itemCodigo}:`, automationError);
+        }
     }
 
     return result;
@@ -217,6 +224,17 @@ export const bulkUpdateStock = async (updates) => {
         } catch (automationError) {
             console.error(`[Stock Automation] Error in bulk update for ${change.articleId}:`, automationError);
         }
+    }
+
+    // MATERIA PRIMA: reconciliar activoDelivery de cada materia prima tocada por
+    // el PATCH masivo (idempotente; lee el estado ya escrito).
+    const mpIds = new Set();
+    for (const path of Object.keys(updates)) {
+        const m = String(path).match(/MATERIA_PRIMA\/([^/]+)\/stock$/);
+        if (m) mpIds.add(m[1]);
+    }
+    for (const mpId of mpIds) {
+        await reconciliarMateriaPrima(mpId).catch(err => console.error(`[MP Delivery] bulk ${mpId}:`, err));
     }
 
     // Verify promotions availability after bulk stock changes
