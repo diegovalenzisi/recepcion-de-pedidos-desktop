@@ -151,15 +151,23 @@ export const saveCounterSale = async (saleData, shift) => {
         console.error('[VENTA MOSTRADOR] error stock:', e);
       }
 
+      // LEDGER DE PREPAGOS (PedidosYa / Rappi).
+      //
+      // `savePrepaymentForApp` EXIGE la fecha operativa: sin ella lanza y el
+      // catch de abajo se lo tragaba, así que desde que cambió esa firma NINGÚN
+      // prepago de mostrador se registraba (las ventas sí quedaban guardadas y
+      // con su medio de pago; lo que faltaba era este asiento derivado).
+      // El reporte de prepagos ya no depende de este nodo —lee las ventas—,
+      // pero el ledger se sigue escribiendo porque lo usa "Ventas por Apps".
       if (saleData.payments && saleData.payments.length > 0) {
         tb = Date.now();
         for (const payment of saleData.payments) {
           try {
             const methodUpper = payment.method.toUpperCase();
             if (methodUpper.includes('PREPAGO PEDIDOSYA') || methodUpper === 'PREPAGO_PEDIDOSYA') {
-              await savePrepaymentForApp('PEDIDOSYA', payment.amount);
+              await savePrepaymentForApp('PEDIDOSYA', payment.amount, fechaCaja);
             } else if (methodUpper.includes('PREPAGO RAPPI') || methodUpper === 'PREPAGO_RAPPI') {
-              await savePrepaymentForApp('RAPPI', payment.amount);
+              await savePrepaymentForApp('RAPPI', payment.amount, fechaCaja);
             }
           } catch (prepError) {
             console.error('[VENTA MOSTRADOR] error prepago:', prepError);

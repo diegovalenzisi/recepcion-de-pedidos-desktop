@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.65",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.65%2FRecepcion-de-Pedidos-Setup-1.3.65.exe?alt=media",
-  "sha256": "f4584cc71e955856feb6a4b79f6a808d1076d23c8aed41b1ae1bce8ad0459ad5",
-  "size": 125218566,
+  "latest": "1.3.66",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.66%2FRecepcion-de-Pedidos-Setup-1.3.66.exe?alt=media",
+  "sha256": "6935833ce7cf6588d2e49e4d8b0dd0672c66fa39dd8a6384f4c6e0e17c1844a2",
+  "size": 125221398,
   "mandatory": false,
   "releaseDate": "2026-07-26",
-  "notes": "Versión 1.3.65: remitos (FCX) para las ventas que no se facturan. Al confirmar una venta de mostrador o entregar un pedido sin factura se emite un remito y se guarda en /{localId}/Remitos/{FCX...}, con numeración propia que nunca consume la de AFIP. La pestaña Remitos del módulo Ventas ahora lee esa ruta en vivo, con el mismo filtro Hoy y Desde/Hasta que Facturación, muestra el contador correcto y permite reimprimir el comprobante guardado. Emitir un remito no descuenta stock, no registra caja ni comisiones y no toca VENTAS; reprocesar la misma venta no genera un segundo comprobante, y una venta facturada no genera remito. Incluye además la opción \"Ignora Stock\" por materia prima, las rutas por local bajo /{localId}/ con falla segura si no hay local válido, y FACTURACION_OWNERS dentro del local. Ver notas completas en storage-componentes/software/1.3.65/version.json."
+  "notes": "Versión 1.3.66: corrige Reportes de Prepago, que mostraba sólo dos o tres movimientos aunque hubiera decenas de ventas de PedidosYa y Rappi. Ahora la fuente del reporte es la venta: se leen las ventas del turno abierto y las de turnos cerrados desde el respaldo, pidiendo solamente los días del rango elegido, y el asiento de prepagos sólo aporta las fechas que ninguna venta cubre, así nada se cuenta dos veces. Se reconocen todas las variantes del nombre de cada plataforma, en un pago dividido se toma únicamente la parte cobrada por la app, las ventas canceladas no figuran y el rango Desde/Hasta es inclusivo. La tabla muestra la referencia real de la venta, y las tarjetas y el Excel se calculan sobre exactamente las filas visibles. Se corrigió además el asiento de prepago de las ventas de mostrador, que no se estaba registrando. Incluye lo publicado en 1.3.65: remitos FCX en /{localId}/Remitos, \"Ignora Stock\" por materia prima, rutas por local con falla segura y FACTURACION_OWNERS dentro del local. Ver notas completas en storage-componentes/software/1.3.66/version.json."
 }
