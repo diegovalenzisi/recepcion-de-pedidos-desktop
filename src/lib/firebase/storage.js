@@ -1,14 +1,38 @@
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
-import { getFirebaseApp, getLocationSpecificStorageBucket, getLocationSpecificStorageBasePath, getLocalId } from './core';
+import { getFirebaseApp, getLocationSpecificStorageBucket, getLocationSpecificStorageBasePath, getLocalId, getCurrentLocalId } from './core';
+import { construirRutaStorageLocal, normalizarLocalId } from '@/lib/api/rutasLocales';
 
-// Prefijo interno de Storage por local (storageBasePath). NO es el bucket: el bucket
-// se usa tal cual para inicializar Firebase. Esto es solo una carpeta base dentro del
-// bucket para las subidas NUEVAS. Si no hay storageBasePath configurado → prefijo vacío
-// → comportamiento idéntico al actual (rutas sin prefijo). Normaliza barras sobrantes.
-const storagePrefix = (localId) => {
+// REGLA DE ALMACENAMIENTO POR LOCAL (Firebase Storage):
+//
+//     {localId}/...     ej: 40508022/articulos/156A_1712345678.png
+//
+// El número de local es SIEMPRE el primer segmento. Antes había dos formas
+// incorrectas conviviendo: subidas SIN prefijo (cuando el local no tenía
+// `storageBasePath` configurado, que es el caso por defecto) y rutas INVERTIDAS
+// (`facturacion/{localId}/...`, `app-icons/{localId}/...`,
+// `actualizaciones/{localId}/...`). Ambas quedaron corregidas.
+//
+// `storageBasePath` sigue respetándose como raíz explícita del local cuando está
+// configurado (es literalmente "la carpeta de ese local"); si no lo está, la raíz
+// es el propio número de local — nunca la raíz del bucket.
+
+/** Raíz de Storage del local: storageBasePath si está configurado, si no el localId. */
+const raizStorage = (localId) => {
   const base = (getLocationSpecificStorageBasePath(localId) || '').replace(/^\/+|\/+$/g, '');
-  return base ? `${base}/` : '';
+  return normalizarLocalId(base || localId);
 };
+
+/**
+ * Construye una ruta de Storage DENTRO del local. Sin local válido lanza
+ * LOCAL_ID_REQUIRED y la subida se cancela (nunca se sube a la raíz del bucket).
+ */
+const rutaLocal = (localId, ruta) => construirRutaStorageLocal(raizStorage(localId), ruta);
+
+/** Prefijo con barra final del local actual (para composiciones puntuales). */
+const storagePrefix = (localId) => construirRutaStorageLocal(raizStorage(localId));
+
+/** Local actual normalizado (variable de módulo o localStorage). */
+const localActual = () => normalizarLocalId(getCurrentLocalId() || getLocalId());
 
 export const uploadArticleImage = async (file, articleCode) => {
   try {
@@ -17,13 +41,13 @@ export const uploadArticleImage = async (file, articleCode) => {
       throw new Error('Firebase no está inicializado');
     }
 
-    const localId = getLocalId();
+    const localId = localActual();
     const storageBucket = getLocationSpecificStorageBucket(localId);
     const storage = getStorage(app);
     
     const timestamp = Date.now();
     const fileExtension = file.name.split('.').pop().toLowerCase();
-    const fileName = `${storagePrefix(localId)}articulos/${articleCode}_${timestamp}.${fileExtension}`;
+    const fileName = rutaLocal(localId, `articulos/${articleCode}_${timestamp}.${fileExtension}`);
     const storageRef = ref(storage, fileName);
 
     const metadata = {
@@ -62,13 +86,13 @@ export const uploadWebImage = async (file) => {
       throw new Error('Firebase no está inicializado');
     }
 
-    const localId = getLocalId();
+    const localId = localActual();
     const storageBucket = getLocationSpecificStorageBucket(localId);
     const storage = getStorage(app);
     
     const timestamp = Date.now();
     // Always use jpg for compressed web images
-    const fileName = `${storagePrefix(localId)}web/featured_${timestamp}.jpg`;
+    const fileName = rutaLocal(localId, `web/featured_${timestamp}.jpg`);
     const storageRef = ref(storage, fileName);
 
     const metadata = {
@@ -100,7 +124,7 @@ export const deleteArticleImage = async (imageUrl) => {
       throw new Error('Firebase no está inicializado');
     }
 
-    const localId = getLocalId();
+    const localId = localActual();
     const storageBucket = getLocationSpecificStorageBucket(localId);
     const storage = getStorage(app);
     
@@ -134,25 +158,30 @@ const extractStoragePath = (imageUrl) => {
 };
 
 /**
- * Migra (copia) la imagen de UN artículo a la carpeta base storageBasePath, SOLO si
- * hace falta. Devuelve { newUrl } si migró, o null si no había nada que hacer.
+ * Migra (copia) la imagen de UN artículo a la carpeta del local, SOLO si hace
+ * falta. Devuelve { newUrl } si migró, o null si no había nada que hacer.
  * NO borra la imagen vieja: eso lo hace el caller (managementApi) DESPUÉS de guardar
  * en RTDB, para respetar el orden seguro.
  *
- * No hace nada si: foto vacío · no es URL de Firebase Storage · no hay storageBasePath
- * configurado · el path ya empieza con "{storageBasePath}/".
+ * No hace nada si: foto vacío · no es URL de Firebase Storage · no hay un local
+ * válido · el path ya empieza con "{localId}/".
  * Si la descarga/subida falla, LANZA (el caller lo captura y no borra la vieja).
  */
 export const migrateArticleImageIfNeeded = async (foto, articleCode) => {
   if (!foto || !foto.includes('firebasestorage.googleapis.com')) return null;
 
-  const localId = getLocalId();
-  const prefix = storagePrefix(localId); // "40508022/" o ""
-  if (!prefix) return null; // sin storageBasePath → nada que migrar
+  const localId = localActual();
+  if (!localId) return null;            // sin local válido no se migra nada
+  let prefix;
+  try {
+    prefix = storagePrefix(localId);    // "40508022/"
+  } catch {
+    return null;                        // raíz de local no resoluble: no se toca nada
+  }
 
   const oldPath = extractStoragePath(foto);
   if (!oldPath) return null;
-  if (oldPath.startsWith(prefix)) return null; // ya está bajo storageBasePath
+  if (oldPath.startsWith(prefix)) return null; // ya está dentro del local
 
   const app = getFirebaseApp();
   if (!app) throw new Error('Firebase no está inicializado');
@@ -165,7 +194,7 @@ export const migrateArticleImageIfNeeded = async (foto, articleCode) => {
   // Subir al nuevo path con prefijo storageBasePath, conservando la extensión real
   const ext = (oldPath.split('.').pop() || 'png').toLowerCase();
   const timestamp = Date.now();
-  const newName = `${prefix}articulos/${articleCode}_${timestamp}.${ext}`;
+  const newName = rutaLocal(localId, `articulos/${articleCode}_${timestamp}.${ext}`);
   const storage = getStorage(app);
   const storageRef = ref(storage, newName);
 
@@ -198,7 +227,7 @@ export const uploadAfipFile = async (localId, tipo, cuentaId, filename, base64Da
 
   const storage = getStorage(app);
   const accountSegment = cuentaId ? `${tipo}/${cuentaId}` : tipo;
-  const storagePath    = `facturacion/${localId}/${accountSegment}/${filename}`;
+  const storagePath    = rutaLocal(localId, `facturacion/${accountSegment}/${filename}`);
   const storageRef     = ref(storage, storagePath);
 
   const bytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
@@ -221,9 +250,9 @@ export const uploadUpdateInstaller = (file, onProgress) => {
     const app = getFirebaseApp();
     if (!app) { reject(new Error('Firebase no está inicializado')); return; }
 
-    const localId = getLocalId();
+    const localId = localActual();
     const storage = getStorage(app);
-    const storageRef = ref(storage, `actualizaciones/${localId}/${file.name}`);
+    const storageRef = ref(storage, rutaLocal(localId, `actualizaciones/${file.name}`));
 
     const metadata = {
       contentType: 'application/octet-stream',
@@ -284,7 +313,7 @@ export const uploadAppIcon = async (file, localId) => {
 
     const timestamp = Date.now();
     const fileExtension = (file.name.split('.').pop() || 'png').toLowerCase();
-    const fileName = `app-icons/${localId}/icon-${timestamp}.${fileExtension}`;
+    const fileName = rutaLocal(localId, `app-icons/icon-${timestamp}.${fileExtension}`);
     const storageRef = ref(storage, fileName);
 
     const metadata = {
@@ -321,7 +350,7 @@ export const uploadAppLogo = async (file, localId) => {
     const storageBucket = getLocationSpecificStorageBucket(localId);
     const storage = getStorage(app);
 
-    const fileName = `${localId}/logo`;
+    const fileName = rutaLocal(localId, 'logo');
     const storageRef = ref(storage, fileName);
 
     const metadata = {

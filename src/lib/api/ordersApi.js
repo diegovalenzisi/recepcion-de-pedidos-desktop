@@ -8,6 +8,7 @@ import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { construirLineaPersistible, enriquecerOpcionalSnapshot } from '@/lib/api/optionalsPricing';
 import { normalizarPedidosRecibidos } from '@/lib/api/ordersIngest';
 import { processStockForDeliveredOrder } from './transactionsApi';
+import { emitirRemitoDeVenta } from '@/lib/api/remitosApi';
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
 export const validateStatusChange = (currentStatus, newStatus, orderType) => {
@@ -553,7 +554,19 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
         
         if (!wasEntregado && isEntregadoTarget) {
             await saveFacturacionForPayments(orderId, orderData, 'delivery');
-            
+
+            // REMITO (FCX) del pedido entregado que NO se factura. Idempotente
+            // (marca PEDIDOS/{id}/remito): reentregar o reprocesar el mismo
+            // pedido no emite un segundo comprobante. No toca stock ni caja.
+            try {
+                const remito = await emitirRemitoDeVenta({ ...orderData, id: orderData.id ?? orderId }, { canal: 'delivery' });
+                if (remito.estado === 'error' || remito.estado === 'sin-local') {
+                    console.error(`[REMITO] pedido ${orderId} sin remito (${remito.estado}): ${remito.motivo}`);
+                }
+            } catch (remitoError) {
+                console.error(`[REMITO] Error emitiendo el remito del pedido ${orderId}:`, remitoError);
+            }
+
             try {
                 stockResult = await processStockForDeliveredOrder(orderData);
             } catch (stockError) {

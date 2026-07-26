@@ -3,9 +3,20 @@
  *
  * Se guarda en el MISMO RTDB que usa el motor de facturación de esa cuenta
  * (fields.firebaseDb — puede ser un proyecto Firebase distinto al de la app,
- * ya que cada cuenta AFIP define su propio FIREBASE_DB), en un path nuevo e
- * independiente de CONFIGURACION (FACTURACION_OWNERS), para no depender de
- * getCurrentLocalId() ni pisar reglas existentes.
+ * ya que cada cuenta AFIP define su propio FIREBASE_DB).
+ *
+ * RUTA CANÓNICA (regla de almacenamiento por local):
+ *
+ *     /{localId}/FACTURACION_OWNERS/{cuit}_{ptoVta}
+ *
+ * Ahí viven TODOS los datos técnicos del dueño: id y tipo de dispositivo,
+ * lease, heartbeat, vencimiento, estado, inicio automático y los locks/tokens
+ * asociados. Desktop y Tablet usan exactamente la misma estructura.
+ *
+ * La ruta global anterior (`/FACTURACION_OWNERS/{key}`) quedó DEPRECADA: ya no
+ * se escribe nunca. Solo se lee como FALLBACK, y únicamente cuando el registro
+ * nuevo todavía no existe, para no romper una instalación que aún no migró.
+ * No hay doble escritura: la fuente de verdad es siempre la ruta nueva.
  *
  * Se usa REST plano (fetch) — mismo patrón que el resto de la app usa contra
  * RTDB — para no requerir el SDK de Firebase apuntando a un proyecto distinto
@@ -13,6 +24,7 @@
  */
 
 import { normalizeFirebaseDatabaseURL } from '@/lib/utils/firebaseUrl';
+import { construirRutaLocal, normalizarLocalId, LocalIdRequeridoError } from './rutasLocales';
 
 const sanitizeKey = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
 
@@ -22,15 +34,26 @@ export const ownerKeyFor = (cuit, ptoVta) => `${sanitizeKey(cuit)}_${sanitizeKey
 // en FacturacionManager.jsx y el proceso principal) antes de armar la URL —
 // defensivo: fetch() ya es insensible a mayúsculas en el esquema, pero así
 // esta función nunca depende de esa particularidad del navegador.
-const ownerUrl = (firebaseDb, cuit, ptoVta) => {
-  let base;
+const baseUrl = (firebaseDb) => {
   try {
-    base = normalizeFirebaseDatabaseURL(firebaseDb);
+    return normalizeFirebaseDatabaseURL(firebaseDb);
   } catch {
-    base = String(firebaseDb || '').replace(/\/+$/, '');
+    return String(firebaseDb || '').replace(/\/+$/, '');
   }
-  return `${base}/FACTURACION_OWNERS/${ownerKeyFor(cuit, ptoVta)}.json`;
 };
+
+/**
+ * URL del registro del dueño DENTRO del local. Sin un localId válido lanza
+ * `LOCAL_ID_REQUIRED`: no existe ruta de reserva ni raíz de fallback.
+ */
+export const ownerUrl = (firebaseDb, cuit, ptoVta, localId) => {
+  const ruta = construirRutaLocal(localId, `FACTURACION_OWNERS/${ownerKeyFor(cuit, ptoVta)}`);
+  return `${baseUrl(firebaseDb)}/${ruta}.json`;
+};
+
+/** URL del registro en la ruta global DEPRECADA. Solo se usa para LEER (fallback). */
+const ownerUrlLegado = (firebaseDb, cuit, ptoVta) =>
+  `${baseUrl(firebaseDb)}/FACTURACION_OWNERS/${ownerKeyFor(cuit, ptoVta)}.json`;
 
 const withTimeout = (ms) => {
   const controller = new AbortController();
@@ -41,29 +64,70 @@ const withTimeout = (ms) => {
 /**
  * Lee el dueño actual. NUNCA asume ownership en caso de error/timeout:
  * devuelve { ok: false } si no se pudo confirmar el estado real en Firebase.
+ *
+ * Orden de lectura: PRIMERO la ruta nueva `/{localId}/FACTURACION_OWNERS/...`.
+ * Solo si ahí no hay nada se consulta, de forma TEMPORAL, la ruta global vieja.
+ * Un `null` en la ruta nueva significa "sin dueño" únicamente después de que el
+ * fallback también dio vacío; así una instalación sin migrar sigue respetando al
+ * dueño que ya estaba anotado y no arranca una segunda facturación.
  */
-export const fetchOwner = async (firebaseDb, cuit, ptoVta) => {
+export const fetchOwner = async (firebaseDb, cuit, ptoVta, localId) => {
   if (!firebaseDb || !cuit || !ptoVta) return { ok: false, owner: null };
-  const { signal, clear } = withTimeout(6000);
-  try {
-    const resp = await fetch(ownerUrl(firebaseDb, cuit, ptoVta), { signal });
-    clear();
-    if (!resp.ok) return { ok: false, owner: null };
-    const data = await resp.json();
-    return { ok: true, owner: data || null };
-  } catch (e) {
-    clear();
-    return { ok: false, owner: null, error: e?.message };
+  if (!normalizarLocalId(localId)) {
+    return { ok: false, owner: null, error: 'LOCAL_ID_REQUIRED' };
   }
+  const leer = async (url) => {
+    const { signal, clear } = withTimeout(6000);
+    try {
+      const resp = await fetch(url, { signal });
+      clear();
+      if (!resp.ok) return { ok: false, owner: null };
+      return { ok: true, owner: (await resp.json()) || null };
+    } catch (e) {
+      clear();
+      return { ok: false, owner: null, error: e?.message };
+    }
+  };
+
+  const nuevo = await leer(ownerUrl(firebaseDb, cuit, ptoVta, localId));
+  if (!nuevo.ok) return nuevo;              // error de red: NO se asume nada
+  if (nuevo.owner) return nuevo;            // ruta nueva: fuente de verdad
+
+  // Fallback TEMPORAL de solo lectura sobre la ruta global deprecada.
+  const legado = await leer(ownerUrlLegado(firebaseDb, cuit, ptoVta));
+  if (legado.ok && legado.owner) {
+    return { ok: true, owner: { ...legado.owner, __origenLegado: true } };
+  }
+  return nuevo;                             // sin dueño en ninguna de las dos
 };
 
-/** Toma posesión: esta PC pasa a ser la única autorizada para facturar esta cuenta. */
-export const claimOwner = async (firebaseDb, cuit, ptoVta, ownerData) => {
+/**
+ * Toma posesión: esta PC pasa a ser la única autorizada para facturar esta
+ * cuenta. Escribe EXCLUSIVAMENTE en `/{localId}/FACTURACION_OWNERS/...`.
+ * Sin localId válido no escribe nada y devuelve el error.
+ */
+export const claimOwner = async (firebaseDb, cuit, ptoVta, ownerData, localId) => {
+  let url;
   try {
-    const resp = await fetch(ownerUrl(firebaseDb, cuit, ptoVta), {
+    url = ownerUrl(firebaseDb, cuit, ptoVta, localId);
+  } catch (e) {
+    if (e instanceof LocalIdRequeridoError) {
+      console.error('[FACTURACION_OWNERS] claim cancelado: no hay local válido.', e.message);
+      return { ok: false, error: e.code };
+    }
+    throw e;
+  }
+  try {
+    const resp = await fetch(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...ownerData, cuit, ptoVta, updatedAt: Date.now() }),
+      body: JSON.stringify({
+        ...ownerData,
+        cuit,
+        ptoVta,
+        localId: normalizarLocalId(localId),
+        updatedAt: Date.now(),
+      }),
     });
     return { ok: resp.ok };
   } catch (e) {
@@ -71,10 +135,23 @@ export const claimOwner = async (firebaseDb, cuit, ptoVta, ownerData) => {
   }
 };
 
-/** Libera la posesión: ninguna PC queda autorizada hasta que alguna la reclame. */
-export const releaseOwner = async (firebaseDb, cuit, ptoVta) => {
+/**
+ * Libera la posesión: ninguna PC queda autorizada hasta que alguna la reclame.
+ * Borra SOLO el registro nuevo; la ruta vieja no se toca (se migra aparte).
+ */
+export const releaseOwner = async (firebaseDb, cuit, ptoVta, localId) => {
+  let url;
   try {
-    const resp = await fetch(ownerUrl(firebaseDb, cuit, ptoVta), { method: 'DELETE' });
+    url = ownerUrl(firebaseDb, cuit, ptoVta, localId);
+  } catch (e) {
+    if (e instanceof LocalIdRequeridoError) {
+      console.error('[FACTURACION_OWNERS] release cancelado: no hay local válido.', e.message);
+      return { ok: false, error: e.code };
+    }
+    throw e;
+  }
+  try {
+    const resp = await fetch(url, { method: 'DELETE' });
     return { ok: resp.ok };
   } catch (e) {
     return { ok: false, error: e?.message };
@@ -94,11 +171,19 @@ export const releaseOwner = async (firebaseDb, cuit, ptoVta) => {
  *
  * Devuelve una función para cancelar la suscripción. Reconecta solo ante errores.
  */
-export const subscribeOwner = (firebaseDb, cuit, ptoVta, callback) => {
+export const subscribeOwner = (firebaseDb, cuit, ptoVta, callback, localId) => {
   if (!firebaseDb || !cuit || !ptoVta || typeof EventSource === 'undefined') {
     return () => {};
   }
-  const url = ownerUrl(firebaseDb, cuit, ptoVta);
+  let url;
+  try {
+    url = ownerUrl(firebaseDb, cuit, ptoVta, localId);
+  } catch (e) {
+    // Sin local válido no se escucha nada: es preferible no tener stream a
+    // escuchar el nodo equivocado.
+    console.error('[FACTURACION_OWNERS] suscripción cancelada:', e.message);
+    return () => {};
+  }
   let es = null;
   let closed = false;
   let reconnectTimer = null;

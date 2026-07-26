@@ -525,19 +525,29 @@ function logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message }) {
 // parsea la URL con el parser estándar de Node (new URL) en vez de comparar
 // texto — un firebaseDb guardado como "HTTPS://..." (mayúsculas) ya no elige
 // el módulo equivocado ni tira ERR_INVALID_PROTOCOL.
-function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta) {
-  return new Promise((resolve) => {
-    if (!firebaseDb || !cuit || !ptoVta) {
-      resolve({ ok: false, owner: null, code: 'URL_INVALIDA' });
-      return;
-    }
-    const sanitize = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
-    const key = `${sanitize(cuit)}_${sanitize(ptoVta)}`;
+// El proceso principal no tiene acceso al localStorage del renderer, así que el
+// número de local se deriva del FIREBASE_PATH de la cuenta (cuya convención es
+// `{localId}/FACTURACION_1`): el PRIMER segmento ES el local. Si no se puede
+// derivar un id válido, no se construye ninguna ruta — falla segura.
+function localIdDesdeFirebasePath(firebasePath) {
+  const limpio = String(firebasePath ?? '').trim().replace(/^\/+/, '');
+  if (!limpio) return null;
+  const seg = limpio.split('/')[0];
+  if (!seg) return null;
+  const invalidos = new Set(['undefined', 'null', 'nan', 'default', 'none', '0']);
+  if (invalidos.has(seg.toLowerCase())) return null;
+  if (/[.#$[\]\s]/.test(seg)) return null;
+  return seg;
+}
 
+// Lee el dueño en `{localId}/FACTURACION_OWNERS/{key}` y, SOLO si ahí no hay
+// nada, cae temporalmente al nodo global viejo `/FACTURACION_OWNERS/{key}`
+// (compatibilidad hacia atrás; nunca se escribe ahí).
+function leerOwnerEn(url, { firebaseDb, cuit, ptoVta }) {
+  return new Promise((resolve) => {
     let transport;
     try {
-      const base = normalizeFirebaseDatabaseURL(firebaseDb);
-      transport = resolveRequestTransport(`${base}/FACTURACION_OWNERS/${key}.json`);
+      transport = resolveRequestTransport(url);
     } catch (e) {
       const code = e.code || 'URL_INVALIDA';
       logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message: e.message });
@@ -590,6 +600,40 @@ function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta) {
       done({ ok: false, owner: null, code });
     }
   });
+}
+
+async function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta, localId) {
+  if (!firebaseDb || !cuit || !ptoVta) {
+    return { ok: false, owner: null, code: 'URL_INVALIDA' };
+  }
+  if (!localId) {
+    logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code: 'LOCAL_ID_REQUIRED', message: 'no se pudo derivar el local desde FIREBASE_PATH' });
+    return { ok: false, owner: null, code: 'LOCAL_ID_REQUIRED' };
+  }
+  const sanitize = (v) => String(v ?? '').trim().replace(/[.#$[\]/\s]/g, '');
+  const key = `${sanitize(cuit)}_${sanitize(ptoVta)}`;
+
+  let base;
+  try {
+    base = normalizeFirebaseDatabaseURL(firebaseDb);
+  } catch (e) {
+    const code = e.code || 'URL_INVALIDA';
+    logOwnershipCheckFailure({ firebaseDb, cuit, ptoVta, code, message: e.message });
+    return { ok: false, owner: null, code };
+  }
+
+  const ctx = { firebaseDb, cuit, ptoVta };
+  const nuevo = await leerOwnerEn(`${base}/${localId}/FACTURACION_OWNERS/${key}.json`, ctx);
+  if (!nuevo.ok) return nuevo;      // error real: NUNCA se asume ownership
+  if (nuevo.owner) return nuevo;    // ruta nueva = fuente de verdad
+
+  // Fallback TEMPORAL de solo lectura sobre el nodo global deprecado.
+  const legado = await leerOwnerEn(`${base}/FACTURACION_OWNERS/${key}.json`, ctx);
+  if (legado.ok && legado.owner) {
+    console.log('[Facturación AutoStart] Dueño leído del nodo global antiguo (pendiente de migración a /{localId}/FACTURACION_OWNERS).');
+    return { ok: true, owner: legado.owner };
+  }
+  return nuevo;
 }
 
 // Valida TODO lo necesario antes de decidir si esta PC debe arrancar el motor de
@@ -647,9 +691,15 @@ async function evaluateAutoStart(key, dir, fields, label) {
     return { start: false };
   }
 
-  // Verificación remota de ownership — la autoridad final.
-  console.log('[Facturación AutoStart] Consultando ownership');
-  const { ok: ownerCheckOk, owner, code: ownerCheckCode } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA);
+  // Verificación remota de ownership — la autoridad final. El nodo cuelga del
+  // número de local, que se deriva del primer segmento de FIREBASE_PATH.
+  const localIdCuenta = localIdDesdeFirebasePath(envVars.FIREBASE_PATH);
+  if (!localIdCuenta) {
+    console.log(`[AFIP AUTOSTART] ${label}: no se pudo determinar el número de local desde FIREBASE_PATH ("${envVars.FIREBASE_PATH || ''}") — por seguridad, no se inicia el motor.`);
+    return { start: false };
+  }
+  console.log(`[Facturación AutoStart] Consultando ownership (local=${localIdCuenta})`);
+  const { ok: ownerCheckOk, owner, code: ownerCheckCode } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA, localIdCuenta);
   if (!ownerCheckOk) {
     console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (código=${ownerCheckCode || 'ERROR_DE_RED'}) — por seguridad, no se inicia el motor.`);
     return { start: false };

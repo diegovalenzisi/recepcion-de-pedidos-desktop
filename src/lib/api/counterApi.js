@@ -7,6 +7,7 @@ import { processStockForCounterSale, reverseStockForCounterSale } from '@/lib/ap
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { saveFacturacionForPayments } from './ordersApi';
+import { emitirRemitoDeVenta } from './remitosApi';
 import { updateStatistics } from './salesApi';
 import { addExpenseToShift } from './expensesApi';
 import { savePrepaymentForApp } from '@/lib/api/prepaymentApi';
@@ -193,6 +194,25 @@ export const saveCounterSale = async (saleData, shift) => {
         }
       } catch (facError) {
         console.error('[VENTA MOSTRADOR] error facturación:', facError);
+      }
+
+      // REMITO (FCX) — comprobante de la venta que NO se factura.
+      //
+      // Va acá y no en la ruta crítica porque la venta YA está guardada en
+      // MOSTRADOR: el remito es el comprobante de esa venta, no la venta. Es
+      // idempotente (marca MOSTRADOR/{id}/remito), así que reintentar no emite
+      // un segundo comprobante, y no toca stock, caja, comisiones ni
+      // estadísticas: de eso ya se encargaron los pasos de arriba.
+      tb = Date.now();
+      try {
+        const remito = await emitirRemitoDeVenta(saleWithTimestamp, { canal: 'mostrador' });
+        if (remito.estado === 'emitido') {
+          console.log(`[VENTA MOSTRADOR] remito ${remito.numeroComprobante}: ${Date.now() - tb} ms`);
+        } else if (remito.estado === 'error' || remito.estado === 'sin-local') {
+          console.error(`[VENTA MOSTRADOR] no se pudo emitir el remito (${remito.estado}): ${remito.motivo}`);
+        }
+      } catch (remitoError) {
+        console.error('[VENTA MOSTRADOR] error remito:', remitoError);
       }
 
       tb = Date.now();

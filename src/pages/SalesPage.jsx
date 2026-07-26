@@ -4,6 +4,8 @@ import { useToast } from '@/components/ui/use-toast';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { fetchBillingData } from '@/lib/api/billingApi';
+import { suscribirRemitos } from '@/lib/api/remitosApi';
+import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import SalesTable from './SalesTable';
 import { Loader2, Calendar as CalendarIcon, FilterX } from 'lucide-react';
 import { renderToString } from 'react-dom/server';
@@ -17,6 +19,11 @@ const SalesPage = () => {
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Los remitos NO viven en VENTAS (esa es la ruta fiscal): salen de
+  // /{localId}/Remitos y se escuchan en vivo, por eso van en su propio estado.
+  const [remitosData, setRemitosData] = useState([]);
+  const [remitosLoading, setRemitosLoading] = useState(true);
+  const [remitosError, setRemitosError] = useState(null);
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -147,6 +154,33 @@ const SalesPage = () => {
     loadSalesData();
   }, [loadSalesData]);
 
+  // REMITOS — /{localId}/Remitos, en vivo.
+  //
+  // La suscripción está atada al local con el que se creó: al cambiar de local
+  // se cancela la anterior (cleanup del efecto) y el propio módulo descarta los
+  // eventos que lleguen tarde del local viejo. Nunca se mezclan dos locales.
+  const localPath = getCurrentDatabasePath();
+  useEffect(() => {
+    if (!canViewDeliveryNotes) return undefined;
+
+    setRemitosLoading(true);
+    setRemitosError(null);
+    const cancelar = suscribirRemitos(
+      (filas) => {
+        setRemitosData(filas);
+        setRemitosLoading(false);
+        setRemitosError(null);
+      },
+      (err) => {
+        console.error('[SalesPage] Error escuchando remitos:', err);
+        setRemitosData([]);
+        setRemitosLoading(false);
+        setRemitosError('No se pudieron cargar los remitos.');
+      }
+    );
+    return () => cancelar();
+  }, [canViewDeliveryNotes, localPath]);
+
   const handleSetToday = () => {
     setFilterMode('today');
     const today = format(new Date(), 'yyyy-MM-dd');
@@ -160,30 +194,33 @@ const SalesPage = () => {
     if (type === 'end') setEndDate(value);
   };
 
-  const filteredSales = useMemo(() => {
-    if (!sales.length) return [];
+  // Mismo filtro de fechas para Facturación y Remitos: las dos pestañas
+  // responden igual al botón "Hoy" y al rango Desde/Hasta.
+  const filtrarPorFecha = useCallback((registros) => {
+    if (!registros.length) return [];
 
-    let start = new Date();
-    let end = new Date();
-
+    let start;
+    let end;
     try {
       start = startOfDay(parse(startDate, 'yyyy-MM-dd', new Date()));
       end = endOfDay(parse(endDate, 'yyyy-MM-dd', new Date()));
     } catch (e) {
       console.warn("Invalid date format", e);
-      return sales;
+      return registros;
     }
 
-    return sales.filter(sale => {
-      if (!sale.fecha) return false;
+    return registros.filter(registro => {
+      if (!registro.fecha) return false;
       try {
-        const saleDate = parse(sale.fecha, 'dd-MM-yyyy', new Date());
-        return isWithinInterval(saleDate, { start, end });
+        const fecha = parse(registro.fecha, 'dd-MM-yyyy', new Date());
+        return isWithinInterval(fecha, { start, end });
       } catch (e) {
         return false;
       }
     });
-  }, [sales, startDate, endDate]);
+  }, [startDate, endDate]);
+
+  const filteredSales = useMemo(() => filtrarPorFecha(sales), [sales, filtrarPorFecha]);
 
   // FCB = Responsable Inscripto. FCC = Monotributo (Factura C, ej. FCC0001-00000790).
   // Ambas son facturas emitidas con CAE; solo cambia el motor/régimen que las generó.
@@ -191,8 +228,9 @@ const SalesPage = () => {
     const id = String(sale.id || '');
     return id.startsWith('FCB') || id.startsWith('FCC');
   });
-  const remitos = filteredSales.filter(sale => String(sale.id)?.startsWith('FCX'));
-  
+  // Remitos: SOLO de /{localId}/Remitos. VENTAS es la ruta fiscal y no se toca.
+  const remitos = useMemo(() => filtrarPorFecha(remitosData), [remitosData, filtrarPorFecha]);
+
   const defaultTab = canViewInvoices ? 'facturacion' : canViewDeliveryNotes ? 'remitos' : '';
 
   const isTodayFiltered = useMemo(() => {
@@ -304,12 +342,12 @@ const SalesPage = () => {
                   </span>
                 </CardHeader>
                 <CardContent className="flex-1 p-0 min-h-0 overflow-hidden">
-                  {loading ? (
+                  {remitosLoading ? (
                      <div className="flex justify-center items-center h-full">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     </div>
-                  ) : error ? (
-                    <div className="flex justify-center items-center h-full text-red-500">{error}</div>
+                  ) : remitosError ? (
+                    <div className="flex justify-center items-center h-full text-red-500">{remitosError}</div>
                   ) : (
                     <SalesTable data={remitos} onPrint={handlePrint} tableType="delivery_notes" />
                   )}

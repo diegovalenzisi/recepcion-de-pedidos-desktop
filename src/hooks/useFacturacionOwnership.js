@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchOwner, claimOwner, releaseOwner, subscribeOwner } from '@/lib/api/facturacionOwnerApi';
+import { getCurrentLocalId, getLocalId } from '@/lib/firebase/core';
+import { normalizarLocalId } from '@/lib/api/rutasLocales';
 
 // Respaldo lento: el arbitraje real ocurre por el listener SSE en tiempo real.
 // El polling solo cubre el caso de que el stream SSE se caiga.
@@ -21,12 +23,17 @@ const buildAccountList = (config) => {
   return [];
 };
 
+// Local con el que opera el ownership. TODA ruta de FACTURACION_OWNERS cuelga de
+// este id: `/{localId}/FACTURACION_OWNERS/{cuit}_{ptoVta}`. Sin un id válido no
+// se lee ni se escribe nada (falla segura, sin caer a la raíz).
+const localActual = () => normalizarLocalId(getCurrentLocalId() || getLocalId());
+
 /**
  * Hook compartido de "dueño de facturación" — arbitraje anti-doble-facturación.
  *
  * Una sola PC por cuenta/local puede tener el motor en auto-inicio. La decisión
- * de ownership vive en Firebase (FACTURACION_OWNERS, dentro del RTDB propio de
- * cada cuenta), identificada por machineId — nunca se sincroniza el booleano
+ * de ownership vive en Firebase (`/{localId}/FACTURACION_OWNERS`, dentro del RTDB
+ * propio de cada cuenta), identificada por machineId — nunca se sincroniza el booleano
  * `activo` en sí (eso seguiría reproduciendo el bug de copiarse a todas las PCs).
  *
  * Usado tanto por el panel de Configuración → Facturación como por el botón
@@ -91,7 +98,7 @@ export function useFacturacionOwnership() {
 
     const withOwner = await Promise.all(
       withDirs.map(async (acc) => {
-        const { ok, owner } = await fetchOwner(acc.fields.firebaseDb, acc.fields.cuit, acc.fields.ptoVta);
+        const { ok, owner } = await fetchOwner(acc.fields.firebaseDb, acc.fields.cuit, acc.fields.ptoVta, localActual());
         const isOwner = ok && owner?.machineId === mid.machineId;
         return { ...acc, owner: ok ? owner : null, ownerOk: ok, isOwner };
       })
@@ -147,7 +154,7 @@ export function useFacturacionOwnership() {
       return subscribeOwner(firebaseDb, cuit, ptoVta, (ownerVal) => {
         if (ownerVal === undefined) { loadAndPoll(); return; } // cambio parcial → re-leer
         enforceOwner(acc.key, ownerVal);
-      });
+      }, localActual());
     });
     return () => unsubs.forEach((u) => { try { u && u(); } catch { /* noop */ } });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,7 +177,7 @@ export function useFacturacionOwnership() {
 
       if (!wantOn) {
         if (acc.isOwner) {
-          await releaseOwner(fields.firebaseDb, fields.cuit, fields.ptoVta);
+          await releaseOwner(fields.firebaseDb, fields.cuit, fields.ptoVta, localActual());
         }
         await f.stop(accountKey);
         await persistActivo(f, tipo, accountKey, cuentaId, false);
@@ -179,7 +186,7 @@ export function useFacturacionOwnership() {
       }
 
       // wantOn === true
-      const { ok: fetchOk, owner } = await fetchOwner(fields.firebaseDb, fields.cuit, fields.ptoVta);
+      const { ok: fetchOk, owner } = await fetchOwner(fields.firebaseDb, fields.cuit, fields.ptoVta, localActual());
       if (!fetchOk) {
         return { ok: false, reason: 'firebase-unavailable' };
       }
@@ -193,7 +200,7 @@ export function useFacturacionOwnership() {
         nombrePc: machine?.hostname,
         cuentaId: cuentaId ?? 'ri',
         cuentaNombre: fields.nombre || (tipo === 'responsable_inscripto' ? 'Responsable Inscripto' : 'Monotributo'),
-      });
+      }, localActual());
       if (!claimed.ok) return { ok: false, reason: 'claim-failed' };
 
       await persistActivo(f, tipo, accountKey, cuentaId, true);

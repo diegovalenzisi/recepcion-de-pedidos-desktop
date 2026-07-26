@@ -8,6 +8,11 @@ import { lineasDeItem } from '@/lib/print/orderPrintDetail';
 // actual ni de un recálculo local: reimprimir no puede cambiar lo facturado.
 // El desglose de opcionales sólo se muestra si el propio registro lo trae; si no
 // lo trae (comprobantes históricos), el renglón se imprime como siempre.
+//
+// También reimprime REMITOS (FCX): mismos renglones, pero salen del registro
+// guardado en /{localId}/Remitos y el encabezado aclara que NO es una factura.
+// Igual que con la factura, reimprimir es sólo lectura: no crea una venta nueva,
+// no toca stock ni caja.
 const ReceiptDocument = ({ sale }) => {
   const formatCurrency = (value) => {
     const num = Number(value);
@@ -47,7 +52,10 @@ const ReceiptDocument = ({ sale }) => {
     <div className="receipt">
       <div className="header">
         <h1>{businessName}</h1>
-        <h2>Comprobante de Venta</h2>
+        <h2>{sale.esRemito ? 'Remito' : 'Comprobante de Venta'}</h2>
+        {sale.esRemito && (
+          <p style={{ fontSize: '0.85em' }}>Documento no válido como factura</p>
+        )}
         <p>#{sale.numeroFactura || sale.id}</p>
       </div>
       <hr />
