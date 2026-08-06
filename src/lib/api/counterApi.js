@@ -133,8 +133,15 @@ export const saveCounterSale = async (saleData, shift) => {
     // el error. No se cae a un FCX ni se manda a una cola equivocada.
     const [saleId, decision] = await Promise.all([
       getNextCounterSaleId(db, LOCAL_ID),
+      // SE PASA EL TOTAL, no sólo los pagos.
+      //
+      // `totalDeVenta` lee `total` (o `payment.total`), NO suma `payments[]`.
+      // Pasando sólo `{ payments }` el total resuelto daba 0, y esa venta se
+      // encolaba con `total: 0`: el motor la rechazaba por "pedido sin total" y
+      // quedaba trabada en la cola para siempre, sin factura. Delivery nunca
+      // tuvo el problema porque pasa el pedido entero.
       resolverComprobanteDeVenta(
-        { payments: saleData.payments },
+        { payments: saleData.payments, total: saleData.total },
         { emiteFacturaManual: saleData.emiteFactura === true }
       ),
     ]);

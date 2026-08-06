@@ -24,6 +24,7 @@ import {
   mensajeDeBloqueo,
   resolverEncolado,
   REGLA,
+  puedeEntrarAFacturacion,
 } from '@/lib/api/facturaORemito';
 import { construirRutaLocal, normalizarLocalId } from '@/lib/api/rutasLocales';
 import { leerConfigFiscal, validarColaAntesDeFacturar } from '@/lib/api/colasFiscalesApi';
@@ -62,7 +63,25 @@ export const leerCuentasDelLocal = async () => {
  * @throws {FacturacionNoResuelta} si la venta debe facturarse y no se puede
  *         determinar una cola válida. NUNCA cae a un FCX como fallback.
  */
-export const resolverComprobanteDeVenta = async (venta, { emiteFacturaManual = false } = {}) => {
+export const resolverComprobanteDeVenta = async (venta, { emiteFacturaManual = false, esCancelacion = false } = {}) => {
+  // BARRERA CENTRAL, antes de mirar cuentas o colas. Una cancelación —o una
+  // venta sin importe— no entra al flujo fiscal por ningún camino.
+  const permitido = puedeEntrarAFacturacion(venta, { esCancelacion });
+  if (!permitido.ok) {
+    console.warn(`🚫 [FACTURACION] ${permitido.detalle}`);
+    return {
+      comprobante: COMPROBANTE_REMITO,
+      debeFacturarse: false,
+      total: Number(venta?.total) || 0,
+      motivo: permitido.motivo,
+      metodos: [],
+      contradicciones: [],
+      metodosSinCampo: [],
+      encolado: { estado: 'sin-factura', motivo: permitido.motivo },
+      emisor: null,
+    };
+  }
+
   const cuentas = await leerCuentasDelLocal();
   const decision = decidirComprobante({ venta, cuentas, emiteFacturaManual });
   let encolado = resolverEncolado(decision, cuentas);

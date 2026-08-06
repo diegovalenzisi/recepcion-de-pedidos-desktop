@@ -105,6 +105,49 @@ export const COLAS_POR_CUENTA = Object.freeze({
 // cola de "Transferencia".
 // ---------------------------------------------------------------------------
 
+/** Estados que identifican una operación anulada. Comparación en minúsculas. */
+const ESTADOS_CANCELADA = Object.freeze([
+  'cancelada', 'cancelado', 'cancelled', 'canceled', 'anulada', 'anulado',
+]);
+
+/**
+ * ¿Esta operación puede entrar al flujo fiscal?
+ *
+ * Barrera CENTRAL, delante de cualquier encolado. Cubre dos casos que nunca
+ * deben llegar al motor:
+ *
+ *   1. CANCELACIÓN. Anular una venta no emite nada: ni nota de crédito, ni una
+ *      factura nueva, ni un comprobante por $0. La factura original queda como
+ *      fue emitida. (La nota de crédito se hará más adelante.)
+ *   2. TOTAL <= 0 o no numérico. Defensa secundaria: una venta sin importe no
+ *      se factura. Es lo que dejó registros de $0 trabados en la cola, porque
+ *      el motor los rechaza pero no los borra.
+ *
+ * @returns {{ok: true} | {ok: false, motivo: string, detalle: string}}
+ */
+export function puedeEntrarAFacturacion(venta, contexto = {}) {
+  const estado = String(venta?.estado ?? venta?.status?.main ?? venta?.status ?? '').toLowerCase().trim();
+
+  if (contexto.esCancelacion === true || ESTADOS_CANCELADA.includes(estado)) {
+    return {
+      ok: false,
+      motivo: 'cancelacion',
+      detalle: 'Facturación omitida: la operación corresponde a una cancelación.',
+    };
+  }
+
+  const total = Number(venta?.TOTAL ?? venta?.total);
+  if (!Number.isFinite(total) || total <= 0) {
+    return {
+      ok: false,
+      motivo: 'total-invalido',
+      detalle: `Facturación omitida: total inválido o menor/igual a cero (${JSON.stringify(venta?.TOTAL ?? venta?.total)}).`,
+    };
+  }
+
+  return { ok: true };
+}
+
 /** Etiquetas de regla, para el log y para las pruebas. */
 export const REGLA = Object.freeze({
   TRANSFERENCIA_3: 'TRANSFERENCIA_3',

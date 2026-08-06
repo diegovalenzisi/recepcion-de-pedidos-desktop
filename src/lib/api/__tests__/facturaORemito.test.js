@@ -30,6 +30,7 @@ import {
   plataformaDeCuenta,
   CAMPO_CUENTA_ASOCIADA,
   esVentaSoloEfectivo,
+  puedeEntrarAFacturacion,
   REGLA,
   ventaSeFactura,
 } from '../facturaORemito.js';
@@ -744,6 +745,76 @@ check('el vínculo es por ID: renombrar la cuenta asociada no lo rompe', () => {
   const cuentas = localCon('cta-2', 'cta-1');
   assert.strictEqual(colaDe('PREPAGO PEDIDOSYA', cuentas).e.cola, 'FACTURACION_2');
   assert.strictEqual(resolverCuentaAsociadaDePlataforma({ plataformaId: 'cta-py', cuentas }).cuentaId, 'cta-2');
+});
+
+// ---------------------------------------------------------------------------
+// BARRERA: una CANCELACIÓN o un total <= 0 no entran al flujo fiscal.
+// ---------------------------------------------------------------------------
+console.log('\nUna cancelación nunca entra a facturación:');
+
+const ventaOk = { total: 14400, payments: [{ method: 'Transferencia', amount: 14400 }] };
+
+check('una venta normal SÍ puede facturarse', () => {
+  const r = puedeEntrarAFacturacion(ventaOk);
+  assert.strictEqual(r.ok, true);
+});
+
+check('el flag esCancelacion bloquea, sea cual sea el estado', () => {
+  const r = puedeEntrarAFacturacion(ventaOk, { esCancelacion: true });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.motivo, 'cancelacion');
+  assert.match(r.detalle, /corresponde a una cancelación/);
+});
+
+for (const estado of ['cancelada', 'cancelado', 'cancelled', 'canceled', 'anulada', 'anulado', 'CANCELADO', 'Cancelada']) {
+  check(`estado "${estado}" bloquea la facturación`, () => {
+    assert.strictEqual(puedeEntrarAFacturacion({ ...ventaOk, estado }).ok, false);
+    assert.strictEqual(puedeEntrarAFacturacion({ ...ventaOk, status: estado }).ok, false);
+  });
+}
+
+check('también lee el estado anidado status.main (forma de los pedidos)', () => {
+  const r = puedeEntrarAFacturacion({ ...ventaOk, status: { main: 'CANCELADO' } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.motivo, 'cancelacion');
+});
+
+console.log('\nTotal <= 0: defensa secundaria');
+check('total 0, negativo, ausente o no numérico no se factura', () => {
+  for (const total of [0, -100, null, undefined, 'abc', NaN]) {
+    const r = puedeEntrarAFacturacion({ ...ventaOk, total });
+    assert.strictEqual(r.ok, false, `aceptó total=${JSON.stringify(total)}`);
+    assert.strictEqual(r.motivo, 'total-invalido');
+  }
+});
+check('acepta TOTAL en mayúsculas (forma del motor)', () => {
+  assert.strictEqual(puedeEntrarAFacturacion({ TOTAL: 5000 }).ok, true);
+  assert.strictEqual(puedeEntrarAFacturacion({ TOTAL: 0 }).ok, false);
+});
+check('la cancelación gana sobre el total: se informa cancelación, no total', () => {
+  const r = puedeEntrarAFacturacion({ total: 0, estado: 'cancelada' });
+  assert.strictEqual(r.motivo, 'cancelacion');
+});
+
+console.log('\nEl total de mostrador tiene que llegar a la decisión:');
+check('sin total, la venta no se puede facturar (era el bug del comprobante en $0)', () => {
+  // Lo que hacía saveCounterSale: pasar sólo los pagos. `totalDeVenta` no suma
+  // payments[], así que el total resuelto daba 0 y se encolaba en cero.
+  const soloPagos = { payments: [{ method: 'Transferencia', amount: 14400 }] };
+  const d = decidirComprobante({ venta: soloPagos, cuentas: CUENTAS_REALES });
+  assert.strictEqual(d.total, 0, 'sin `total` el importe resuelto es 0');
+  assert.strictEqual(puedeEntrarAFacturacion(soloPagos).ok, false,
+    'la barrera tiene que frenar ese encolado en cero');
+});
+check('con el total incluido, la venta se encola por su importe real', () => {
+  const conTotal = { payments: [{ method: 'Transferencia', amount: 14400 }], total: 14400 };
+  const d = decidirComprobante({ venta: conTotal, cuentas: CUENTAS_REALES });
+  const e = resolverEncolado(d, CUENTAS_REALES);
+  assert.strictEqual(d.total, 14400);
+  assert.strictEqual(e.estado, 'encolar');
+  assert.strictEqual(e.cola, 'FACTURACION_1');
+  assert.strictEqual(e.total, 14400);
+  assert.strictEqual(puedeEntrarAFacturacion(conTotal).ok, true);
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
