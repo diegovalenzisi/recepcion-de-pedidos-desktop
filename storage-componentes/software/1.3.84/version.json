@@ -1,0 +1,7 @@
+{
+  "version": "1.3.84",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.84.exe",
+  "releaseDate": "2026-08-06",
+  "sha256": "8ace34fc94bf1b86a8e5099695ffa716dc7d7dcf01e21924624cd3b0810a4a30",
+  "notes": "En las cuentas de Prepago PedidosYa y Prepago Rappi desaparece el interruptor Imprime Factura, que en esas cuentas no decidia nada y solo invitaba a apagar algo que igual se facturaba. Lo que habilita la facturacion es la cuenta asociada, y la cola sale de ella: si Rappi esta asociada a Transferencia 2, sus ventas van a FACTURACION_2. La cuenta asociada pasa a ser obligatoria al guardar una cuenta de plataforma. Las cuentas ya cargadas siguen funcionando sin tener que reeditarlas, aunque hayan quedado con el interruptor apagado. Se factura el total completo de la venta en una sola entrada, tambien cuando se combina con efectivo, y si falta la cuenta asociada la venta se detiene con el error a la vista en lugar de irse a una cola por defecto o convertirse en remito. El resto no cambia: la impresion sigue siendo manual desde Ventas y las demas cuentas conservan su interruptor y su comportamiento."
+}

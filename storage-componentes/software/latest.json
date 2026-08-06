@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.83",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.83%2FRecepcion-de-Pedidos-Setup-1.3.83.exe?alt=media",
-  "sha256": "fcfcb73bd43fbccb525064a82a3f0fc43827dda7fda4aae91df6e2143021a2bd",
-  "size": 125250604,
+  "latest": "1.3.84",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.84%2FRecepcion-de-Pedidos-Setup-1.3.84.exe?alt=media",
+  "sha256": "8ace34fc94bf1b86a8e5099695ffa716dc7d7dcf01e21924624cd3b0810a4a30",
+  "size": 125246732,
   "mandatory": true,
-  "releaseDate": "2026-08-05",
-  "notes": "Version 1.3.83, correccion urgente sobre la 1.3.82. Las ventas de mostrador que debian facturarse se enviaban a la cola con importe cero y por eso no llegaban a facturarse: quedaban trabadas esperando. Ahora el importe viaja correctamente y la venta se factura por su total real. Se agrega ademas una barrera antes de cualquier envio a facturacion: una venta cancelada o anulada nunca genera un comprobante nuevo, y una operacion con total cero o negativo tampoco se envia. No se emite nota de credito y la factura original de una venta cancelada se conserva tal como fue emitida. El resto de la 1.3.82 se mantiene igual: la pestana Facturacion 2, la impresion directa de facturas por la impresora predeterminada de Windows en formato termico de 80 mm, y la cuenta fiscal asociada que se configura en Prepago PedidosYa y Prepago Rappi."
+  "releaseDate": "2026-08-06",
+  "notes": "Version 1.3.84. En las cuentas de Prepago PedidosYa y Prepago Rappi desaparece el interruptor Imprime Factura, que en esas cuentas no decidia nada y solo invitaba a apagar algo que igual se facturaba. Lo que habilita la facturacion es la cuenta asociada, y la cola sale de ella: si Rappi esta asociada a Transferencia 2, sus ventas van a FACTURACION_2. La cuenta asociada pasa a ser obligatoria al guardar una cuenta de plataforma. Las cuentas ya cargadas siguen funcionando sin tener que reeditarlas, aunque hayan quedado con el interruptor apagado. Se factura el total completo de la venta en una sola entrada, tambien cuando se combina con efectivo, y si falta la cuenta asociada la venta se detiene con el error a la vista en lugar de irse a una cola por defecto o convertirse en remito. El resto no cambia: la impresion sigue siendo manual desde Ventas y las demas cuentas conservan su interruptor y su comportamiento."
 }
