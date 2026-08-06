@@ -307,7 +307,7 @@ export function cuentasAsociablesParaFacturacion(cuentas) {
  */
 export function validarAsociacionPlataforma({ plataformaId, asociadaId, cuentas } = {}) {
   const id = String(asociadaId ?? '').trim();
-  if (!id) return { ok: false, motivo: 'Hay que elegir una cuenta asociada para facturación.' };
+  if (!id) return { ok: false, motivo: 'Seleccioná una cuenta asociada para facturación.' };
   if (plataformaId && id === String(plataformaId)) {
     return { ok: false, motivo: 'Una cuenta de plataforma no puede facturarse a sí misma.' };
   }

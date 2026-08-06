@@ -817,4 +817,73 @@ check('con el total incluido, la venta se encola por su importe real', () => {
   assert.strictEqual(puedeEntrarAFacturacion(conTotal).ok, true);
 });
 
+// ---------------------------------------------------------------------------
+// PLATAFORMAS: "Imprime Factura" DEJÓ DE INTERVENIR
+//
+// En PedidosYa y Rappi lo único que habilita la facturación es tener una cuenta
+// asociada. El interruptor ni se muestra en el formulario, y una cuenta vieja
+// que quedó con `imprimeFactura: false` tiene que facturar igual: nadie debería
+// tener que volver a editar y guardar todas las cuentas existentes.
+// ---------------------------------------------------------------------------
+console.log('\nPlataformas: la asociación manda, no `imprimeFactura`:');
+
+/** El caso REAL de Achaval: PREPAGO RAPPI quedó con el interruptor apagado. */
+const localConInterruptorApagado = (asocRappi) => ({
+  'cta-1': { nombre: 'Transferencia', imprimeFactura: true, isFavorite: true },
+  'cta-2': { nombre: 'Transferencia 2', imprimeFactura: true },
+  'cta-3': { nombre: 'Transferencia 3', imprimeFactura: true },
+  'cta-ra': { nombre: 'PREPAGO RAPPI', imprimeFactura: false, [CAMPO_CUENTA_ASOCIADA]: asocRappi },
+});
+
+for (const [asoc, cola] of [['cta-1', 'FACTURACION_1'], ['cta-2', 'FACTURACION_2'], ['cta-3', 'FACTURACION_3']]) {
+  check(`Rappi con imprimeFactura:false + asociada ${asoc} → factura igual en ${cola}`, () => {
+    const { d, e } = colaDe('PREPAGO RAPPI', localConInterruptorApagado(asoc));
+    assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA, 'el interruptor apagado no puede dejarla sin facturar');
+    assert.strictEqual(e.estado, 'encolar');
+    assert.strictEqual(e.cola, cola);
+    assert.strictEqual(e.cuentaAsociadaId, asoc);
+  });
+}
+
+check('PedidosYa con imprimeFactura:false + asociada → factura igual', () => {
+  const cuentas = {
+    'cta-1': { nombre: 'Transferencia', imprimeFactura: true, isFavorite: true },
+    'cta-py': { nombre: 'PREPAGO PEDIDOSYA', imprimeFactura: false, [CAMPO_CUENTA_ASOCIADA]: 'cta-1' },
+  };
+  const { d, e } = colaDe('PREPAGO PEDIDOSYA', cuentas);
+  assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
+  assert.strictEqual(e.cola, 'FACTURACION_1');
+});
+
+check('una sola entrada fiscal: el combinado efectivo + Rappi no duplica', () => {
+  const cuentas = localConInterruptorApagado('cta-1');
+  const venta = { total: 9000, payments: [{ method: 'Efectivo', amount: 3000 }, { method: 'PREPAGO RAPPI', amount: 6000 }] };
+  const d = decidirComprobante({ venta, cuentas });
+  const e = resolverEncolado(d, cuentas);
+  assert.strictEqual(e.estado, 'encolar');
+  assert.strictEqual(e.cola, 'FACTURACION_1');
+  assert.strictEqual(e.total, 9000, 'se factura el TOTAL completo, no sólo la parte de la plataforma');
+});
+
+check('sin asociación NO factura, NO cae a FACTURACION_1 y NO se degrada a remito', () => {
+  const cuentas = {
+    'cta-1': { nombre: 'Transferencia', imprimeFactura: true, isFavorite: true },
+    'cta-ra': { nombre: 'PREPAGO RAPPI', imprimeFactura: false },
+  };
+  const { e } = colaDe('PREPAGO RAPPI', cuentas);
+  assert.strictEqual(e.estado, 'sin-cola');
+  assert.strictEqual(e.cola, undefined);
+  assert.match(e.motivo, /Rappi/);
+  assert.match(e.motivo, /Seleccioná una cuenta asociada para facturación/);
+});
+
+check('las cuentas comunes conservan su comportamiento', () => {
+  const cuentas = localConInterruptorApagado('cta-1');
+  assert.strictEqual(colaDe('Transferencia', cuentas).e.cola, 'FACTURACION_1');
+  assert.strictEqual(colaDe('Transferencia 3', cuentas).e.cola, 'FACTURACION_3');
+  assert.strictEqual(decidirComprobante({
+    venta: { total: 1000, payments: [{ method: 'Efectivo', amount: 1000 }] }, cuentas,
+  }).comprobante, COMPROBANTE_REMITO);
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

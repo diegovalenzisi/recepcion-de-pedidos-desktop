@@ -189,10 +189,12 @@ function AccountsPageContent() {
     }
     setIsSaving(true);
     try {
-      // PedidosYa / Rappi: no se guardan como facturables sin una cuenta
-      // asociada VÁLIDA. La misma validación que usa la facturación.
+      // PedidosYa / Rappi: la cuenta asociada es OBLIGATORIA, sin importar
+      // `imprimeFactura` — ese interruptor ya no interviene en estas cuentas
+      // (ni siquiera se muestra). Es la asociación la que habilita la
+      // facturación, así que sin ella la cuenta no se puede guardar.
       const plataforma = plataformaDeCuenta(accountData.nombre);
-      if (plataforma && accountData.imprimeFactura) {
+      if (plataforma) {
         const v = validarAsociacionPlataforma({
           plataformaId: editingAccount?.id ?? null,
           asociadaId: accountData.cuentaFacturacionAsociadaId,
@@ -386,20 +388,26 @@ function AccountsPageContent() {
                   maxLength={100}
                 />
               </div>
-              <div className="flex items-center space-x-2 pt-2">
-                <Switch
-                  id="imprimeFactura"
-                  checked={accountData.imprimeFactura}
-                  onCheckedChange={handleSwitchChange}
-                />
-                <Label htmlFor="imprimeFactura" className="cursor-pointer">Imprime Factura</Label>
-              </div>
+              {/* "Imprime Factura" NO se muestra en PedidosYa ni Rappi: para
+                  esas cuentas no decide nada. Lo que habilita la facturación es
+                  tener una cuenta asociada, y la cola sale de ella. Mostrar el
+                  interruptor sólo invitaba a apagar algo que igual factura. */}
+              {!esPlataforma && (
+                <div className="flex items-center space-x-2 pt-2">
+                  <Switch
+                    id="imprimeFactura"
+                    checked={accountData.imprimeFactura}
+                    onCheckedChange={handleSwitchChange}
+                  />
+                  <Label htmlFor="imprimeFactura" className="cursor-pointer">Imprime Factura</Label>
+                </div>
+              )}
 
               {/* PedidosYa y Rappi no tienen cola propia: facturan por la cuenta
                   que se elija acá. Se guarda el ID, así renombrar la cuenta no
                   rompe el vínculo. Para las demás cuentas no aparece. */}
               {esPlataforma && (
-                <div className="space-y-2 pt-2 border-t">
+                <div className="space-y-2 pt-2">
                   <Label htmlFor="cuentaAsociada">
                     Cuenta asociada para facturación <span className="text-red-500">*</span>
                   </Label>
