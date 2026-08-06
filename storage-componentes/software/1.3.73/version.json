@@ -1,0 +1,6 @@
+{
+  "version": "1.3.73",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.73.exe",
+  "releaseDate": "2026-07-30",
+  "notes": "Corrige el selector de GIO a eleccion al cargar un pedido. LA CRUZ AHORA CIERRA: el modal Elegi: GIO a eleccion se montaba sin ningun manejador de cierre, asi que la X de la esquina no hacia nada y no habia forma de salir sin elegir una opcion. Ahora al tocar la cruz el modal se cierra al instante, la promocion se cancela completa, el articulo principal NO queda agregado al pedido, se descarta la seleccion provisional y se puede volver a abrir el articulo normalmente. MENSAJE DE MAXIMO: al elegir una GIO en un grupo que permite exactamente una, la pantalla mostraba Total elegido: 1 / 1 y al mismo tiempo el aviso Maximo 1 unidades en total, aunque la seleccion era valida y el boton dejaba confirmar. El aviso ahora aparece solo si realmente se supera el maximo; alcanzarlo es valido y se confirma normalmente. Los grupos que permiten mas de una unidad no cambian. Incluye lo publicado en 1.3.72."
+}

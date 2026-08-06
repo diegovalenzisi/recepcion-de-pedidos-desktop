@@ -60,3 +60,16 @@ Thumbs.db
 # Claude Code (configuración local, no subir)
 .claude/
 fixtures-resultados.json
+
+# Artefactos y trabajo LOCAL (no son fuente ni se distribuyen)
+backups-migracion/
+diagnostics/
+
+# Arte original del icono. La app usa build/icono-dlv.ico, que se genera aparte
+# y vive en build/ (ya ignorado). El PNG suelto de la raiz no lo consume nadie.
+/icono dlv.png
+
+# COPIA OBSOLETA de electron/main.js que quedo en la raiz (2193 lineas contra
+# 3162). package.json apunta a electron/main.js y nadie importa esta. Se ignora
+# para no volver a confundirla con la real; se puede borrar del disco.
+/main.js

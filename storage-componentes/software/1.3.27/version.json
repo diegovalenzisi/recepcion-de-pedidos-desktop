@@ -1,0 +1,6 @@
+{
+  "version": "1.3.27",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.27.exe",
+  "releaseDate": "2026-06-29",
+  "notes": "Nuevo ícono DLV. Incluye correcciones de WhatsApp App, ajuste horizontal de impresión y cambio de modo de entrega en edición de pedidos."
+}

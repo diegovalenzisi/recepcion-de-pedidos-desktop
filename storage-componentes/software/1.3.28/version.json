@@ -1,0 +1,6 @@
+{
+  "version": "1.3.28",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.28.exe",
+  "releaseDate": "2026-06-29",
+  "notes": "Chequeo de actualizaciones antes del login (pantalla 'Buscando actualizaciones...'). Respeta mandatory. Incluye ícono DLV y correcciones previas de WhatsApp App, ajuste horizontal de impresión y modo de entrega en edición de pedidos."
+}

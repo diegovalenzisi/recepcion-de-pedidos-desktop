@@ -1,0 +1,6 @@
+{
+  "version": "1.3.71",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.71.exe",
+  "releaseDate": "2026-07-27",
+  "notes": "HOTFIX OBLIGATORIO DE STOCK, completa lo iniciado en 1.3.70. UNA MATERIA PRIMA SE DESCUENTA SIEMPRE: ni \"Ignora Stock\" ni \"Controlar Stock\" la sacan del descuento. Son banderas de DISPONIBILIDAD (si bloquea la venta y si apaga los articulos que la usan), no de consumo, y hasta ahora una materia prima con el control de stock apagado se vendia, se consumia y su saldo no se movia nunca. Ahora el inventario refleja el consumo real aunque el saldo quede en cero o en negativo, y la decision de bloquear o desactivar sigue viviendo aparte: con \"Ignora Stock\" encendido la materia prima nunca bloquea ni apaga los articulos que la usan, y con el apagado se aplica la politica de siempre al llegar a cero. ARTICULOS REPETIDOS POR DEPARTAMENTO: un articulo que hereda su stock de otro y tiene el control apagado -la configuracion tipica del mismo producto cargado en varios departamentos, como BOMBON SUIZO- no descontaba nada; ahora descuenta contra el articulo que lleva la cuenta, y si el mismo pedido incluye el padre y sus hijos se descuenta una sola vez sobre el mismo recurso. Incluye lo publicado en 1.3.70."
+}
