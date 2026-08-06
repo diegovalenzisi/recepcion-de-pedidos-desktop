@@ -2,13 +2,14 @@
 import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
 import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
-import { fetchFavoriteAccount } from '@/lib/api/accountsApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { construirLineaPersistible, enriquecerOpcionalSnapshot } from '@/lib/api/optionalsPricing';
 import { normalizarPedidosRecibidos } from '@/lib/api/ordersIngest';
 import { processStockForDeliveredOrder } from './transactionsApi';
 import { emitirRemitoDeVenta } from '@/lib/api/remitosApi';
+import { resolverComprobanteDeVenta } from '@/lib/api/facturaORemitoApi';
+import { describirFormaPago, listarPagos } from '@/lib/api/remitos';
 import { checkOpenShift } from '@/lib/api/cash/shift';
 
 export const validateStatusChange = (currentStatus, newStatus, orderType) => {
@@ -278,7 +279,7 @@ export const saveOrder = async (orderData, shift) => {
   // justo antes del set() definitivo más abajo, revalida que el local no haya
   // cambiado en el medio — si cambió, aborta con FirebaseNotReadyError en vez de
   // guardar el pedido en el local viejo (o con datos pensados para otro local).
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   try {
     const newOrderId = await getNextOrderId();
 
@@ -349,22 +350,25 @@ export const saveOrder = async (orderData, shift) => {
   }
 };
 
-const getFacturacionNodeForPayment = (paymentMethod) => {
-    const methodName = paymentMethod.toLowerCase();
-    if (methodName.includes('transferencia 3')) return 'FACTURACION_3';
-    if (methodName.includes('transferencia 2')) return 'FACTURACION_2';
-    if (methodName.includes('transferencia')) return 'FACTURACION_1';
-    return null;
-};
-
-export const saveFacturacionForPayments = async (orderId, orderData, saleType) => {
+/**
+ * Encola una venta en facturación: UNA entrada, en UNA cola, por el TOTAL
+ * COMPLETO. Nunca una factura por medio de pago ni por un importe parcial.
+ *
+ * La cola sale de la tabla EXACTA de facturaORemito.js (COLAS_POR_CUENTA) y ya
+ * viene resuelta y validada en `decision.encolado`.
+ *
+ * @param {string|number} orderId
+ * @param {object} orderData
+ * @param {'delivery'|'mostrador'} saleType
+ * @param {object} [decision] resultado de resolverComprobanteDeVenta(). Si no se
+ *        pasa, se resuelve acá: nunca se factura sin haber consultado el
+ *        interruptor "Imprime Factura" de las cuentas cobradas.
+ * @throws si la venta debe facturarse y no hay cola determinable.
+ */
+export const saveFacturacionForPayments = async (orderId, orderData, saleType, decision = null) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(LOCAL_ID);
-    const db = op.getDatabaseOrAbort();
-
-    const paymentDetails = orderData.payment?.payments || [];
-    const mainPaymentMethod = orderData.payment?.method;
+    const op = beginFirebaseOperation();
 
     const getPrefixedOrderId = (id) => {
         if (saleType === 'delivery') return `D${id}`;
@@ -372,11 +376,29 @@ export const saveFacturacionForPayments = async (orderId, orderData, saleType) =
         return id;
     };
 
+    // DETALLE QUE VIAJA A FACTURACIÓN.
+    //
+    // Hasta ahora se encolaba sólo `{ nombre, valor }`: sin cantidad y sin
+    // subtotal. Por eso las facturas emitidas quedaban con renglones que no
+    // sumaban el total, y el PDF del motor RI imprimía "producto x undefined".
+    //
+    // `valor` se mantiene con el mismo significado de siempre (precio unitario)
+    // para no romper los motores de facturación ya instalados en las PCs, que
+    // leen esa clave. Los campos nuevos se agregan al lado.
     const productos = {};
     (orderData.items || []).forEach((item, index) => {
+        const cantidad = Number(item.cantidad) > 0 ? Number(item.cantidad) : 1;
+        const unitario = Number(item.precioBaseUnitario ?? item.valor) || 0;
+        const opcionales = Number(item.totalOpcionales) || 0;
+        const subtotal = Number(item.subtotalLinea ?? item.precioTotal);
         productos[`producto_${index + 1}`] = {
             nombre: item.nombre,
-            valor: item.valor || 0
+            valor: unitario,
+            cantidad,
+            precioUnitario: unitario,
+            precioTotal: Number.isFinite(subtotal) ? subtotal : unitario * cantidad + opcionales,
+            codigo: String(item.codigo ?? item.id ?? ''),
+            opcionales,
         };
     });
 
@@ -386,59 +408,39 @@ export const saveFacturacionForPayments = async (orderId, orderData, saleType) =
         direccion: orderData.client?.address || 'Sin Datos',
         producto: productos,
         fecha: orderData.date || formatDateForFirebase(now),
-        hora: orderData.times?.ingress || now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        hora: orderData.times?.ingress || now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        // Trazabilidad de la venta de origen: el motor la copia al comprobante
+        // para que la factura diga de dónde salió y quién la cobró.
+        localId: String(LOCAL_ID),
+        origen: { tipo: saleType, id: String(orderId), ruta: saleType === 'delivery' ? 'PEDIDOS' : 'MOSTRADOR' },
+        formaPago: describirFormaPago(listarPagos(orderData)),
     };
 
-    if (orderData.emiteFactura) {
-        const favoriteAccount = await fetchFavoriteAccount();
-        const favoriteAccountName = favoriteAccount?.nombre || null;
-        if (favoriteAccountName) {
-            const facturacionNode = getFacturacionNodeForPayment(favoriteAccountName);
-            if (facturacionNode) {
-                try {
-                    const finalOrderId = getPrefixedOrderId(orderId);
-                    // Revalida: fetchFavoriteAccount() de arriba fue un await real —
-                    // el local pudo haber cambiado mientras esperaba.
-                    const freshDb = op.getDatabaseOrAbort();
-                    const facturacionRef = ref(freshDb, `${LOCAL_ID}/${facturacionNode}/${finalOrderId}`);
-                    const totalToSave = typeof orderData.payment.total === 'number' ? orderData.payment.total : 0;
-                    await set(facturacionRef, { ...facturaData, total: totalToSave });
-                } catch (error) {
-                    console.error(`Error saving to favorite account ${facturacionNode} for order ${orderId}:`, error);
-                }
-            }
-        }
-        return;
-    }
+    // La regla vive en facturaORemito.js: el tilde manual o el interruptor
+    // "Imprime Factura" de las cuentas cobradas deciden; la cola sale de la
+    // tabla exacta. Acá sólo se escribe lo que ya quedó resuelto.
+    const resolucion = decision || await resolverComprobanteDeVenta(orderData);
+    const encolado = resolucion.encolado;
+    if (!encolado || encolado.estado !== 'encolar') return;   // la venta va a remito
 
-    if (paymentDetails.length > 0) {
-        for (const payment of paymentDetails) {
-            const facturacionNode = getFacturacionNodeForPayment(payment.method);
-            if (facturacionNode) {
-                try {
-                    const finalOrderId = getPrefixedOrderId(orderId);
-                    const paymentFacturaData = { ...facturaData, total: payment.amount };
-                    const facturacionRef = ref(db, `${LOCAL_ID}/${facturacionNode}/${finalOrderId}`);
-                    await set(facturacionRef, paymentFacturaData);
-                } catch (error) {
-                    console.error(`Error saving to ${facturacionNode} for order ${orderId}:`, error);
-                }
-            }
-        }
-    } else if (mainPaymentMethod) {
-        const facturacionNode = getFacturacionNodeForPayment(mainPaymentMethod);
-        if (facturacionNode) {
-            try {
-                const finalOrderId = getPrefixedOrderId(orderId);
-                const totalToSave = typeof orderData.payment.total === 'number' ? orderData.payment.total : 0;
-                const paymentFacturaData = { ...facturaData, total: totalToSave };
-                const facturacionRef = ref(db, `${LOCAL_ID}/${facturacionNode}/${finalOrderId}`);
-                await set(facturacionRef, paymentFacturaData);
-            } catch (error) {
-                console.error(`Error saving to ${facturacionNode} for order ${orderId}:`, error);
-            }
-        }
-    }
+    // Revalida: resolverComprobanteDeVenta() pudo haber sido un await real —
+    // el local pudo haber cambiado mientras esperaba.
+    const freshDb = op.getDatabaseOrAbort();
+    const facturacionRef = ref(freshDb, `${LOCAL_ID}/${encolado.cola}/${getPrefixedOrderId(orderId)}`);
+    await set(facturacionRef, {
+        ...facturaData,
+        total: encolado.total,
+        // En qué cola entró, es decir CON QUÉ CUENTA FISCAL se factura. El motor
+        // lo copia al comprobante: así la factura guardada dice, sin ambigüedad,
+        // qué contribuyente la emitió, aunque el punto de venta se repita.
+        colaFacturacion: encolado.cola,
+        cuentaCobro: encolado.cuenta,
+    });
+    const emisor = resolucion.emisor;
+    console.log(
+        `[FACTURACION] ${saleType} ${orderId} → ${encolado.cola} por ${encolado.total} (${encolado.cuenta})` +
+        (emisor ? ` — ${emisor.razonSocial} CUIT ${emisor.cuitFormat} pto vta ${emisor.puntoVenta}` : '')
+    );
 };
 
 const sanitizeUpdatePayload = (payload) => {
@@ -463,7 +465,7 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
   // update() definitivo más abajo hay varios await reales (lectura del pedido,
   // checkOpenShift(), saveMostradorDeposit()) — getDatabaseOrAbort() revalida
   // justo antes de escribir.
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
   const orderRef = ref(db, `${LOCAL_ID}/PEDIDOS/${orderId}`);
 
@@ -479,12 +481,26 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
     const currentStatus = dataBefore?.status?.main;
     const newStatus = dataToUpdate['status/main'] || dataToUpdate.status?.main;
     
+    // FACTURA o REMITO del pedido que se está entregando. Se resuelve ANTES de
+    // escribir el cambio de estado: si el pedido debe facturarse y no hay una
+    // cola determinable, esto LANZA y el pedido NO pasa a ENTREGADO. Así el
+    // operador ve el error, corrige la configuración de cuentas y reintenta —
+    // en vez de quedarse con un pedido entregado sin comprobante, o con un FCX
+    // emitido como premio consuelo por una venta que debía facturarse.
+    let decisionComprobante = null;
     if (newStatus === 'ENTREGADO' && currentStatus !== 'ENTREGADO') {
       const validation = validateStatusChange(currentStatus, newStatus, dataBefore.type);
       if (!validation.isValid) {
         console.error(`[Audit] Invalid status change attempt for order ${orderId}: ${currentStatus} -> ${newStatus}`);
         throw new Error(validation.message);
       }
+      const pagoAlEntregar = dataToUpdate.payment
+        ? { ...dataBefore.payment, ...dataToUpdate.payment }
+        : dataBefore.payment;
+      decisionComprobante = await resolverComprobanteDeVenta(
+        { ...dataBefore, payment: pagoAlEntregar },
+        { emiteFacturaManual: dataBefore.emiteFactura === true }
+      );
     }
 
     const updatePayload = { ...dataToUpdate };
@@ -553,25 +569,64 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
             orderData.status?.main === 'ENTREGADO';
         
         if (!wasEntregado && isEntregadoTarget) {
-            await saveFacturacionForPayments(orderId, orderData, 'delivery');
+            // UNA sola decisión gobierna los dos caminos: o se encola la factura
+            // por el total, o se emite el FCX por el total. Nunca las dos cosas.
+            const decision = decisionComprobante || await resolverComprobanteDeVenta(orderData, {
+                emiteFacturaManual: orderData.emiteFactura === true,
+            });
+            const pedidoConDecision = {
+                ...orderData,
+                id: orderData.id ?? orderId,
+                comprobante: decision.comprobante,
+                motivoComprobante: decision.motivo,
+            };
+
+            // ORDEN DE LA OPERACIÓN: primero el descuento COMERCIAL, después el
+            // comprobante. La decisión de emitir factura o remito no puede
+            // determinar si se descuenta stock.
+            //
+            // Antes la facturación iba PRIMERO y sin try/catch: desde que
+            // `saveFacturacionForPayments` puede lanzar (una cola fiscal sin
+            // CUIT/punto de venta/certificado hace lanzar a
+            // resolverComprobanteDeVenta), un error fiscal abortaba el resto del
+            // bloque y el pedido quedaba ENTREGADO sin descontar stock ni
+            // registrar la comisión — y como `wasEntregado` ya es true, no se
+            // reintentaba nunca más.
+            //
+            // Se le pasa `pedidoConDecision` y no `orderData` porque el nodo
+            // guardado de PEDIDOS NO tiene campo `id`: con `orderData` el
+            // referenceId salía null y el descuento corría SIN candado, sin
+            // marca en PROCESSED_STOCK_IDS y sin idempotencia (verificado en
+            // producción: todas las TRANSACCIONES_STOCK de delivery tenían
+            // referenceId vacío).
+            try {
+                stockResult = await processStockForDeliveredOrder(pedidoConDecision);
+            } catch (stockError) {
+                 console.warn("Failed to process stock for delivered order.", stockError);
+                 stockResult = { success: false, error: stockError.message };
+            }
+
+            // El error fiscal se guarda y se relanza AL FINAL: el operador tiene
+            // que verlo, pero no debe costarle el descuento de stock ni la
+            // comisión de una venta que ya está entregada.
+            let errorFiscal = null;
+            try {
+                await saveFacturacionForPayments(orderId, pedidoConDecision, 'delivery', decision);
+            } catch (facError) {
+                errorFiscal = facError;
+                console.error(`[FACTURACION] pedido ${orderId} entregado SIN comprobante:`, facError);
+            }
 
             // REMITO (FCX) del pedido entregado que NO se factura. Idempotente
             // (marca PEDIDOS/{id}/remito): reentregar o reprocesar el mismo
             // pedido no emite un segundo comprobante. No toca stock ni caja.
             try {
-                const remito = await emitirRemitoDeVenta({ ...orderData, id: orderData.id ?? orderId }, { canal: 'delivery' });
+                const remito = await emitirRemitoDeVenta(pedidoConDecision, { canal: 'delivery' });
                 if (remito.estado === 'error' || remito.estado === 'sin-local') {
                     console.error(`[REMITO] pedido ${orderId} sin remito (${remito.estado}): ${remito.motivo}`);
                 }
             } catch (remitoError) {
                 console.error(`[REMITO] Error emitiendo el remito del pedido ${orderId}:`, remitoError);
-            }
-
-            try {
-                stockResult = await processStockForDeliveredOrder(orderData);
-            } catch (stockError) {
-                 console.warn("Failed to process stock for delivered order.", stockError);
-                 stockResult = { success: false, error: stockError.message };
             }
 
             try {
@@ -590,9 +645,14 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
             } catch (summaryError) {
                 console.warn("Failed to save sale to account summary.", summaryError);
             }
+
+            // Recién acá: stock, comisión y remito ya quedaron aplicados. El
+            // operador ve el problema fiscal y puede corregir la configuración
+            // de la cola, sin que eso haya costado el descuento de la venta.
+            if (errorFiscal) throw errorFiscal;
         }
     }
-    
+
     return { ...orderData, stockResult };
   } catch (error) {
     console.error(`🔥 [CRITICAL API updateOrder] Error updating order ${orderId}:`, error);

@@ -29,6 +29,7 @@ const SettingsTab = ({ to, icon: Icon, label }) => {
 };
 
 function SettingsPage({ applySettings }) {
+  const location = useLocation();
   const [settings, setSettings] = useState({
     razonSocial: '',
     nombreFantasia: '',
@@ -195,8 +196,18 @@ function SettingsPage({ applySettings }) {
     );
   }
 
+  // ANCHO POR PESTAÑA.
+  //
+  // "Configuración del Local" tiene formularios con columnas e interruptores que
+  // no entraban en `max-w-6xl` (1152 px) y quedaban cortados a la derecha. Se le
+  // da casi todo el ancho disponible, con tope para no deformarlo en monitores
+  // muy anchos. Las otras dos pestañas (Configuración Web y Zonas de Delivery)
+  // conservan exactamente el ancho que tenían.
+  const enLocal = location.pathname.endsWith('/local') || location.pathname === '/configuracion';
+  const anchoPestana = enLocal ? 'w-[96vw] max-w-[1600px]' : 'max-w-6xl';
+
   return (
-    <div className="max-w-6xl mx-auto h-full flex flex-col">
+    <div className={`${anchoPestana} mx-auto h-full flex flex-col`}>
         <div className="border-b border-gray-200 flex-shrink-0">
             <nav className="-mb-px flex space-x-4" aria-label="Tabs">
                 <SettingsTab to="/configuracion/local" icon={Building} label="Configuración del Local" />

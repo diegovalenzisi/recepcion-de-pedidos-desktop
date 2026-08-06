@@ -1,7 +1,8 @@
 import { getDatabase, ref, get, update, runTransaction } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
-import { aplicarReglaMateriaPrimaANodo, reconciliarArticuloDeliveryANodo, materiaPrimaDisponible } from './deliveryPorStock';
+import { aplicarReglaMateriaPrimaANodo, reconciliarArticuloDeliveryANodo } from './deliveryPorStock';
 import { materiasPrimasDeArticulo } from './disponibilidadReceta';
+import { materiasPrimasBloqueantes, recetaTieneCiclo } from './stockAvailability';
 
 /**
  * Stock Delivery Automation Module
@@ -29,7 +30,7 @@ export const shouldAutoToggleDelivery = (article) => {
 export const validateInheritedStockStatus = async (parentId, parentStockValue) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   try {
@@ -106,7 +107,7 @@ export const handleStockDepletion = async (articleId, currentStock, previousStoc
 
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   try {
@@ -154,7 +155,7 @@ export const handleStockReplenishment = async (articleId, currentStock, previous
 
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   try {
@@ -246,13 +247,15 @@ export const fetchAffectedArticles = async () => {
 /**
  * Reconcilia el `activoDelivery` de UN artículo según la disponibilidad ACTUAL
  * de las materias primas de su receta (leídas del snapshot provisto).
+ *
+ * Qué bloquea y por qué lo decide `materiasPrimasBloqueantes`
+ * (stockAvailability.js): contempla tanto la materia prima agotada o apagada a
+ * mano como la que tiene stock pero MENOS del que la receta consume — el caso
+ * "la receta pide 5 y hay 4", que antes no se detectaba y dejaba el artículo
+ * publicado en delivery.
  */
 const reconciliarArticuloPorMaterias = async (db, LOCAL_ID, articuloId, articulos, materiaPrima) => {
-  const usadas = materiasPrimasDeArticulo(articuloId, articulos, materiaPrima);
-  const bloqueantes = [];
-  for (const mpId of usadas) {
-    if (!materiaPrimaDisponible(materiaPrima[mpId])) bloqueantes.push(mpId);
-  }
+  const bloqueantes = materiasPrimasBloqueantes(articuloId, articulos, materiaPrima);
   const artRef = ref(db, `${LOCAL_ID}/ARTICULOS/${articuloId}`);
   let ultimoPatch = {};
   await runTransaction(artRef, (nodo) => {
@@ -276,7 +279,7 @@ export const reconciliarMateriaPrima = async (materiaPrimaId) => {
   if (!materiaPrimaId) return { cambio: false };
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   try {
@@ -323,7 +326,7 @@ export const reconciliarMateriaPrima = async (materiaPrimaId) => {
 export const reconciliarTodasLasMateriasPrimas = async () => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   let materiasCambiadas = 0;
@@ -357,7 +360,12 @@ export const reconciliarTodasLasMateriasPrimas = async () => {
     const materiaPrima = mpSnap.val() || {};
     for (const artId of Object.keys(articulos)) {
       const usadas = materiasPrimasDeArticulo(artId, articulos, materiaPrima);
-      if (usadas.size === 0) continue; // sin receta con materias primas: no aplica
+      // Sin receta con materias primas no aplica... salvo que la receta sea
+      // CIRCULAR: ahí no se resuelve ninguna materia prima justamente porque el
+      // recorrido se corta, y el artículo igual tiene que salir de delivery.
+      // Ésta es la única pasada que puede detectarlo (un ciclo no se dispara por
+      // el cambio de stock de ninguna materia prima).
+      if (usadas.size === 0 && !recetaTieneCiclo(artId, articulos, materiaPrima)) continue;
       const cambio = await reconciliarArticuloPorMaterias(db, LOCAL_ID, artId, articulos, materiaPrima);
       if (cambio) articulosCambiados += 1;
     }

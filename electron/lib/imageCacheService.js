@@ -427,6 +427,36 @@ function createImageCacheService(options = {}) {
    * queda para el sweep seguro. Un re-download posterior (objeto recreado) limpia
    * el estado (vuelve a 'ready').
    */
+  /**
+   * AUTOCORRECCIÓN: la imagen volvió a existir en el remoto.
+   *
+   * Quita el estado `remote-deleted` en cuanto una comprobación de metadata
+   * confirma que el objeto está: sin esto, una marca vieja (o puesta por error)
+   * dejaba al artículo con el ícono genérico para siempre, y la única forma de
+   * repararlo era abrir el artículo y volver a guardarlo para que cambiara
+   * `lastModified`. Ahora el caché se repara solo, sin tocar ningún dato.
+   *
+   * Es idempotente y NO descarga: sólo levanta la marca y deja la entrada lista
+   * para que el flujo normal la vuelva a bajar. Si no hay entrada, no hay nada
+   * que limpiar.
+   */
+  async function clearRemoteDeleted(localId, bucket, objectPath, remoteMeta) {
+    const key = makeStableKey(bucket, objectPath);
+    return withManifest(localId, (manifest) => {
+      const entry = manifest[key];
+      if (!entry || entry.state !== 'remote-deleted') return { value: { key, cleared: false } };
+      delete entry.state;
+      delete entry.remoteDeletedAt;
+      // Se fuerza la re-descarga: el archivo local (si quedó) puede no
+      // corresponder al objeto que hoy está en el remoto.
+      entry.generation = remoteMeta && remoteMeta.generation != null ? String(remoteMeta.generation) : null;
+      entry.md5Hash = (remoteMeta && remoteMeta.md5Hash) || null;
+      entry.lastCheckedAt = now();
+      debug('REMOTE_DELETED_CLEARED', { objectPath: normalizeObjectPath(objectPath), key });
+      return { __write: true, manifest, value: { key, cleared: true } };
+    });
+  }
+
   async function markRemoteDeleted(localId, bucket, objectPath) {
     const key = makeStableKey(bucket, objectPath);
     return withManifest(localId, (manifest) => {
@@ -653,6 +683,7 @@ function createImageCacheService(options = {}) {
     shouldCheckMetadata,
     recordMetadataCheck,
     markRemoteDeleted,
+    clearRemoteDeleted,
     download,
     downloadWithRefresh,
     resolveProtocolPath,

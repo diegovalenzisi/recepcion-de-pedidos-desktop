@@ -151,8 +151,17 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
         // No duplicar aquí.
         await onConfirmPayment(payments.filter(p => p.amount > 0), specialDiscount, emiteFactura, currentTotal);
     } catch (e) {
-        setIsSubmitting(false);
         toast({ variant: "destructive", title: "Error", description: "Ocurrió un error al procesar el pago." });
+    } finally {
+        // SIEMPRE se libera el botón, por cualquier salida.
+        //
+        // Antes sólo se limpiaba en el `catch`, y el camino de éxito dependía de
+        // que el padre cerrara el modal. Como `handlePaymentConfirm` atrapa sus
+        // propios errores y NO relanza, cualquier salida que no terminara en
+        // cierre (error al guardar, cola fiscal mal configurada, factura
+        // demorada, error de ARCA, cancelación de la pregunta) dejaba el botón
+        // girando para siempre.
+        setIsSubmitting(false);
     }
   };
 
@@ -196,11 +205,20 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
               </div>
             </div>
             
-            <div className="space-y-4">
-              <PaymentMethodSlider methods={availablePaymentMethods} onSelect={setSelectedPaymentMethod} selectedMethod={selectedPaymentMethod}/>
-            </div>
-            
-            {selectedPaymentMethod === 'Efectivo' && !specialDiscountType ? (
+            {/* VENTA YA PAGADA POR COMPLETO: no se ofrece iniciar otro pago.
+                Antes, con el saldo en cero, elegir otro medio volvía a mostrar
+                "Monto a Cobrar / Paga con / Añadir Pago" —un cobro que no
+                correspondía y que sólo podía confundir—. Con saldo cero quedan
+                a la vista únicamente los pagos registrados y Confirmar Venta.
+                El descuento especial mantiene su propio flujo. */}
+            {(remainingBalance > 0.009 || specialDiscountType) && (
+              <div className="space-y-4">
+                <PaymentMethodSlider methods={availablePaymentMethods} onSelect={setSelectedPaymentMethod} selectedMethod={selectedPaymentMethod}/>
+              </div>
+            )}
+
+            {remainingBalance <= 0.009 && !specialDiscountType ? null
+              : selectedPaymentMethod === 'Efectivo' && !specialDiscountType ? (
                 <div className="space-y-3 p-3 bg-green-50 rounded-lg border border-green-100">
                     <div className="grid grid-cols-2 gap-4">
                         <div>

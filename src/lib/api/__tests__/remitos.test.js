@@ -21,6 +21,7 @@ import {
   rutaContadorRemitos,
   rutaRemito,
   rutaRemitos,
+  totalNoFacturado,
 } from '../remitos.js';
 import { LOCAL_ID_REQUERIDO } from '../rutasLocales.js';
 
@@ -219,14 +220,30 @@ check('un FCX histórico de VENTAS (claves en mayúscula) también se muestra', 
   assert.strictEqual(fila.modo, 'mostrador');
   assert.strictEqual(fila.articulos.length, 0);
 });
-check('un remito ya facturado no se lista (no se cuenta dos veces)', () => {
+check('un remito facturado a posteriori SIGUE listado, con su factura', () => {
+  const filas = filasDeRemitos({
+    'FCX0008-00000001': { numeroComprobante: 'FCX0008-00000001', fecha: '25-07-2026', hora: '10:00:00', total: 100 },
+    'FCX0008-00000002': {
+      numeroComprobante: 'FCX0008-00000002', fecha: '25-07-2026', hora: '11:00:00', total: 200,
+      facturado: true, estadoFacturacion: 'FACTURADO', numeroFactura: 'FCB0008-00010300', tipoFactura: 'FCB', cae: '75123',
+    },
+  });
+  assert.strictEqual(filas.length, 2, 'el remito facturado desapareció del listado');
+  const facturado = filas.find((f) => f.numeroFactura === 'FCX0008-00000002');
+  assert.strictEqual(facturado.facturado, true);
+  assert.strictEqual(facturado.numeroFacturaFiscal, 'FCB0008-00010300');
+  assert.strictEqual(facturado.tipoFactura, 'FCB');
+  assert.strictEqual(facturado.cae, '75123');
+  assert.deepStrictEqual(filasDeRemitos(null), []);
+});
+check('el importe facturado NO se cuenta dos veces en el total', () => {
   const filas = filasDeRemitos({
     'FCX0008-00000001': { numeroComprobante: 'FCX0008-00000001', fecha: '25-07-2026', hora: '10:00:00', total: 100 },
     'FCX0008-00000002': { numeroComprobante: 'FCX0008-00000002', fecha: '25-07-2026', hora: '11:00:00', total: 200, facturado: true },
   });
-  assert.strictEqual(filas.length, 1);
-  assert.strictEqual(filas[0].numeroFactura, 'FCX0008-00000001');
-  assert.deepStrictEqual(filasDeRemitos(null), []);
+  assert.strictEqual(totalNoFacturado(filas), 100, 'sumó el remito ya facturado');
+  assert.strictEqual(totalNoFacturado([]), 0);
+  assert.strictEqual(totalNoFacturado(null), 0);
 });
 check('ordena del más nuevo al más viejo', () => {
   const filas = ordenarRemitos([

@@ -22,6 +22,8 @@ const OperationalToggles = ({ settings, onSettingsChange }) => {
         />
       </div>
 
+      {/* Sólo afecta a las ventas de MOSTRADOR. Apagado (por defecto) el
+          sistema se comporta exactamente como antes. */}
       <div className="flex items-center justify-between p-4 border rounded-lg">
         <div>
           <Label htmlFor="pickup-enabled" className="font-bold">Retiro en Local Habilitado</Label>

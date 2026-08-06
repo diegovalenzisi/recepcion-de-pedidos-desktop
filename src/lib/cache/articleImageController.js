@@ -81,10 +81,19 @@ export function createArticleImageController(deps) {
           debug('CACHE_HIT', { objectPath });
           emit(local.protocolUrl);
         } else if (local.remoteDeleted) {
-          // Ya estaba marcada como eliminada: placeholder de entrada, pero igual
-          // se comprueba metadata por si fue recreada en el mismo path.
-          resultCache.set(id, { src: placeholderSrc, deleted: true, checkedAt: (resultCache.get(id) || {}).checkedAt || 0 });
-          emit(placeholderSrc);
+          // Estaba marcada como eliminada. NO se emite el placeholder de
+          // entrada: una marca vieja —o puesta por error— no puede tapar una
+          // imagen que hoy existe. Se muestra la URL remota, que es la mejor
+          // copia conocida, y la comprobación de metadata de abajo decide:
+          // si el objeto está, se levanta la marca y se re-descarga; si de
+          // verdad no está, ahí sí se cae al placeholder.
+          const mejorConocida = url || placeholderSrc;
+          resultCache.set(id, {
+            src: mejorConocida,
+            deleted: false,
+            checkedAt: (resultCache.get(id) || {}).checkedAt || 0,
+          });
+          emit(mejorConocida);
         }
 
         // 2) ¿Corresponde comprobar metadata? (throttle). Copia local fresca
@@ -116,9 +125,20 @@ export function createArticleImageController(deps) {
           return;
         }
 
-        // status === 'ok'
+        // status === 'ok' — el objeto EXISTE en el remoto.
         const remoteMeta = metaRes.meta;
         const recreated = !!local.remoteDeleted; // estaba borrada y ahora existe → re-descargar
+
+        // AUTOCORRECCIÓN DEL CACHÉ: se levanta `remote-deleted` del manifiesto
+        // ya mismo, sin esperar a que la descarga salga bien y sin depender de
+        // que alguien abra el artículo y lo guarde. Si la descarga falla, la
+        // marca igual quedó limpia y el artículo sigue mostrando su URL remota.
+        if (recreated && api.clearRemoteDeleted) {
+          try {
+            await api.clearRemoteDeleted({ localId, bucket, objectPath, remoteMeta });
+            debug('REMOTE_DELETED_CLEARED', { objectPath });
+          } catch { /* best-effort: nunca bloquear la imagen */ }
+        }
         const mustDownload = !local.cached || recreated || decideChanged(local.entry, remoteMeta);
         if (mustDownload) {
           if (recreated || decideChanged(local.entry, remoteMeta)) debug('IMAGE_VERSION_CHANGED', { objectPath });
@@ -153,7 +173,14 @@ export function createArticleImageController(deps) {
   function immediateSrc(localId, identity) {
     const id = memId(localId, identity.bucket, identity.objectPath);
     const cached = resultCache.get(id);
-    return (cached && cached.src) || identity.url;
+    // El placeholder NUNCA le gana a una URL remota usable: si lo único que hay
+    // cacheado es "esto no existe" pero la identidad trae URL, se muestra la
+    // remota. Una eliminación confirmada en esta corrida sí manda (deleted).
+    if (cached && cached.src) {
+      const esPlaceholder = cached.src === placeholderSrc;
+      if (!esPlaceholder || cached.deleted || !identity.url) return cached.src;
+    }
+    return identity.url || placeholderSrc;
   }
 
   // Warm-up con concurrencia limitada y throttle POR LOCAL (requisito 10): si se

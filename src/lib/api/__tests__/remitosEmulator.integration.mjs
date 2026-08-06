@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getDatabase, ref, get, set, connectDatabaseEmulator } from 'firebase/database';
 import { emitirRemito, rutaMarcaDeVenta } from '../remitosFlujo.js';
-import { filasDeRemitos, rutaRemitos } from '../remitos.js';
+import { filasDeRemitos, rutaRemitos, totalNoFacturado } from '../remitos.js';
 
 let passed = 0;
 async function check(name, fn) {
@@ -153,6 +153,24 @@ await check('emiteFactura=true → omitido, sin escribir nada', async () => {
   assert.strictEqual(despues, antes);
   assert.strictEqual((await get(ref(A.db, `${ACHAVAL}/MOSTRADOR/40/remito`))).val(), null);
 });
+await check('comprobante=FACTURA (cuenta con "Imprime Factura") → omitido, sin FCX', async () => {
+  const venta = { ...ventaMostrador(41, 8000), comprobante: 'FACTURA', motivoComprobante: 'cuenta-imprime-factura' };
+  await sembrarVenta(ACHAVAL, venta);
+  const antes = Object.keys((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val() || {}).length;
+  const r = await emitir(A.db, ACHAVAL, venta);
+  assert.strictEqual(r.estado, 'omitido');
+  assert.strictEqual(r.motivo, 'la-venta-se-factura');
+  const despues = Object.keys((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val() || {}).length;
+  assert.strictEqual(despues, antes);
+  assert.strictEqual((await get(ref(A.db, `${ACHAVAL}/MOSTRADOR/41/remito`))).val(), null);
+});
+await check('comprobante=REMITO manda sobre un emiteFactura viejo → sí emite FCX', async () => {
+  const venta = { ...ventaMostrador(42, 8000), emiteFactura: true, comprobante: 'REMITO' };
+  await sembrarVenta(ACHAVAL, venta);
+  const r = await emitir(A.db, ACHAVAL, venta);
+  assert.strictEqual(r.estado, 'emitido');
+  assert.ok((await get(ref(A.db, `${ACHAVAL}/Remitos/${r.numeroComprobante}`))).exists());
+});
 await check('una factura FCB en VENTAS no aparece entre los remitos', async () => {
   await set(ref(A.db, `${ACHAVAL}/VENTAS/FCB0008-00010295`), {
     CLIENTE: 'Consumidor Final', FECHA: '25-07-2026', HORA: '22:50:00', IMPORTE: 8000, NumeroFactura: 'FCB0008-00010295',
@@ -160,12 +178,18 @@ await check('una factura FCB en VENTAS no aparece entre los remitos', async () =
   const filas = filasDeRemitos((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val());
   assert.ok(filas.every((f) => !String(f.numeroFactura).startsWith('FCB')), 'se coló una factura en Remitos');
 });
-await check('un remito facturado a posteriori deja de listarse (no se cuenta dos veces)', async () => {
-  const antes = filasDeRemitos((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val()).length;
+await check('un remito facturado a posteriori sigue listado, pero no suma dos veces', async () => {
+  const antes = filasDeRemitos((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val());
   await set(ref(A.db, `${ACHAVAL}/Remitos/FCX0008-00000001/facturado`), true);
-  const despues = filasDeRemitos((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val()).length;
-  assert.strictEqual(despues, antes - 1);
+  const despues = filasDeRemitos((await get(ref(A.db, rutaRemitos(ACHAVAL)))).val());
+
+  assert.strictEqual(despues.length, antes.length, 'el remito facturado desapareció del listado');
+  const fila = despues.find((f) => f.numeroFactura === 'FCX0008-00000001');
+  assert.strictEqual(fila.facturado, true);
   assert.ok((await get(ref(A.db, `${ACHAVAL}/Remitos/FCX0008-00000001`))).exists(), 'se borró el remito en vez de marcarlo');
+  // El importe ya está contado en Facturación: sale del total de Remitos.
+  assert.strictEqual(totalNoFacturado(despues), totalNoFacturado(antes) - fila.importe);
+
   await set(ref(A.db, `${ACHAVAL}/Remitos/FCX0008-00000001/facturado`), false);
 });
 

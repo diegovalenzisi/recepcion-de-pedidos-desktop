@@ -29,6 +29,7 @@ import { preloadImage } from '@/lib/cache/imageCache';
 import { warmArticleImages, sweepArticleImageOrphans } from '@/lib/cache/articleImageCache';
 import { getLocalId } from '@/lib/firebase/core';
 import { useStockVerification } from '@/hooks/useStockVerification';
+import { validarStockDeCarrito, MENSAJE_STOCK_NO_VERIFICABLE } from '@/lib/api/validacionStockVentaApi';
 import { usePromotionStockAutomation } from '@/hooks/usePromotionStockAutomation';
 
 function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false, orderToEdit = null, context = 'delivery', isCounterMode = false, currentShift, settings }) {
@@ -48,6 +49,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   // Unidad que se está configurando ("Unidad 2 de 2"). null = alta normal.
   const [pendingUnitInfo, setPendingUnitInfo] = useState(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
+  const [isValidatingStock, setIsValidatingStock] = useState(false);
   const [articleForSelection, setArticleForSelection] = useState(null);
   const [editOrderType, setEditOrderType] = useState('ENVIO');
 
@@ -380,7 +382,44 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     return paymentMethods;
   }, [orderItems, departments, allArticles, paymentMethods]);
 
-  const handleConfirmOrder = () => {
+  /**
+   * Revalida el stock del carrito contra un snapshot FRESCO, con la cantidad
+   * real de cada línea. El catálogo se filtra en vivo, pero entre agregar un
+   * artículo y confirmar puede agotarse una materia prima (otra terminal, la
+   * cocina, un carrito abierto un buen rato).
+   *
+   * Si la LECTURA falla, la venta TAMPOCO sigue: vender sin poder verificar el
+   * stock es justamente lo que hay que evitar. El operador ve qué pasó y puede
+   * reintentar; nada quedó a medias.
+   *
+   * @returns {Promise<boolean>} true si se puede seguir.
+   */
+  const revalidarStock = useCallback(async (items) => {
+    setIsValidatingStock(true);
+    try {
+      const stock = await validarStockDeCarrito(items);
+      if (!stock.suficiente) {
+        toast({
+          variant: "destructive",
+          title: "Sin stock suficiente",
+          description: stock.mensaje,
+        });
+        return false;
+      }
+      return true;
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        title: "No se pudo verificar el stock",
+        description: e?.message || MENSAJE_STOCK_NO_VERIFICABLE,
+      });
+      return false;
+    } finally {
+      setIsValidatingStock(false);
+    }
+  }, [toast]);
+
+  const handleConfirmOrder = async () => {
     if (orderItems.length === 0) {
       toast({
         variant: "destructive",
@@ -404,9 +443,15 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
       return;
     }
 
+    // Stock real ANTES de avanzar al pago (mostrador) o a los datos del cliente
+    // (delivery): indica qué materia prima falta y cuánta hace falta.
+    if (!await revalidarStock(orderItems)) return;
+
     if (isCounterMode) {
       onOrderCreated({ items: orderItems, total });
     } else if (isEditing) {
+      // `yaValidado`: el stock se acaba de revalidar dos líneas más arriba, no
+      // hace falta volver a leer el snapshot.
       handleFinalizeOrder({
         items: orderItems,
         type: editOrderType,
@@ -415,7 +460,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
             amount: total,
             total: total
         }
-      });
+      }, { yaValidado: true });
     } else {
       setIsConfirmModalOpen(true);
     }
@@ -425,10 +470,16 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     setIsConfirmModalOpen(false);
   };
 
-  const handleFinalizeOrder = async (orderData) => {
+  const handleFinalizeOrder = async (orderData, { yaValidado = false } = {}) => {
+    // Segunda revalidación: entre confirmar el pedido y llegar acá el operador
+    // cargó los datos del cliente en ConfirmOrderModal, y eso puede llevar
+    // minutos. ConfirmOrderModal llama con un solo argumento, así que este
+    // camino siempre revalida.
+    if (!yaValidado && !await revalidarStock(orderData.items)) return;
+
     try {
       let newOrderId;
-      
+
       if (orderData?.payment?.payments) {
         const operationalDate = formatDateToDDMMAAAA(getOperationalDate(new Date()));
         for (const payment of orderData.payment.payments) {
@@ -548,8 +599,10 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
               </div>
             )}
             <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-            <Button className="bg-green-600 hover:bg-green-700" onClick={handleConfirmOrder} disabled={isLoadingData}>
-              {isEditing ? 'Guardar Cambios' : (isCounterMode ? 'Proceder al Pago' : 'Confirmar Pedido')}
+            <Button className="bg-green-600 hover:bg-green-700" onClick={handleConfirmOrder} disabled={isLoadingData || isValidatingStock}>
+              {isValidatingStock
+                ? 'Verificando stock...'
+                : (isEditing ? 'Guardar Cambios' : (isCounterMode ? 'Proceder al Pago' : 'Confirmar Pedido'))}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -575,6 +628,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         currentIndex={promoConfig.currentGroupIndex}
         totalChoices={promoConfig.groupChoicesToResolve.length}
         onSelect={handleGroupItemResolved}
+        onCancel={resetPromoConfig}
       />
 
       <ConfirmOrderModal

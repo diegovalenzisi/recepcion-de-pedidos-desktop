@@ -15,6 +15,7 @@ import { getCurrentLocalId } from '@/lib/firebase/core';
 import { uploadAfipFile } from '@/lib/firebase/storage';
 import { saveAfipConfigToFirebase, fetchAfipConfigFromFirebase } from '@/lib/api/afipConfigApi';
 import { useFacturacionOwnership } from '@/hooks/useFacturacionOwnership';
+import ColasFiscalesPanel from '@/components/settings/local/admin/ColasFiscalesPanel';
 import { normalizeFirebaseDatabaseURL } from '@/lib/utils/firebaseUrl';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -30,7 +31,7 @@ const ts   = () => new Date().toLocaleTimeString('es-AR');
 
 const DEFAULT_FIELDS = (condIVA) => ({
   nombre: '', cuit: '', cuitFormat: '', razonSocial: '', fantasia: '',
-  domicilio: '', inicioActividades: '', condIVA,
+  domicilio: '', inicioActividades: '', iibb: '', condIVA,
   ptoVta: '', logAlias: '', firebaseDb: '', firebasePath: '', firebaseHistorial: '',
   opensslBin: '',
   certFile: null, keyFile: null, serviceAccountFile: null,
@@ -63,9 +64,8 @@ function buildEnvData(fields, tipo, machineId) {
     EMISOR_CUIT_FORMAT:            fields.cuitFormat          || '',
     EMISOR_DOMICILIO:              fields.domicilio           || '',
     EMISOR_COND_IVA:               fields.condIVA             || '',
-    ...(tipo === 'responsable_inscripto'
-      ? { EMISOR_INICIO_ACTIVIDADES: fields.inicioActividades || '' }
-      : {}),
+    EMISOR_INICIO_ACTIVIDADES:     fields.inicioActividades   || '',
+    EMISOR_IIBB:                   fields.iibb                || '',
     OPENSSL_BIN:                   fields.opensslBin          || '',
     LOG_ALIAS:                     fields.logAlias || fields.nombre || '',
     MACHINE_ID:                    machineId                  || '',
@@ -474,12 +474,18 @@ function AccountForm({ tipo, fields, onChange, onSave, saving, accountDir, machi
           <Label className="text-xs text-gray-500">Domicilio</Label>
           <Input {...f('domicilio')} placeholder="Av. Siempre Viva 123" className="bg-white" />
         </div>
-        {isRI && (
-          <div className="space-y-1">
-            <Label className="text-xs text-gray-500">Inicio de actividades</Label>
-            <Input {...f('inicioActividades')} placeholder="01/01/2020" className="bg-white" />
-          </div>
-        )}
+        {/* Inicio de actividades e Ingresos Brutos son datos del encabezado de
+            CUALQUIER factura, no sólo de las de responsable inscripto. Estaban
+            ocultos para monotributo y por eso ninguna cuenta monotributo los
+            tenía cargados. Se imprimen sólo si están completos. */}
+        <div className="space-y-1">
+          <Label className="text-xs text-gray-500">Inicio de actividades</Label>
+          <Input {...f('inicioActividades')} placeholder="01/01/2020" className="bg-white" />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-gray-500">Ingresos Brutos</Label>
+          <Input {...f('iibb')} placeholder="Ej: 901-234567-8 (vacío = no se imprime)" className="bg-white" />
+        </div>
         <div className="space-y-1">
           <Label className="text-xs text-gray-500">Alias en logs</Label>
           <Input {...f('logAlias')} placeholder="Ej: Factu-Diego" className="bg-white" />
@@ -1252,6 +1258,9 @@ const FacturacionManager = () => {
           </Label>
         </div>
       </div>
+
+      {/* Estado real de las nueve colas: cada una es una cuenta fiscal distinta */}
+      <ColasFiscalesPanel />
 
       {/* Banner de sincronización Firebase */}
       <FirebaseSyncBanner

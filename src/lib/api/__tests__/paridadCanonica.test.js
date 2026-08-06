@@ -48,6 +48,16 @@ const NUCLEO = [
 // tickets, no calcula costo/ganancia y no ingiere pedidos: los emite).
 // Donde existan en dos repos, deben coincidir.
 const COMPARTIDOS_RECEPTORES = [
+  'src/lib/api/comprobanteFiscal.js',              // tipo fiscal real, emisor y detalle del comprobante
+  'src/lib/api/__tests__/comprobanteFiscal.test.js',
+  'src/lib/api/colasFiscales.js',                  // una cuenta fiscal por cada FACTURACION_N
+  'src/lib/api/colasFiscalesApi.js',
+  'src/lib/api/__tests__/colasFiscales.test.js',
+  'src/lib/api/__tests__/colasFiscalesEmulator.integration.mjs',
+  'src/lib/api/facturaORemitoApi.js',              // decisión + validación de la cola elegida
+  'src/lib/api/__tests__/facturaFormatoEmulator.integration.mjs',
+  'src/lib/api/__tests__/reimpresionFactura.render.test.mjs',
+  'src/components/sales/ReceiptDocument.jsx',      // reimpresión fiscal y de remitos
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',
@@ -64,6 +74,9 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/__tests__/stockAtomico.test.js',
   'src/lib/print/orderPrintDetail.js',
   'src/lib/print/counterTicketHtml.js',
+  'src/lib/print/comandaModelo.js',                // título real del grupo + unidades idénticas
+  'src/lib/print/utils.js',
+  'src/lib/print/__tests__/comandaModelo.test.js',
 ];
 
 // Pruebas que deben ser idénticas donde existan.

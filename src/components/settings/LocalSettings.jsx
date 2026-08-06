@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Loader2, Save } from 'lucide-react';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import PaymentMethodsSettings from '@/components/settings/PaymentMethodsSettings';
 import AdminPanel from './local/AdminPanel';
 import GeneralInfo from './local/GeneralInfo';
@@ -67,8 +66,19 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
           <CardTitle className="text-3xl font-bold">Configuración del Local</CardTitle>
           <CardDescription className="text-gray-300">Administra la información general y los parámetros de tu negocio.</CardDescription>
         </CardHeader>
-        <ScrollArea className="flex-grow">
-          <CardContent className="p-8 space-y-8">
+        {/* DESPLAZAMIENTO DEL CONTENIDO.
+            Antes era un ScrollArea (Radix), que en este proyecto solo monta la
+            barra VERTICAL: con el formulario más ancho que el panel, el contenido
+            quedaba cortado a la derecha y no había forma de llegar a él. Un
+            contenedor con overflow en los dos ejes da barra horizontal propia
+            cuando hace falta, sin que se desplace la ventana de la aplicación
+            (el panel nunca supera el 96% del ancho). El encabezado y el pie
+            quedan fuera de este contenedor —son flex-shrink-0 dentro de un Card
+            en columna— así que se mantienen visibles sin necesidad de sticky. */}
+        <div className="flex-grow overflow-y-auto overflow-x-auto">
+          {/* Ancho mínimo para que las columnas y los interruptores no se
+              compriman; por debajo de esto aparece la barra horizontal. */}
+          <CardContent className="p-8 space-y-8 min-w-[1100px]">
             {user && user.usuario === 'DiegoL' && (
               <AdminPanel
                 settings={settings}
@@ -99,7 +109,7 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
             <WhatsAppSettings />
             <PaymentMethodsSettings paymentMethods={settings.formasDePago} onPaymentMethodsChange={handlePaymentMethodsChange} />
           </CardContent>
-        </ScrollArea>
+        </div>
         <CardFooter className="bg-gray-100 p-6 flex justify-end flex-shrink-0">
           <Button onClick={onSave} disabled={saving} className="w-40 h-12 text-lg font-bold bg-primary hover:bg-primary-dark">
             {saving ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Save className="mr-2 h-5 w-5" />}

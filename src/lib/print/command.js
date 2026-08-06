@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { reloadPrintSettings, cachedPrintSettings } from './settings';
 import { printElectron } from './electronPrint';
 import { generateOptionalsHtml } from './utils';
+import { bloquesDeComanda } from './comandaModelo.js';
 import { getBusinessNameUppercase } from '@/lib/businessNameUtils';
 
 export const printCommand = async (order, optionalGroups = []) => {
@@ -15,9 +16,19 @@ export const printCommand = async (order, optionalGroups = []) => {
   let itemsHtml = '';
   let totalItems = 0;
 
-  order.items.forEach(item => {
-    const quantity = typeof item.quantity === 'number' ? item.quantity : 1;
+  // UNIDADES: cada unidad configurada se guarda como su propia línea, tanto si
+  // el pedido se cargó a mano como si llegó de DLV Pedidos. Cada una se imprime
+  // como un BLOQUE independiente —nombre del artículo repetido y su propia
+  // selección— separado del anterior. NO se numeran las unidades.
+  bloquesDeComanda(order.items).forEach(({ item, cantidad }, indice) => {
+    const quantity = cantidad;
     totalItems += quantity;
+
+    // Separación entre bloques: espacio amplio para que en el papel se lea
+    // claramente dónde termina una unidad y empieza la siguiente.
+    if (indice > 0) {
+      itemsHtml += '<tr><td colspan="2" class="item-separator"></td></tr>';
+    }
 
     let subItemsHtml = '';
     if (item.promoItems && item.promoItems.length > 0) {
@@ -37,12 +48,9 @@ export const printCommand = async (order, optionalGroups = []) => {
     }
     
     // La COMANDA no lleva importes (diseño actual del sistema, ver auditoría en
-    // orderPrintDetail.js). Sí debe identificar a qué unidad pertenece cada
-    // configuración cuando el pedido tiene varias unidades del mismo artículo.
-    const etiquetaUnidad = (Number(item.unidadTotal) > 1 && Number.isFinite(Number(item.unidadIndice)))
-      ? ` — UNIDAD ${item.unidadIndice} DE ${item.unidadTotal}`
-      : '';
-    const itemName = (item.isPromo ? `PROMO ${item.nombre.toUpperCase()}` : item.nombre) + etiquetaUnidad;
+    // orderPrintDetail.js) y NO numera las unidades: cada una es su propio
+    // bloque y se distingue por la separación, no por un "UNIDAD 1 DE 2".
+    const itemName = item.isPromo ? `PROMO ${item.nombre.toUpperCase()}` : item.nombre;
 
     itemsHtml += `
       <tr>
@@ -165,6 +173,12 @@ export const printCommand = async (order, optionalGroups = []) => {
           .items-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; }
           .items-table td { padding: 2px 0; text-align: left; }
           .item-name { font-size: 1.1em; }
+          /* Separación entre bloques: cada unidad configurada se lee aparte,
+             sin necesidad de numerarla. */
+          .item-separator {
+            height: 10mm;
+            border-bottom: 1px dotted black;
+          }
           .totals p { margin: 2px 0; }
           .totals .total-label { font-size: 1.2em; }
           .observation-section { border-top: 2px solid black; }

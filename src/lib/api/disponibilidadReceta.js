@@ -73,7 +73,16 @@ function entradasDeReceta(receta) {
  * SIN modificar nada (solo lee). Es la misma lógica que `getAvailableUnits`.
  *
  * Reglas:
- * - `controlStock === false` (artículo o materia prima) → Infinity (ilimitado).
+ * - `controlStock === false` → Infinity (ilimitado), pero SOLO en la rama de
+ *   stock PROPIO y en las materias primas. En un artículo por RECETA el
+ *   interruptor no significa "ilimitado": significa que ese artículo no lleva
+ *   cuenta propia de unidades porque su stock vive en la materia prima — que es
+ *   la configuración normal de un elaborado. Por eso la receta se evalúa igual.
+ *   Antes este chequeo estaba ANTES de resolver receta/heredado y devolvía
+ *   Infinity sin mirar nada: los elaborados se seguían vendiendo con la materia
+ *   prima en cero, aunque el descuento sí se les aplicaba. Es exactamente la
+ *   misma corrección que ya tiene `resolverRutasFisicas` en stockPlan.js, que
+ *   hasta ahora contradecía a este módulo.
  * - materia prima con "Ignora Stock" → Infinity (no limita, igual que la
  *   anterior): su faltante no debe reducir las unidades fabricables.
  * - stock propio → `stock.propio` (nunca negativo, nunca NaN).
@@ -96,11 +105,12 @@ export function unidadesFabricables(articleId, articulos = {}, materiaPrima = {}
 
   const article = articulos[articleId];
   if (article) {
-    if (article.controlStock === false) return Infinity;
-
     const stock = article.stock || {};
     const tipo = tipoDeStock(stock);
 
+    // La resolución de heredado/receta va PRIMERO: `controlStock` solo apaga la
+    // cuenta de stock PROPIO, que es la única que el interruptor apaga de
+    // verdad. Un elaborado por receta se sigue evaluando por su materia prima.
     if (tipo === 'heredado' && stock.heredadoDe) {
       return unidadesFabricables(stock.heredadoDe, articulos, materiaPrima, next);
     }
@@ -121,7 +131,9 @@ export function unidadesFabricables(articleId, articulos = {}, materiaPrima = {}
       return Math.max(0, Math.floor(minRatio)); // UN SOLO floor, al final
     }
 
-    // propio (o tipo desconocido): stock numérico directo del artículo.
+    // propio (o tipo desconocido): stock numérico directo del artículo. Ésta es
+    // la única cuenta que `controlStock === false` apaga.
+    if (article.controlStock === false) return Infinity;
     return stockNoNegativo(stock.propio);
   }
 
@@ -139,14 +151,18 @@ export function unidadesFabricables(articleId, articulos = {}, materiaPrima = {}
 /**
  * ¿La receta del artículo tiene stock suficiente para `unidades` unidades?
  *
- * Devuelve `true` (NO bloquea) para artículos sin receta, `controlStock === false`
- * o receta vacía: esos casos conservan su comportamiento anterior. Solo evalúa el
- * stock cuando el tipo de stock efectivo es `receta`.
+ * Devuelve `true` (NO bloquea) para artículos sin receta o con receta vacía:
+ * esos casos conservan su comportamiento anterior. Solo evalúa el stock cuando
+ * el tipo de stock efectivo es `receta`.
+ *
+ * `controlStock === false` YA NO exime a un artículo por receta: en un elaborado
+ * ese interruptor solo dice que no lleva cuenta propia de unidades, no que se
+ * pueda preparar sin materia prima. Un artículo de stock PROPIO con el
+ * interruptor apagado sigue sin bloquear nunca (cae en el `!== 'receta'`).
  */
 export function recetaConStockSuficiente(articleId, articulos = {}, materiaPrima = {}, unidades = 1) {
   const article = articulos[articleId];
   if (!article) return true;                 // desconocido: no se bloquea (política vigente)
-  if (article.controlStock === false) return true;
   if (tipoDeStock(article.stock) !== 'receta') return true; // sin receta: intacto
 
   // Decisión EXACTA por acumulación de consumo real (respeta cantidad × receta
@@ -175,7 +191,7 @@ export function evaluarRecetaPedido(articleId, unidades, articulos = {}, materia
 
   const article = articulos[articleId];
   if (!article) { avisos.push({ tipo: 'articulo-inexistente', id: articleId }); return { suficiente: true, faltantes, avisos }; }
-  if (article.controlStock === false) return { suficiente: true, faltantes, avisos };
+  // `controlStock === false` no exime a un elaborado: ver recetaConStockSuficiente.
   if (tipoDeStock(article.stock) !== 'receta') return { suficiente: true, faltantes, avisos };
 
   // Acumula el consumo REAL por materia prima (respeta anidamiento y cantidades),
@@ -188,7 +204,7 @@ export function evaluarRecetaPedido(articleId, unidades, articulos = {}, materia
 
     const art = articulos[id];
     if (art) {
-      if (art.controlStock === false) return;
+      // heredado/receta PRIMERO: `controlStock` solo apaga la cuenta propia.
       const tipo = tipoDeStock(art.stock);
       if (tipo === 'heredado' && art.stock?.heredadoDe) { acumular(art.stock.heredadoDe, cantidad, next); return; }
       if (tipo === 'receta' && art.stock?.receta) {
@@ -201,7 +217,9 @@ export function evaluarRecetaPedido(articleId, unidades, articulos = {}, materia
         }
         return;
       }
-      // propio/desconocido: es un nodo físico de artículo con stock propio.
+      // propio/desconocido: es un nodo físico de artículo con stock propio, la
+      // única cuenta que `controlStock === false` apaga.
+      if (art.controlStock === false) return;
       consumo[id] = consumo[id] || { tipo: 'ARTICULO', cantidad: 0 };
       consumo[id].cantidad += cantidad;
       return;

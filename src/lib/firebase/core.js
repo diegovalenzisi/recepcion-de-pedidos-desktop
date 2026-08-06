@@ -387,7 +387,43 @@ export const getCurrentDatabaseOrThrow = (localId = getCurrentLocalId() || getLo
  * solo en los flujos que sí tienen un await genuino entre "obtener db" y
  * "escribir" (ver auditoría de operaciones en vuelo).
  */
-export const beginFirebaseOperation = (localId = getCurrentLocalId() || getLocalId()) => {
+/**
+ * TRES CONCEPTOS DISTINTOS que NO hay que confundir (hoy suelen coincidir, y
+ * justamente por eso el error pasaba desapercibido):
+ *
+ *   localId       — identidad del comercio ("40508022"). Es lo que se compara
+ *                   para saber si el usuario cambió de local.
+ *   databasePath  — raíz de datos DENTRO de la base ({localId} por defecto, o
+ *                   `databasePath` si el local tiene override de rutas). Es lo
+ *                   que se antepone a ARTICULOS/PEDIDOS/MOSTRADOR/…
+ *   databaseURL   — a QUÉ base de Firebase se conecta.
+ *
+ * `beginFirebaseOperation` espera un **localId**. Pasarle un databasePath hacía
+ * que `getDatabaseOrAbort()` comparara peras con manzanas y abortara TODAS las
+ * escrituras de esa operación en cuanto los dos valores dejaran de coincidir —
+ * es decir, en el primer local que configurara un override de rutas: ni ventas,
+ * ni stock, ni caja.
+ *
+ * Se normaliza en vez de explotar: si llega el databasePath del local activo se
+ * resuelve al localId real y se deja un error en consola para corregir el call
+ * site. Un localId genuinamente distinto se respeta tal cual (esa operación SÍ
+ * debe abortar: empezó en otro local).
+ */
+const normalizarLocalIdDeOperacion = (valor) => {
+  const activo = getCurrentLocalId() || getLocalId();
+  if (!valor || valor === activo) return valor;
+  if (String(valor) === String(getLocationSpecificDatabasePath(activo))) {
+    console.error(
+      '[core] beginFirebaseOperation recibió un databasePath ("%s") donde espera un localId ("%s"). ' +
+      'Se corrige automáticamente, pero hay que arreglar el call site.', valor, activo,
+    );
+    return activo;
+  }
+  return valor;
+};
+
+export const beginFirebaseOperation = (localIdRecibido = getCurrentLocalId() || getLocalId()) => {
+  const localId = normalizarLocalIdDeOperacion(localIdRecibido);
   const generation = getFirebaseGeneration();
 
   const getDatabaseOrAbort = () => {

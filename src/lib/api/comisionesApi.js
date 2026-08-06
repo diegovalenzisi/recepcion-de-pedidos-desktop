@@ -25,7 +25,7 @@ export const registrarComision = async ({
 }) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(localId);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);
@@ -74,7 +74,7 @@ export const registrarComision = async ({
 export const registrarPagoComision = async (montoPago, responsable = 'Sistema') => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(localId);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   const snap = await get(ref(db, `${localId}/COMISIONES/REGISTRO`));
@@ -170,7 +170,7 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema') 
 export const cancelarComision = async (idVenta) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(localId);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO/${idVenta}`);

@@ -17,6 +17,7 @@
 // ---------------------------------------------------------------------------
 
 import { ref, set, runTransaction } from 'firebase/database';
+import { ventaSeFactura } from './facturaORemito.js';
 import {
   construirNumeroRemito,
   construirRemitoDesdeVenta,
@@ -49,7 +50,11 @@ export const rutaMarcaDeVenta = (raiz, canal, ventaId) =>
  */
 export const emitirRemito = async ({ db, raiz, venta, canal = 'mostrador', puntoVenta, revalidarDb = null }) => {
   if (!venta || typeof venta !== 'object') return { estado: 'omitido', motivo: 'sin-venta' };
-  if (venta.emiteFactura) return { estado: 'omitido', motivo: 'la-venta-se-factura' };
+  // Única pregunta: ¿esta venta va al circuito fiscal? La responde
+  // facturaORemito.js mirando la decisión ya materializada en la venta
+  // (`comprobante`), o `emiteFactura` en las ventas anteriores a ese campo.
+  // Acá NO se mira el nombre del medio de pago.
+  if (ventaSeFactura(venta)) return { estado: 'omitido', motivo: 'la-venta-se-factura' };
 
   const ventaId = venta.id ?? venta.orderId;
   if (ventaId === null || ventaId === undefined || ventaId === '') {

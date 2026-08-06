@@ -1,10 +1,13 @@
-import { getDatabase, ref, get, runTransaction, update, push, set, onValue } from 'firebase/database';
+import { getDatabase, ref, get, runTransaction, update, push, set } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus, reconciliarMateriaPrima } from './stockDeliveryAutomation';
 import { checkAndUpdatePromotionStockStatus } from './promotionStockAutomation';
 import { construirPlanDeStock } from './stockPlan';
-import { revertirEnRecurso, resolverResultadoRecurso } from './stockAtomico';
+import {
+    revertirEnRecurso, resolverResultadoRecurso, aplicarEnRecurso, decidirIntento,
+    calcularImpactHash, construirMarcaFinal, rutaRecurso, RESULTADOS, quedoAplicado,
+} from './stockAtomico';
 
 const parseQuantity = (val) => {
     if (typeof val === 'number') return val;
@@ -160,27 +163,55 @@ const saveProcessReport = async (db, localId, impactMap, articlesData, materiaPr
     }
 }
 
-const acquireTransactionLock = async (db, localId, referenceId) => {
-    if (!referenceId) return true; 
-    
+/**
+ * RESERVA de la operación. Es una OPTIMIZACIÓN para no repetir trabajo, no el
+ * mecanismo de corrección: la garantía de exactly-once la da `appliedOps`
+ * dentro de cada recurso (`aplicarEnRecurso`), evaluado por el servidor en la
+ * misma transacción que cambia el stock.
+ *
+ * El candado anterior era `if (currentData) return;` y NO vencía nunca: si el
+ * descuento fallaba a mitad de camino, la marca quedaba en `processing` para
+ * siempre y todo reintento salía por "Already processed". La venta quedaba
+ * registrada y sin descontar, de forma permanente y silenciosa. `decidirIntento`
+ * reemplaza eso por un lease: `completed` no se reintenta, `processing` fresco
+ * se respeta, y `processing` huérfano se retoma — sin riesgo de doble descuento,
+ * porque el recurso ya sabe qué operaciones se le aplicaron.
+ */
+const acquireTransactionLock = async (db, localId, referenceId, source = null) => {
+    if (!referenceId) return { intentar: false, motivo: 'sin-referenceId' };
+
     const lockRef = ref(db, `${localId}/PROCESSED_STOCK_IDS/${referenceId}`);
-    
+    let decision = { intentar: false, motivo: 'sin-evaluar' };
+
     try {
-        const result = await runTransaction(lockRef, (currentData) => {
-            if (currentData) return; 
-            return { timestamp: Date.now(), status: 'processing' };
+        await runTransaction(lockRef, (marca) => {
+            decision = decidirIntento(marca);
+            if (!decision.intentar) return;   // aborta sin pisar la marca existente
+            return {
+                ...(marca || {}),
+                status: 'processing',
+                referenceId,
+                source: source || (marca && marca.source) || null,
+                intento: (Number(marca && marca.intento) || 0) + 1,
+                timestamp: Date.now(),
+            };
         });
-        return result.committed;
+        return decision;
     } catch (e) {
         console.error("Error acquiring transaction lock:", e);
-        return false; 
+        return { intentar: false, motivo: 'error-de-reserva' };
     }
 };
 
-const markTransactionAsCompleted = async (db, localId, referenceId) => {
+/**
+ * Cierra la operación con lo que REALMENTE quedó aplicado. `completed` solo si
+ * no faltó ningún recurso; si faltó alguno queda `partial`, que SÍ es
+ * reintentable (y cada recurso ya aplicado no se vuelve a descontar).
+ */
+const markTransactionAsCompleted = async (db, localId, referenceId, cierre) => {
     if (!referenceId) return;
     const lockRef = ref(db, `${localId}/PROCESSED_STOCK_IDS/${referenceId}`);
-    await update(lockRef, { status: 'completed', completedAt: Date.now() });
+    await update(lockRef, construirMarcaFinal(cierre));
 };
 
 const processStockUpdate = async (items, source = 'Venta Delivery', referenceId = null) => {
@@ -192,15 +223,21 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
     // reales (lock, lecturas de artículos/materia prima, reporte) antes de
     // las transacciones de stock, y más awaits (esas mismas transacciones)
     // antes del push de cada movimiento y del markTransactionAsCompleted final.
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
-    if (referenceId) {
-        const lockAcquired = await acquireTransactionLock(db, LOCAL_ID, referenceId);
-        if (!lockAcquired) {
-            console.warn(`Stock update for ${referenceId} already processed or in progress.`);
-            return { success: true, message: 'Already processed' };
-        }
+    // SIN referenceId no hay idempotencia posible: un reintento, un doble clic o
+    // dos dispositivos descontarían de nuevo. Antes esto se dejaba pasar en
+    // silencio (`if (!referenceId) return true`) y así corrían TODOS los
+    // descuentos de delivery, sin candado y sin marca.
+    if (!referenceId) {
+        throw new Error('STOCK_SIN_REFERENCIA: no se puede descontar stock sin un identificador idempotente de la venta.');
+    }
+
+    const reserva = await acquireTransactionLock(db, LOCAL_ID, referenceId, source);
+    if (!reserva.intentar) {
+        console.warn(`[stock] ${referenceId} no se procesa (${reserva.motivo}).`);
+        return { success: true, message: 'Already processed', motivo: reserva.motivo };
     }
 
     const impactMap = {}; 
@@ -257,85 +294,127 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
             await saveProcessReport(op.getDatabaseOrAbort(), LOCAL_ID, impactMap, articlesData, materiaPrimaData, source, referenceId);
         }
 
-        const updatePromises = [];
         const automationPromises = [];
         const validationPromises = [];
         const operationalDate = getOperationalDate(new Date());
 
-        // Revalida antes de empezar las transacciones de stock: arriba hubo
-        // varios await reales (lock, lecturas, reporte).
-        const stockDb = op.getDatabaseOrAbort();
-        for (const id in impactMap) {
+        // Hash del impacto: identifica ESTE plan. Si el mismo referenceId vuelve
+        // con otro contenido, el recurso lo rechaza en vez de descontar de nuevo.
+        const impactHash = calcularImpactHash(impactMap, { localId: LOCAL_ID, operation: 'decrement' });
+        const resultados = [];
+
+        // DESCUENTO IDEMPOTENTE POR RECURSO.
+        //
+        // Antes esto era una resta cruda sobre el escalar de stock
+        // (`runTransaction(.../stock/propio, n => n - cantidad)`), que NO dejaba
+        // registro de qué operación se había aplicado. Dos consecuencias reales:
+        // dos dispositivos procesando la misma venta descontaban dos veces, y la
+        // reversión de una cancelación —que sí mira `appliedOps`— nunca
+        // encontraba la operación original y por lo tanto jamás reponía nada.
+        //
+        // `aplicarEnRecurso` cambia el stock y registra la operación DENTRO de la
+        // misma transacción, así que la condición la evalúa el servidor.
+        // Se recorre en serie: cada recurso necesita su precarga y su
+        // transacción, y un pedido toca pocos nodos.
+        for (const id of Object.keys(impactMap)) {
             const { quantity, type } = impactMap[id];
+            const isArticle = type === 'ARTICULO';
+            const recurso = `${type}:${id}`;
 
-            const path = type === 'ARTICULO'
-                ? `${LOCAL_ID}/ARTICULOS/${id}/stock/propio`
-                : `${LOCAL_ID}/MATERIA_PRIMA/${id}/stock`;
+            // Revalida antes de CADA transacción definitiva: arriba hubo awaits
+            // reales (reserva, lecturas, reporte, recursos anteriores).
+            const refNodo = ref(op.getDatabaseOrAbort(), rutaRecurso(LOCAL_ID, id, type));
 
-            const itemRef = ref(stockDb, path);
-            const amountToReduce = quantity;
-
-            const transactionPromise = runTransaction(itemRef, (currentStock) => {
-                if (currentStock === null || typeof currentStock === 'undefined') return -amountToReduce;
-                return (Number(currentStock) || 0) - amountToReduce;
-            }).then(async ({ committed, snapshot }) => {
-                if (committed) {
-                    const newStockValue = snapshot.val();
-                    const isArticle = type === 'ARTICULO';
-                    
-                    if (isArticle) {
-                        const articleData = articlesData[id];
-                        const isOwnStock = shouldAutoToggleDelivery(articleData);
-                        const previousStock = (Number(snapshot.val()) || 0) + amountToReduce;
-                        
-                        console.log(`[Stock Transaction] Article ${id}: ${previousStock} -> ${newStockValue}`);
-
-                        if (newStockValue === 0 && previousStock > 0) {
-                            automationPromises.push(
-                                handleStockDepletion(id, newStockValue, previousStock, isOwnStock)
-                                    .catch(err => console.error(`[Automation Depletion] Failed for ${id}:`, err))
-                            );
-                        } else if (newStockValue > 0 && previousStock === 0) {
-                            automationPromises.push(
-                                handleStockReplenishment(id, newStockValue, previousStock, isOwnStock)
-                                    .catch(err => console.error(`[Automation Replenishment] Failed for ${id}:`, err))
-                            );
-                        } else {
-                            validationPromises.push(
-                                validateInheritedStockStatus(id, newStockValue)
-                                    .catch(err => console.error(`[Validation] Failed for inherited stock of ${id}:`, err))
-                            );
-                        }
-                    } else {
-                        // MATERIA PRIMA: reconciliar activoDelivery según el stock
-                        // recién commiteado (idempotente, lee el estado del nodo).
-                        automationPromises.push(
-                            reconciliarMateriaPrima(id)
-                                .catch(err => console.error(`[MP Delivery] Failed for ${id}:`, err))
-                        );
-                    }
-
-                    const transaction = {
-                        tipo: 'salida',
-                        itemId: id,
-                        isArticle,
-                        cantidad: amountToReduce,
-                        fecha: operationalDate.toISOString(),
-                        timestamp: Date.now(),
-                        motivo: source,
-                        referenceId: referenceId
-                    };
-                    // Revalida antes del push() definitivo: la transacción de
-                    // stock de arriba fue un await real.
-                    const transactionsRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/TRANSACCIONES_STOCK`);
-                    await push(transactionsRef, transaction);
-                }
+            // SIN PRECARGA. Acá había un `onValue` de "precalentamiento" que se
+            // desuscribía a sí mismo DENTRO de su propio callback, usando una
+            // variable declarada con `const` en esa misma línea.
+            //
+            // Cuando OTRO listener ya cubre la ruta —y en la app siempre lo hay:
+            // la pantalla de Stock, useStockStatus, las automatizaciones—, RTDB
+            // invoca el callback SINCRÓNICAMENTE, dentro de la llamada a
+            // onValue(). En ese instante `off` todavía está en la zona muerta
+            // temporal del `const`, así que `off()` lanza
+            // "Cannot access 'off' before initialization", el error sale del
+            // executor de la Promise, la promesa se rechaza y TODA la operación
+            // de stock muere en silencio con la marca en `processing`.
+            //
+            // La precarga además era innecesaria: `aplicarEnRecurso` ya resuelve
+            // el null de la primera invocación devolviendo `{}` para forzar la
+            // reejecución con los datos del servidor, y `resolverResultadoRecurso`
+            // distingue después "caché fría" de "recurso inexistente".
+            let salida = null;
+            let invocacion = 0;
+            await runTransaction(refNodo, (nodo) => {
+                invocacion += 1;
+                salida = aplicarEnRecurso(nodo, {
+                    referenceId, cantidad: quantity, impactHash, tipo: type, invocacion,
+                });
+                return salida.nodo;
             });
-            updatePromises.push(transactionPromise);
+
+            let resultado = salida ? salida.resultado : RESULTADOS.RETRYABLE;
+            if (resultado === RESULTADOS.RETRYABLE) {
+                resultado = resolverResultadoRecurso(resultado, (await get(refNodo)).val());
+            }
+            resultados.push({ recurso, itemId: id, tipo: type, resultado });
+
+            if (salida && salida.aviso) console.warn(`[stock] ${recurso}`, salida.aviso);
+            if (resultado !== RESULTADOS.APPLIED) {
+                if (resultado !== RESULTADOS.ALREADY_APPLIED) {
+                    console.error(`[stock] ${referenceId} — ${recurso} NO aplicado: ${resultado}`);
+                }
+                continue;   // ya aplicado, o no aplicable: no se registra dos veces
+            }
+
+            const previousStock = salida.stockAnterior;
+            const newStockValue = salida.stockNuevo;
+
+            if (isArticle) {
+                const articleData = articlesData[id];
+                const isOwnStock = shouldAutoToggleDelivery(articleData);
+                console.log(`[Stock Transaction] Article ${id}: ${previousStock} -> ${newStockValue}`);
+
+                if (newStockValue === 0 && previousStock > 0) {
+                    automationPromises.push(
+                        handleStockDepletion(id, newStockValue, previousStock, isOwnStock)
+                            .catch(err => console.error(`[Automation Depletion] Failed for ${id}:`, err))
+                    );
+                } else if (newStockValue > 0 && previousStock === 0) {
+                    automationPromises.push(
+                        handleStockReplenishment(id, newStockValue, previousStock, isOwnStock)
+                            .catch(err => console.error(`[Automation Replenishment] Failed for ${id}:`, err))
+                    );
+                } else {
+                    validationPromises.push(
+                        validateInheritedStockStatus(id, newStockValue)
+                            .catch(err => console.error(`[Validation] Failed for inherited stock of ${id}:`, err))
+                    );
+                }
+            } else {
+                // MATERIA PRIMA: reconciliar activoDelivery según el stock
+                // recién commiteado (idempotente, lee el estado del nodo).
+                automationPromises.push(
+                    reconciliarMateriaPrima(id)
+                        .catch(err => console.error(`[MP Delivery] Failed for ${id}:`, err))
+                );
+            }
+
+            const transaction = {
+                tipo: 'salida',
+                itemId: id,
+                isArticle,
+                cantidad: quantity,
+                fecha: operationalDate.toISOString(),
+                timestamp: Date.now(),
+                motivo: source,
+                referenceId: referenceId
+            };
+            // Revalida antes del push() definitivo: la transacción de
+            // stock de arriba fue un await real.
+            const transactionsRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/TRANSACCIONES_STOCK`);
+            await push(transactionsRef, transaction);
         }
 
-        await Promise.all(updatePromises);
-        
         if (validationPromises.length > 0) {
             await Promise.all(validationPromises);
         }
@@ -344,12 +423,24 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
             await Promise.all(automationPromises);
         }
 
-        if (referenceId) {
-            // Revalida antes del update() final del lock: arriba hubo varios await reales.
-            await markTransactionAsCompleted(op.getDatabaseOrAbort(), LOCAL_ID, referenceId);
-        }
+        // Cierre honesto: `completed` SOLO si todos los recursos del plan
+        // quedaron aplicados. Si faltó alguno queda `partial`, que la reserva
+        // permite retomar sin volver a descontar los que ya estaban.
+        const faltantes = resultados.filter((r) => !quedoAplicado(r.resultado));
+        // Revalida antes del update() final de la marca: arriba hubo varios await reales.
+        await markTransactionAsCompleted(op.getDatabaseOrAbort(), LOCAL_ID, referenceId, {
+            referenceId,
+            impactHash,
+            impacto: resultados,
+            source,
+            parcial: faltantes.length > 0,
+        });
 
-        return { success: true };
+        if (faltantes.length > 0) {
+            console.error(`[stock] ${referenceId} quedó PARCIAL: faltan ${faltantes.map((r) => r.recurso).join(', ')}`);
+            return { success: false, parcial: true, faltantes, resultados };
+        }
+        return { success: true, resultados };
     } catch (error) {
         console.error("Error processing stock update:", error);
         throw error;
@@ -359,7 +450,16 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
 export const processStockForDeliveredOrder = async (order) => {
     if (!order || !order.items || order.items.length === 0) return { success: true, message: 'No items to process' };
     const referenceId = order.id ? `DELIVERY_${order.id}` : null;
-    
+
+    // El nodo guardado de PEDIDOS no tiene campo `id`: quien llame a esto tiene
+    // que pasar el pedido CON su id. Sin él no hay idempotencia y el descuento
+    // corría sin candado ni marca — que es exactamente lo que venía pasando.
+    if (!referenceId) {
+        const e = new Error('STOCK_SIN_REFERENCIA: el pedido llegó sin id, no se puede descontar stock de forma idempotente.');
+        console.error('[stock] delivery sin id — no se descuenta', e.message);
+        return { success: false, error: e.message };
+    }
+
     try {
         await processStockUpdate(order.items, 'Venta Delivery', referenceId);
         // Verify promotion availability after stock modifications
@@ -403,8 +503,11 @@ export const reverseStockForCounterSale = async (sale) => {
     const referenceIdReversion = `REVERSAL_MOSTRADOR_${sale.id}`;
 
     // Solo se revierte lo que efectivamente se aplicó.
+    // `partial` también se revierte: `revertirEnRecurso` solo repone los
+    // recursos que registraron la operación original, así que una venta que
+    // quedó a medio descontar devuelve exactamente lo que sí se descontó.
     const marcaOriginal = (await get(ref(db, `${LOCAL_ID}/PROCESSED_STOCK_IDS/${referenceIdOriginal}`))).val();
-    if (!marcaOriginal || marcaOriginal.status !== 'completed') {
+    if (!marcaOriginal || !['completed', 'partial'].includes(marcaOriginal.status)) {
         return { success: true, estado: 'original-not-applied', resultados: [], motivo: 'la venta no descontó stock' };
     }
     const marcaReversion = (await get(ref(db, `${LOCAL_ID}/PROCESSED_STOCK_IDS/${referenceIdReversion}`))).val();
@@ -431,12 +534,10 @@ export const reverseStockForCounterSale = async (sale) => {
             : `${LOCAL_ID}/MATERIA_PRIMA/${itemId}`;
         const refNodo = ref(dbRev, rutaNodo);
 
-        // Precarga: el reductor de runTransaction recibe null en su primera
-        // llamada si el nodo no está en el árbol de sincronización.
-        await new Promise((resolve) => {
-            const off = onValue(refNodo, () => { off(); resolve(); });
-        });
-
+        // SIN PRECARGA, por el mismo motivo que en el descuento: con otro
+        // listener activo sobre la ruta, el callback de onValue corre
+        // sincrónicamente y `off()` lanza dentro del executor de la Promise.
+        // `revertirEnRecurso` ya maneja el null de la primera invocación.
         let resultado = null;
         let invocacion = 0;
         await runTransaction(refNodo, (nodo) => {
@@ -483,6 +584,11 @@ export const reverseStockForCounterSale = async (sale) => {
 export const processStockForCounterSale = async (sale) => {
     if (!sale || !sale.items || sale.items.length === 0) return { success: true };
     const referenceId = sale.id ? `MOSTRADOR_${sale.id}` : null;
+    if (!referenceId) {
+        const mensaje = 'STOCK_SIN_REFERENCIA: la venta llegó sin id, no se puede descontar stock de forma idempotente.';
+        console.error('[stock] mostrador sin id — no se descuenta');
+        return { success: false, error: mensaje };
+    }
     try {
         await processStockUpdate(sale.items, 'Venta Mostrador', referenceId);
         // Verify promotion availability after stock modifications

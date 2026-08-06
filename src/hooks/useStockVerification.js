@@ -2,12 +2,31 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { getDatabase, ref, get } from 'firebase/database';
 import { getCurrentLocalId } from '@/lib/firebase/core';
 import { useStockStatus } from '@/hooks/useStockStatus';
-import { isPromoAvailable } from '@/lib/api/stockAvailability';
+import { isArticleAvailable, isPromoAvailable } from '@/lib/api/stockAvailability';
+import { tipoDeStock } from '@/lib/api/disponibilidadReceta';
 
 /**
  * Hook to verify real-time stock and availability for an array of articles.
  * Combines Firebase snapshot fetching (for accurate parent/child evaluation)
  * with the real-time useStockStatus listener for fallback and rapid updates.
+ *
+ * MOSTRADOR Y DELIVERY USAN ESTA MISMA FUNCIÓN, con la misma regla.
+ *
+ * La disponibilidad se CALCULA en vivo con `isArticleAvailable`
+ * (stockAvailability.js → disponibilidadReceta.js, canónico). No se lee ninguna
+ * marca persistida de "agotado": lo único persistido que se respeta es el activo
+ * MANUAL del canal (`activoDelivery` / `activoMostrador`), que jamás se escribe
+ * desde acá.
+ *
+ * Antes este filtro solo entendía stock propio y heredado. Un artículo por
+ * receta caía en `Number(stock)` sobre un objeto → NaN → `NaN <= 0` es false →
+ * pasaba SIEMPRE. En Delivery el artículo igual desaparecía, pero por otro
+ * motivo (una automatización le apagaba `activoDelivery` en Firebase); en
+ * Mostrador nadie apaga `activoMostrador`, así que quedaba visible con la
+ * materia prima en cero. Ahora los dos canales deciden por cálculo.
+ *
+ * MATERIA_PRIMA se lee SIEMPRE: sin ella no se puede evaluar ninguna receta.
+ * Antes solo se leía cuando había una promo con `descuentaPorArticulo`.
  *
  * @param {Array} articles - Initial array of articles to verify
  * @param {string} context - 'delivery' or 'counter' context to check active flags
@@ -42,69 +61,51 @@ export const useStockVerification = (articles = [], context = 'delivery', isOpen
         try {
             const db = getDatabase();
             const localId = getCurrentLocalId();
-            const articlesRef = ref(db, `${localId}/ARTICULOS`);
-            const snapshot = await get(articlesRef);
+
+            // ARTICULOS y MATERIA_PRIMA SIEMPRE, y del mismo instante: evaluar una
+            // receta exige las dos mitades del dato.
+            const [snapshot, mpSnapshot] = await Promise.all([
+                get(ref(db, `${localId}/ARTICULOS`)),
+                get(ref(db, `${localId}/MATERIA_PRIMA`)),
+            ]);
             const realTimeArticles = snapshot.val() || {};
+            const materiaPrimaData = mpSnapshot.val() || {};
 
-            const hasDescuentaPorArticulo = list.some(article => {
-                const rtArticle = realTimeArticles[article.id] || article;
-                return rtArticle.isPromo && rtArticle.stock?.descuentaPorArticulo === true;
-            });
-
-            let materiaPrimaData = {};
-            if (hasDescuentaPorArticulo) {
-                const mpSnapshot = await get(ref(db, `${localId}/MATERIA_PRIMA`));
-                materiaPrimaData = mpSnapshot.val() || {};
-            }
+            // Catálogo sobre el que se evalúa: manda el snapshot fresco, y la copia
+            // local solo rellena un artículo que todavía no esté en él. Sin esto, un
+            // artículo ausente del snapshot se resolvería como "no existe" → oculto.
+            const catalogo = { ...Object.fromEntries(list.map(a => [a.id, a])), ...realTimeArticles };
 
             const filtered = list.filter(article => {
-                const rtArticle = realTimeArticles[article.id] || article;
-
-                // 1. Verify active status based on context
-                const isActive = context === 'delivery' ? rtArticle.activoDelivery !== false : rtArticle.activoMostrador !== false;
-                if (!isActive) return false;
+                const rtArticle = catalogo[article.id] || article;
 
                 // Promotions that decuct stock from their real components: availability
                 // depends on those components, not on the promo's own stock fields.
                 if (rtArticle.isPromo && rtArticle.stock?.descuentaPorArticulo === true) {
-                    return isPromoAvailable(rtArticle, realTimeArticles, materiaPrimaData, allProductGroups, context);
+                    const isActive = context === 'delivery' ? rtArticle.activoDelivery !== false : rtArticle.activoMostrador !== false;
+                    if (!isActive) return false;
+                    return isPromoAvailable(rtArticle, catalogo, materiaPrimaData, allProductGroups, context);
                 }
 
-                // 2. If article explicitly does not control stock, it's available
-                if (rtArticle.controlStock === false) return true;
-
-                // 3. Verify real-time stock > 0
-                const isInherited = rtArticle.stock?.stockType === 'heredado' || rtArticle.stock?.heredadoDe;
-                if (isInherited) {
-                    const parentId = rtArticle.stock?.heredadoDe;
-                    const parent = realTimeArticles[parentId];
-                    
-                    if (!parent) return false; // Parent missing entirely
-                    
-                    // Verify parent's active status
-                    const parentIsActive = context === 'delivery' ? parent.activoDelivery !== false : parent.activoMostrador !== false;
-                    if (!parentIsActive) return false;
-                    
-                    // Verify parent's stock > 0
-                    const parentStock = parent.stock?.propio !== undefined ? Number(parent.stock.propio) : Number(parent.stock || 0);
-                    if (parentStock <= 0) return false;
-                } else {
-                    // Verify own stock > 0
-                    const ownStock = rtArticle.stock?.propio !== undefined ? Number(rtArticle.stock.propio) : Number(rtArticle.stock || 0);
-                    if (ownStock <= 0) return false;
-                }
-                
-                return true;
+                // Regla ÚNICA: activo manual del canal + poder producir 1 unidad
+                // (stock propio, heredado o receta con las cantidades reales).
+                return isArticleAvailable(article.id, catalogo, materiaPrimaData, context);
             });
 
             // 4. Extra safety check against real-time OOS arrays from useStockStatus hook
             // (skipped for promos that decuct stock by real article, since their own
             // stock fields don't represent their actual availability)
+            //
+            // Esta red mira SOLO `stock.propio` / `stock.heredado`, así que no aplica a
+            // un artículo por receta: ahí `propio` no significa nada (suele quedar en 0
+            // como resto de una configuración anterior) y taparía la decisión correcta
+            // que ya tomó `isArticleAvailable`. Para esos artículos manda el cálculo.
             const currentOos = outOfStockRef.current || [];
             const oosIds = new Set(currentOos.map(a => a.codigo || a.id));
             const finalFiltered = filtered.filter(a => {
                 if (a.isPromo && a.stock?.descuentaPorArticulo === true) return true;
                 if (a.controlStock === false) return true;
+                if (tipoDeStock((catalogo[a.id] || a).stock) === 'receta') return true;
                 return !oosIds.has(a.id);
             });
 

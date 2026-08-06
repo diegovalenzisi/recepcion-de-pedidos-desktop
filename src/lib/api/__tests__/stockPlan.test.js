@@ -19,6 +19,17 @@ const ARTICULOS = {
   'A-CICLO-A': { nombre: 'Ciclo A', stock: { stockType: 'heredado', heredadoDe: 'A-CICLO-B' } },
   'A-CICLO-B': { nombre: 'Ciclo B', stock: { stockType: 'heredado', heredadoDe: 'A-CICLO-A' } },
   'A-FALTA-MP': { nombre: 'Receta rota', stock: { stockType: 'receta', receta: { 'M-NO-EXISTE': 1 } } },
+  // Producto ELABORADO en su configuración normal: no lleva cuenta propia
+  // (controlStock=false) porque su stock vive en la materia prima de la receta.
+  // Es exactamente el caso de "1 KILO DE HELADO" en producción.
+  'A-ELABORADO-SIN-CONTROL': {
+    nombre: '1 KILO DE HELADO', controlStock: false,
+    stock: { stockType: 'receta', receta: { 'M-3': 1, 'M-9': 0.25 } },
+  },
+  'A-HEREDA-SIN-CONTROL': {
+    nombre: 'Hereda pero no controla', controlStock: false,
+    stock: { stockType: 'heredado', heredadoDe: 'A-ROCKLETS' },
+  },
 };
 const MATERIA_PRIMA = {
   'M-3': { nombre: 'Azúcar', stock: 100 },
@@ -44,10 +55,122 @@ check('receta → sus materias primas', () => {
   const { impactMap } = plan([{ id: 'A-KILO', quantity: 4 }]);
   assert.deepStrictEqual(impactMap, { 'M-3': { quantity: 1, type: 'MATERIA_PRIMA' } });
 });
-check('controlStock=false no mueve nada (sigue ilimitado)', () => {
+check('controlStock=false con stock PROPIO no mueve nada (sigue ilimitado)', () => {
   const { impactMap, avisos } = plan([{ id: 'A-SIN-CONTROL', quantity: 5 }]);
   assert.deepStrictEqual(impactMap, {});
   assert.ok(avisos.some((a) => a.tipo === 'sin-control-de-stock'));
+});
+
+// REGRESIÓN REAL (producción, local 40508022): 32 de los 42 artículos con
+// receta tenían controlStock=false y por eso NUNCA descontaban materia prima.
+// `controlStock` apaga la cuenta PROPIA del artículo, no el consumo de los
+// recursos que sí llevan la suya.
+console.log('\ncontrolStock=false NO cancela receta ni herencia:');
+check('receta + controlStock=false → SÍ descuenta sus materias primas', () => {
+  const { impactMap } = plan([{ id: 'A-ELABORADO-SIN-CONTROL', quantity: 1 }]);
+  assert.deepStrictEqual(impactMap, {
+    'M-3': { quantity: 1, type: 'MATERIA_PRIMA' },
+    'M-9': { quantity: 0.25, type: 'MATERIA_PRIMA' },
+  });
+});
+check('2 unidades multiplican la receta aunque no controle stock', () => {
+  const { impactMap } = plan([{ id: 'A-ELABORADO-SIN-CONTROL', quantity: 2 }]);
+  assert.strictEqual(impactMap['M-3'].quantity, 2);
+  assert.strictEqual(impactMap['M-9'].quantity, 0.5);
+});
+check('heredado + controlStock=false → SÍ descuenta el padre', () => {
+  const { impactMap } = plan([{ id: 'A-HEREDA-SIN-CONTROL', quantity: 3 }]);
+  assert.deepStrictEqual(impactMap, { 'A-ROCKLETS': { quantity: 3, type: 'ARTICULO' } });
+});
+check('el elaborado no se descuenta a sí mismo: solo su materia prima', () => {
+  const { impactMap } = plan([{ id: 'A-ELABORADO-SIN-CONTROL', quantity: 1 }]);
+  assert.ok(!('A-ELABORADO-SIN-CONTROL' in impactMap), 'no lleva cuenta propia');
+});
+
+// REGLA DEFINITIVA: una materia prima se descuenta SIEMPRE. `ignoraStock` y
+// `controlStock` son banderas de DISPONIBILIDAD (si bloquea la venta y si apaga
+// los artículos que la usan), nunca de consumo.
+console.log('\nLa materia prima se descuenta SIEMPRE:');
+const MP_BANDERAS = {
+  'M-NORMAL':  { nombre: 'Normal',            stock: 10 },
+  'M-IGNORA':  { nombre: 'Ignora stock',      stock: 10, ignoraStock: true },
+  'M-SINCTRL': { nombre: 'Sin control',       stock: 10, controlStock: false },
+  'M-AMBAS':   { nombre: 'Ignora y sin ctrl', stock: 10, ignoraStock: true, controlStock: false },
+};
+const ART_BANDERAS = {
+  'A-USA-TODAS': {
+    nombre: 'Usa las cuatro', controlStock: false,
+    stock: { stockType: 'receta', receta: { 'M-NORMAL': 0.25, 'M-IGNORA': 0.25, 'M-SINCTRL': 0.25, 'M-AMBAS': 0.25 } },
+  },
+  'A-OTRO-QUE-COMPARTE': {
+    nombre: 'Comparte materia prima', controlStock: false,
+    stock: { stockType: 'receta', receta: { 'M-IGNORA': 1 } },
+  },
+};
+const planBanderas = (items) => construirPlanDeStock({ items, articulos: ART_BANDERAS, materiaPrima: MP_BANDERAS });
+
+check('ninguna bandera saca a la materia prima del plan', () => {
+  const { impactMap } = planBanderas([{ id: 'A-USA-TODAS', quantity: 1 }]);
+  assert.deepStrictEqual(impactMap, {
+    'M-NORMAL':  { quantity: 0.25, type: 'MATERIA_PRIMA' },
+    'M-IGNORA':  { quantity: 0.25, type: 'MATERIA_PRIMA' },
+    'M-SINCTRL': { quantity: 0.25, type: 'MATERIA_PRIMA' },
+    'M-AMBAS':   { quantity: 0.25, type: 'MATERIA_PRIMA' },
+  });
+});
+check('controlStock=false en materia prima YA NO la excluye (era el bug)', () => {
+  const { impactMap, avisos } = planBanderas([{ id: 'A-USA-TODAS', quantity: 1 }]);
+  assert.ok(impactMap['M-SINCTRL'], 'antes salía del plan y el saldo no se movía nunca');
+  assert.ok(!avisos.some((a) => a.tipo === 'sin-control-de-stock' && a.id === 'M-SINCTRL'));
+});
+check('2 unidades × 0,250 = 0,500 en todas, con o sin ignoraStock', () => {
+  const { impactMap } = planBanderas([{ id: 'A-USA-TODAS', quantity: 2 }]);
+  for (const id of ['M-NORMAL', 'M-IGNORA', 'M-SINCTRL', 'M-AMBAS']) {
+    assert.strictEqual(impactMap[id].quantity, 0.5, id);
+  }
+});
+check('una materia prima compartida por dos productos se suma en una sola entrada', () => {
+  const { impactMap, porRuta } = planBanderas([
+    { id: 'A-USA-TODAS', quantity: 2 },          // M-IGNORA 0,50
+    { id: 'A-OTRO-QUE-COMPARTE', quantity: 3 },  // M-IGNORA 3
+  ]);
+  assert.strictEqual(impactMap['M-IGNORA'].quantity, 3.5);
+  assert.strictEqual(Object.values(porRuta).filter((r) => r.id === 'M-IGNORA').length, 1, 'una sola ruta física');
+});
+check('el consumo no depende del saldo: se planifica aunque no alcance', () => {
+  const pocas = { ...MP_BANDERAS, 'M-IGNORA': { nombre: 'Ignora', stock: 0, ignoraStock: true } };
+  const { impactMap } = construirPlanDeStock({
+    items: [{ id: 'A-OTRO-QUE-COMPARTE', quantity: 5 }], articulos: ART_BANDERAS, materiaPrima: pocas,
+  });
+  assert.strictEqual(impactMap['M-IGNORA'].quantity, 5, 'quedará en -5, y está bien');
+});
+
+// Caso real de Achaval: BOMBON SUIZO existe 4 veces (uno por departamento). El
+// del depto 1 lleva la cuenta (`propio`); los otros tres heredan de él y tienen
+// el control de stock apagado. Genérico: cualquier artículo heredado sin control.
+console.log('\nArtículo heredado con controlStock=false (caso Bombón Suizo):');
+const ART_HEREDA = {
+  'BASE':   { nombre: 'Base con cuenta propia', controlStock: true,  stock: { stockType: 'propio', propio: 5 } },
+  'HIJO-1': { nombre: 'Hijo depto 2',           controlStock: false, stock: { heredadoDe: 'BASE' } },
+  'HIJO-2': { nombre: 'Hijo depto 9',           controlStock: false, stock: { heredadoDe: 'BASE' } },
+};
+const planHereda = (items) => construirPlanDeStock({ items, articulos: ART_HEREDA, materiaPrima: {} });
+
+check('vender 1 del hijo descuenta exactamente 1 de la base', () => {
+  assert.deepStrictEqual(planHereda([{ id: 'HIJO-1', quantity: 1 }]).impactMap,
+    { BASE: { quantity: 1, type: 'ARTICULO' } });
+});
+check('los tres caminos llegan al MISMO recurso, sin duplicar', () => {
+  const { impactMap, porRuta } = planHereda([
+    { id: 'BASE', quantity: 1 }, { id: 'HIJO-1', quantity: 1 }, { id: 'HIJO-2', quantity: 1 },
+  ]);
+  assert.deepStrictEqual(impactMap, { BASE: { quantity: 3, type: 'ARTICULO' } });
+  assert.strictEqual(Object.keys(porRuta).length, 1, 'una sola ruta física');
+});
+check('el hijo nunca se descuenta a sí mismo', () => {
+  const { impactMap } = planHereda([{ id: 'HIJO-1', quantity: 2 }]);
+  assert.ok(!('HIJO-1' in impactMap));
+  assert.strictEqual(impactMap.BASE.quantity, 2);
 });
 
 console.log('\nAgrupación: varios caminos, una sola ruta:');

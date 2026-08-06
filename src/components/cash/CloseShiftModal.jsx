@@ -10,9 +10,31 @@ import { saveShiftSummaryToPath } from '@/lib/api/cash/summary.js';
 import { getCurrentLocalId } from '@/lib/firebase/core.js';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import { fetchVendorsByCategory } from '@/lib/api/hrApi';
+import { fetchUsers } from '@/lib/api/usersApi';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Progress } from '@/components/ui/progress';
 import { useAuth } from '@/hooks/useAuth';
+
+/** Rol comparable: sin tildes, sin espacios sobrantes, en minúsculas. */
+const normalizarRol = (rol) =>
+  String(rol ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .toLowerCase();
+
+/**
+ * Roles que NO deben elegir un "Vendedor Responsable": ellos mismos son el
+ * responsable del cierre.
+ *
+ * OJO con la estructura real: los roles que se pueden asignar en Usuarios son
+ * `empleado`, `encargado` y `dueño` — NO existe un rol `vendedor`. Los
+ * "vendedores" del selector salen de RRHH (categoría VENDEDOR), que es otra
+ * cosa. Por eso la condición se escribe por exclusión: cualquiera que no tenga
+ * un rol jerárquico debe seguir eligiendo responsable, y un rol desconocido cae
+ * del lado seguro (sigue pidiéndolo).
+ */
+const ROLES_SIN_SELECTOR = ['dueno', 'encargado', 'admin', 'administrador', 'gerente'];
 
 const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, settings, user, totalCost }) => {
   const [cashCount, setCashCount] = useState('');
@@ -34,10 +56,61 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
           toast({ variant: 'destructive', title: 'Error', description: 'No se pudieron cargar los vendedores autorizados.' });
         }
       };
-      
+
       loadAuthorizedUsers();
     }
   }, [isOpen, toast]);
+
+  // ROL REAL DEL USUARIO LOGUEADO.
+  //
+  // La sesión ya trae `rol`, pero se guarda en sessionStorage al iniciar sesión:
+  // si a ese usuario le cambiaron el rol después, el valor queda viejo. Por eso
+  // se lo busca en los USUARIOS del local activo por su clave/usuario, y recién
+  // si no aparece se usa el rol de la sesión. No se asume que haya un solo dueño
+  // ni que el primero de la lista sea el logueado.
+  //
+  // DiegoL es la excepción: es el administrador del sistema y NO está en
+  // USUARIOS, así que se resuelve sin consultar nada.
+  const [rolReal, setRolReal] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen || !user) { setRolReal(null); return; }
+
+    let vigente = true;
+    const resolverRol = async () => {
+      if (user.usuario === 'DiegoL') { if (vigente) setRolReal('administrador'); return; }
+      try {
+        const usuarios = await fetchUsers();
+        const encontrado = usuarios.find((u) =>
+          (user.id !== undefined && String(u.id) === String(user.id))
+          || (user.usuario && u.usuario === user.usuario));
+        if (vigente) setRolReal(encontrado?.rol ?? user.rol ?? null);
+      } catch (error) {
+        // Sin lectura no se inventa un rol: se usa el de la sesión.
+        console.warn('[cierre] no se pudieron leer los usuarios del local, se usa el rol de la sesión:', error?.message || error);
+        if (vigente) setRolReal(user.rol ?? null);
+      }
+    };
+    resolverRol();
+    return () => { vigente = false; };
+  }, [isOpen, user]);
+
+  /**
+   * ¿Hay que pedir "Vendedor Responsable"? Solo cuando quien cierra no tiene un
+   * rol jerárquico. Antes el selector se mostraba SIEMPRE, sin mirar el rol.
+   */
+  const requiereVendedorResponsable = useMemo(() => {
+    if (user?.usuario === 'DiegoL') return false;
+    const rol = normalizarRol(rolReal ?? user?.rol);
+    if (!rol) return true;                      // rol desconocido: se sigue pidiendo
+    return !ROLES_SIN_SELECTOR.includes(rol);
+  }, [user, rolReal]);
+
+  /** Quién queda registrado como responsable cuando no se elige vendedor. */
+  const responsablePropio = useMemo(() => {
+    if (!user) return '';
+    return String(user.nombre || user.usuario || '').trim();
+  }, [user]);
 
   const canSeeDetails = useMemo(() => {
     if (!user) return false;
@@ -60,16 +133,28 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
       toast({ variant: 'destructive', title: 'Error', description: 'Por favor, ingrese un monto de efectivo válido.' });
       return;
     }
-    if (!selectedResponsible) {
-      toast({ variant: 'destructive', title: 'Error', description: 'Por favor, seleccione un responsable.' });
-      return;
-    }
-    
-    // Validate that the selected user actually exists and is a VENDEDOR
-    const responsibleUser = authorizedUsers.find(u => `${u.nombre} ${u.apellido}`.trim() === selectedResponsible);
-    if (!responsibleUser || responsibleUser.categoriaNombre?.toUpperCase() !== 'VENDEDOR') {
-        toast({ variant: 'destructive', title: 'Error', description: 'El usuario seleccionado no es válido o no pertenece a la categoría VENDEDOR.' });
+    // El vendedor responsable solo se exige —y se valida— cuando el selector se
+    // muestra. Para un dueño, encargado o el administrador, el responsable del
+    // cierre es él mismo: no se pide, y NUNCA se elige un vendedor automático ni
+    // se guarda vacío.
+    let responsableDelCierre = responsablePropio;
+
+    if (requiereVendedorResponsable) {
+      if (!selectedResponsible) {
+        toast({ variant: 'destructive', title: 'Error', description: 'Por favor, seleccione un responsable.' });
         return;
+      }
+
+      // Validate that the selected user actually exists and is a VENDEDOR
+      const responsibleUser = authorizedUsers.find(u => `${u.nombre} ${u.apellido}`.trim() === selectedResponsible);
+      if (!responsibleUser || responsibleUser.categoriaNombre?.toUpperCase() !== 'VENDEDOR') {
+          toast({ variant: 'destructive', title: 'Error', description: 'El usuario seleccionado no es válido o no pertenece a la categoría VENDEDOR.' });
+          return;
+      }
+      responsableDelCierre = selectedResponsible;
+    } else if (!responsableDelCierre) {
+      toast({ variant: 'destructive', title: 'Error', description: 'No se pudo identificar al usuario que cierra el turno.' });
+      return;
     }
 
     setIsLoading(true);
@@ -80,7 +165,18 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
         costoTotal: totalCost !== undefined ? totalCost : 0
       };
 
-      await closeShift(shiftDataToSave, parseFloat(cashCount), sales, null, selectedResponsible, handleProgressUpdate);
+      // Quién EJECUTÓ el cierre, siempre: es independiente de quién figure como
+      // responsable. `cierreResponsable` conserva su significado de siempre.
+      const ejecutadoPor = {
+        id: user?.id ?? user?.usuario ?? null,
+        usuario: user?.usuario ?? null,
+        nombre: user?.nombre ?? null,
+        rol: rolReal ?? user?.rol ?? null,
+        fecha: new Date().toISOString(),
+        eligioVendedor: requiereVendedorResponsable,
+      };
+
+      await closeShift(shiftDataToSave, parseFloat(cashCount), sales, null, responsableDelCierre, handleProgressUpdate, ejecutadoPor);
       
       // Calculate and save shift summary data to Firebase CAJAS path
       setProgressMessage('Guardando resumen del turno...');
@@ -136,6 +232,22 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
 
   const { summary } = reportData;
   const { difference } = summary;
+
+  // ÚNICA CONDICIÓN QUE HABILITA EL CIERRE.
+  //
+  // Antes el `disabled` del botón repetía por su cuenta `|| !selectedResponsible`
+  // sin mirar el rol. Como a un dueño, encargado o administrador ya no se le
+  // muestra el selector, `selectedResponsible` se quedaba vacío para siempre y el
+  // botón no se habilitaba nunca: no podían cerrar el turno.
+  //
+  // Ahora los tres puntos —el render del selector, esta habilitación y la
+  // validación de `handleCloseShift`— derivan de `requiereVendedorResponsable`,
+  // así que no pueden volver a desincronizarse.
+  const montoValido = cashCount !== '' && !isNaN(parseFloat(cashCount));
+  const faltaResponsable = requiereVendedorResponsable
+    ? !selectedResponsible     // empleado / rol desconocido: tiene que elegirlo
+    : !responsablePropio;      // jerárquico: cierra a su nombre
+  const puedeConfirmar = !isLoading && montoValido && !faltaResponsable;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -200,6 +312,20 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
                   </div>
                 )}
 
+                {/* El selector solo aparece para quien NO tiene rol jerárquico.
+                    Un dueño, un encargado o el administrador cierran a su propio
+                    nombre y no tienen por qué elegir un vendedor. */}
+                {!requiereVendedorResponsable ? (
+                  <div className="space-y-2">
+                    <Label>Responsable del Cierre</Label>
+                    <div className="rounded-md border bg-gray-50 px-3 py-2 text-sm">
+                      <span className="font-semibold">{responsablePropio || '—'}</span>
+                      {(rolReal ?? user?.rol) && (
+                        <span className="text-muted-foreground"> ({rolReal ?? user?.rol})</span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
                 <div className="space-y-2">
                   <Label htmlFor="responsible">Vendedor Responsable</Label>
                   <Select onValueChange={setSelectedResponsible} value={selectedResponsible}>
@@ -225,6 +351,7 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
                     </SelectContent>
                   </Select>
                 </div>
+                )}
               </div>
             </div>
             <DialogFooter className="justify-end">
@@ -232,7 +359,7 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
                 <DialogClose asChild>
                   <Button type="button" variant="secondary" disabled={isLoading}>Cancelar</Button>
                 </DialogClose>
-                <Button onClick={handleCloseShift} disabled={isLoading || cashCount === '' || isNaN(parseFloat(cashCount)) || !selectedResponsible}>
+                <Button onClick={handleCloseShift} disabled={!puedeConfirmar}>
                   Confirmar y Cerrar Turno
                 </Button>
               </div>

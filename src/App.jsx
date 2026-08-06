@@ -43,6 +43,7 @@ import InstallPrompt from '@/components/InstallPrompt.jsx';
 import { useCommissionAlarm } from '@/hooks/useCommissionAlarm.js';
 import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
 import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
+import { useImpresionFiscalPendiente } from '@/hooks/useImpresionFiscalPendiente.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
 import DepsBootstrapScreen from '@/components/DepsBootstrapScreen.jsx';
@@ -246,6 +247,15 @@ function AppContent() {
   // Badge de comisión pendiente (tiempo real) — única fuente de verdad para el saldo de
   // comisión a pagar, compartida entre el indicador del footer y el aviso al entrar al local.
   const commissionPending = useCommissionTotal(!!user && !!localId);
+
+  // IMPRESIÓN AUTOMÁTICA DE COMPROBANTES FISCALES.
+  //
+  // Vive acá y no en la pantalla de mostrador porque la factura puede salir
+  // mucho después de la venta: el motor AFIP emite cuando puede, y para
+  // entonces el cajero ya cambió de pantalla o cerró y volvió a abrir la app.
+  // El estado es persistente (/{localId}/IMPRESION), así que cualquier terminal
+  // abierta recupera lo pendiente y una transacción garantiza una sola copia.
+  useImpresionFiscalPendiente(!!user && !!localId);
 
   // El aviso usa exactamente el mismo saldo (commissionPending) que el indicador de abajo,
   // en vez de calcularlo por su cuenta, para que ambos muestren siempre el mismo número.

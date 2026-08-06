@@ -95,9 +95,57 @@ check('artículo sin receta (propio) no se ve afectado por materias primas', () 
   assert.strictEqual(recetaConStockSuficiente('A-GASEOSA', arts, mp, 1), true);
   assert.strictEqual(disponibleParaDelivery('A-GASEOSA', arts, mp), true);
 });
-check('controlStock === false nunca bloquea por receta', () => {
+check('controlStock === false en stock PROPIO nunca bloquea', () => {
   const arts = articulosBase(); const mp = materiaBase();
   assert.strictEqual(recetaConStockSuficiente('A-SIN-CONTROL', arts, mp, 1), true);
+  assert.strictEqual(unidadesFabricables('A-SIN-CONTROL', arts, mp), Infinity);
+});
+
+check('controlStock === false en un ELABORADO por receta SÍ se evalúa', () => {
+  // Caso real de Bynnon: "1 BOCHA" y "2 BOCHAS" tienen receta y el interruptor
+  // apagado. Ahí `controlStock:false` solo significa "no lleva cuenta propia de
+  // unidades porque su stock vive en la materia prima": si la materia prima no
+  // alcanza, el elaborado NO se puede preparar. Antes devolvía "ilimitado" sin
+  // mirar la receta, y se seguía vendiendo con la materia prima en cero —
+  // mientras stockPlan.js sí le descontaba el consumo.
+  const arts = articulosBase();
+  arts['A-ELABORADO'] = {
+    nombre: 'Elaborado sin cuenta propia', activoDelivery: true, activo: true,
+    controlStock: false,
+    stock: { stockType: 'receta', receta: { 'M-CHIPAS': 2 } },
+  };
+  const mp = materiaBase();
+
+  mp['M-CHIPAS'].stock = 10;
+  assert.strictEqual(recetaConStockSuficiente('A-ELABORADO', arts, mp, 1), true);
+  assert.strictEqual(unidadesFabricables('A-ELABORADO', arts, mp), 5);
+  assert.strictEqual(disponibleParaDelivery('A-ELABORADO', arts, mp), true);
+
+  mp['M-CHIPAS'].stock = 1;   // la receta pide 2
+  assert.strictEqual(recetaConStockSuficiente('A-ELABORADO', arts, mp, 1), false);
+  assert.strictEqual(unidadesFabricables('A-ELABORADO', arts, mp), 0);
+  assert.strictEqual(disponibleParaDelivery('A-ELABORADO', arts, mp), false);
+
+  mp['M-CHIPAS'].stock = 0;
+  const r = evaluarRecetaPedido('A-ELABORADO', 1, arts, mp);
+  assert.strictEqual(r.suficiente, false);
+  assert.deepStrictEqual(r.faltantes, [{ materiaPrimaId: 'M-CHIPAS', stockActual: 0, requerido: 2 }]);
+
+  // Y "Ignora Stock" lo sigue eximiendo, como cualquier otra receta.
+  mp['M-CHIPAS'].ignoraStock = true;
+  assert.strictEqual(recetaConStockSuficiente('A-ELABORADO', arts, mp, 1), true);
+});
+
+check('un ingrediente ARTÍCULO con controlStock false no limita ni consume', () => {
+  const arts = articulosBase();
+  arts['A-INSUMO-LIBRE'] = { nombre: 'Insumo libre', controlStock: false, stock: { stockType: 'propio', propio: 0 } };
+  arts['A-USA-INSUMO'] = {
+    nombre: 'Usa insumo libre', activoDelivery: true, activo: true,
+    stock: { stockType: 'receta', receta: { 'A-INSUMO-LIBRE': 3 } },
+  };
+  const mp = materiaBase();
+  assert.strictEqual(recetaConStockSuficiente('A-USA-INSUMO', arts, mp, 1), true);
+  assert.strictEqual(unidadesFabricables('A-USA-INSUMO', arts, mp), Infinity);
 });
 check('receta vacía no se interpreta como stock cero (no bloquea, avisa)', () => {
   const arts = articulosBase(); const mp = materiaBase();

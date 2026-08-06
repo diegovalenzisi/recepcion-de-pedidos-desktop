@@ -42,7 +42,7 @@ const updateStatisticsRecursive = async (item, quantity, fechaCaja, allStockable
 export const updateStatistics = async (items, fechaCaja) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
 
   const allStockableItems = await fetchAllStockableItems();
 

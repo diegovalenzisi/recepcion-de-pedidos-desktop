@@ -156,6 +156,11 @@ function setupImageCacheIPC() {
     catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
   });
 
+  ipcMain.handle('image-cache:clear-remote-deleted', async (_e, { localId, bucket, objectPath, remoteMeta }) => {
+    try { const r = await imageCacheService.clearRemoteDeleted(localId, bucket, objectPath, remoteMeta); return { ok: true, ...r }; }
+    catch (e) { return { ok: false, code: e.code || 'ERROR', message: e.message }; }
+  });
+
   ipcMain.handle('image-cache:sweep', async (_e, { localId, validRefs, catalogComplete }) => {
     try {
       // El main calcula las keys (sha1 de bucket+objectPath) para no duplicar el
@@ -2208,6 +2213,23 @@ function setupIPC() {
   });
 
   // Versión del Node (bundleado o manual)
+  /**
+   * ¿Hay algún motor de facturación CORRIENDO en esta PC?
+   *
+   * El estado ya existía en `facturacionProcs`, pero sólo se EMITÍA por el canal
+   * 'facturacion:status' cuando cambiaba: no había forma de consultarlo. La
+   * venta de mostrador lo necesita ANTES de ofrecer "imprimir factura", porque
+   * si el motor no está levantado la venta se encola y el CAE no llega nunca.
+   *
+   * Solo lectura: no arranca, no detiene y no toca ningún proceso.
+   */
+  ipcMain.handle('facturacion:is-running', () => {
+    const activas = Object.entries(facturacionProcs)
+      .filter(([, entry]) => entry?.status === 'running' && entry?.proc)
+      .map(([key]) => key);
+    return { running: activas.length > 0, cuentas: activas };
+  });
+
   ipcMain.handle('facturacion:node-version', () => {
     const bin = getNodeAfipBin();
     if (!bin) {

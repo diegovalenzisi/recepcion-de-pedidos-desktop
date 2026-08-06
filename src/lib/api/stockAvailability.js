@@ -1,10 +1,24 @@
 /**
- * Shared helpers to evaluate the real stock availability of an article,
- * resolving propio/heredado/receta chains, and of a promotion based on
- * the real components that make it up (fixed items and product groups).
+ * FUENTE ÚNICA DE VERDAD de "¿este artículo se puede vender AHORA?".
  *
- * Used only when an article's `stock.descuentaPorArticulo` flag is true.
- * Promotions/articles without that flag are not affected by this module.
+ * `isArticleAvailable` es la ÚNICA función que responde esa pregunta, y la usan
+ * por igual el catálogo de MOSTRADOR, el de DELIVERY y las promociones. Antes
+ * había tres fórmulas distintas (el filtro del catálogo no miraba recetas, ésta
+ * sí pero solo exigía "stock > 0" por ingrediente, y el módulo canónico —el
+ * único correcto— no lo usaba ninguna pantalla). Ese desfasaje era el que dejaba
+ * un artículo por receta visible en Mostrador después de desaparecer de Delivery.
+ *
+ *     disponible = activo del CANAL (manual)  &&  se puede producir 1 unidad
+ *
+ * La segunda mitad se delega SIEMPRE en `recetaConStockSuficiente`
+ * (disponibilidadReceta.js, módulo canónico idéntico en Desktop, Tablet y DLV):
+ * respeta las CANTIDADES reales de la receta, el anidamiento, la herencia,
+ * `controlStock` e "Ignora Stock". Acá no se reimplementa nada de eso.
+ *
+ * El activo del canal (`activoDelivery` / `activoMostrador`) es una decisión
+ * MANUAL del usuario: solo se LEE, nunca se escribe. Un artículo apagado a mano
+ * no se muestra jamás; uno permitido se oculta o reaparece solo, en vivo, según
+ * el stock.
  *
  * "Ignora Stock" (MATERIA_PRIMA/{id}/ignoraStock): se respeta la MISMA regla
  * canónica que usan Desktop, Tablet y DLV (materiaPrimaIgnoraStock, en
@@ -13,20 +27,52 @@
  * una desactivación manual (`activo === false`) sí la sigue limitando.
  */
 
-import { materiaPrimaIgnoraStock } from './deliveryPorStock';
+// Con extensión .js: así el módulo se puede importar tal cual desde Node para
+// las pruebas, además de por Vite.
+import { materiaPrimaIgnoraStock, materiaPrimaDisponible } from './deliveryPorStock.js';
+import {
+    tipoDeStock,
+    recetaConStockSuficiente,
+    unidadesFabricables,
+    evaluarRecetaPedido,
+    materiasPrimasDeArticulo,
+} from './disponibilidadReceta.js';
 
-const getStockType = (stock) => {
-    if (!stock) return 'propio';
-    if (stock.stockType) return stock.stockType;
-    if (stock.receta && typeof stock.receta === 'object' && Object.keys(stock.receta).length > 0) return 'receta';
-    if (stock.heredadoDe) return 'heredado';
-    return 'propio';
-};
+/** ¿El artículo está habilitado a mano en este canal? Solo lectura. */
+const activoEnCanal = (nodo, context) => (
+    context === 'delivery' ? nodo.activoDelivery !== false : nodo.activoMostrador !== false
+);
 
 /**
- * Recursively checks whether an article (or raw material) has stock available,
- * following heredado/receta chains. Mirrors the resolution logic used by
- * resolveStockImpact in transactionsApi.js.
+ * ¿La receta del artículo tiene una referencia circular (A usa B, B usa A,
+ * directa o transitivamente)?
+ *
+ * Un ciclo NO es un faltante de stock: es una receta mal cargada, y no se puede
+ * saber cuánto consume. El módulo canónico lo corta para no colgarse y lo deja
+ * anotado como aviso `ciclo` sin bloquear. Acá se decide que SÍ bloquee: un
+ * artículo que no se puede calcular no se puede producir, así que no se ofrece
+ * ni se vende hasta que alguien corrija la receta.
+ */
+export const recetaTieneCiclo = (articleId, articulos = {}, materiaPrima = {}) => (
+    evaluarRecetaPedido(articleId, 1, articulos, materiaPrima)
+        .avisos.some((a) => a && a.tipo === 'ciclo')
+);
+
+/**
+ * Marca que se guarda en `materiasPrimasBloqueantes` cuando lo que bloquea no es
+ * una materia prima sino una receta circular. Se limpia sola en cuanto la receta
+ * se corrige, igual que cualquier otro bloqueante.
+ */
+export const BLOQUEO_RECETA_CIRCULAR = '__RECETA_CIRCULAR__';
+
+/**
+ * ¿Se puede vender este artículo AHORA en este canal? Ver el encabezado: es la
+ * única regla, compartida por Mostrador, Delivery y promociones.
+ *
+ * @param {string} articleId       ID canónico (clave real de Firebase)
+ * @param {object} articlesData    catálogo del local, { [id]: articulo }
+ * @param {object} materiaPrimaData materias primas del local, { [id]: mp }
+ * @param {'delivery'|'counter'} context  canal cuyo activo manual se respeta
  */
 export const isArticleAvailable = (articleId, articlesData = {}, materiaPrimaData = {}, context = 'delivery', visited = new Set()) => {
     if (!articleId || visited.has(articleId)) return false;
@@ -34,29 +80,56 @@ export const isArticleAvailable = (articleId, articlesData = {}, materiaPrimaDat
 
     const article = articlesData[articleId];
     if (article) {
-        const isActive = context === 'delivery' ? article.activoDelivery !== false : article.activoMostrador !== false;
-        if (!isActive) return false;
+        if (!activoEnCanal(article, context)) return false;
 
-        if (article.controlStock === false) return true;
+        // Stock legado guardado como número suelto (ARTICULOS/{id}/stock = 5),
+        // sin el objeto { stockType, ... }. Se conserva tal cual funcionaba.
+        const stock = article.stock;
+        if (typeof stock === 'number' || typeof stock === 'string') {
+            return article.controlStock === false ? true : Number(stock || 0) > 0;
+        }
 
-        const stock = article.stock || {};
-        const stockType = getStockType(stock);
+        const stockType = tipoDeStock(stock);
+
+        // OJO: `controlStock === false` NO se consulta acá arriba. En un artículo
+        // por RECETA ese interruptor no significa "ilimitado", sino que el
+        // artículo no lleva cuenta propia de unidades porque su stock vive en la
+        // materia prima — la configuración normal de un elaborado. Tenerlo antes
+        // de la receta es lo que dejaba a "1 BOCHA" y "2 BOCHAS" (Bynnon)
+        // vendiéndose con VASITO DE PASTA en cero, mientras el sistema igual les
+        // descontaba la materia prima. Se consulta más abajo, en la rama propio.
 
         if (stockType === 'heredado' && stock.heredadoDe) {
+            // El padre aporta su stock Y su activo manual del mismo canal.
             return isArticleAvailable(stock.heredadoDe, articlesData, materiaPrimaData, context, visited);
         }
 
-        if (stockType === 'receta' && stock.receta) {
-            const receta = stock.receta;
-            const ingredientIds = Array.isArray(receta)
-                ? receta.map(ing => ing.codigo || ing.id || ing.nombre).filter(Boolean)
-                : Object.keys(receta);
+        if (stockType === 'receta') {
+            // EXACTAMENTE la misma cuenta que usa la automatización que apaga
+            // `activoDelivery`: materia prima agotada, apagada A MANO, o que no
+            // alcanza para una unidad, más la receta circular. Llamar a la misma
+            // función es lo que garantiza que Mostrador y Delivery no puedan
+            // volver a contestar distinto.
+            //
+            // Sin esto quedaba un hueco real (visto en Bynnon): la materia prima
+            // "VASITO DE PASTA" tiene `activo: false`, y `activo` no lo mira
+            // ningún cálculo de stock. Con el stock repuesto pero el activo
+            // todavía apagado, Mostrador la habría mostrado y Delivery no.
+            if (materiasPrimasBloqueantes(articleId, articlesData, materiaPrimaData).length > 0) return false;
 
-            if (ingredientIds.length === 0) return true;
-            return ingredientIds.every(ingredientId => isArticleAvailable(ingredientId, articlesData, materiaPrimaData, context, visited));
+            // Y además el resto de la receta: ingredientes que son ARTÍCULOS con
+            // stock propio, que no figuran en el mapa de materias primas.
+            return recetaConStockSuficiente(articleId, articlesData, materiaPrimaData, 1);
         }
 
-        return Number(stock.propio || 0) > 0;
+        // 'ninguno': el artículo no tiene ninguna configuración de stock, así que
+        // no hay nada que lo limite (es lo mismo que decide el plan de descuento
+        // en stockPlan.js, que no le descuenta nada). No se oculta.
+        if (stockType === 'ninguno') return true;
+
+        // Stock PROPIO: la única cuenta que `controlStock === false` apaga.
+        if (article.controlStock === false) return true;
+        return Number(stock?.propio || 0) > 0;
     }
 
     const rawMaterial = materiaPrimaData[articleId];
@@ -70,6 +143,47 @@ export const isArticleAvailable = (articleId, articlesData = {}, materiaPrimaDat
     }
 
     return false;
+};
+
+/**
+ * Materias primas que HOY bloquean a un artículo, por cualquiera de los dos
+ * motivos posibles. La usa la automatización que apaga `activoDelivery`
+ * (stockDeliveryAutomation.js) para armar `materiasPrimasBloqueantes`.
+ *
+ *  1. NO DISPONIBLE — `materiaPrimaDisponible`: agotada (stock <= 0) o apagada
+ *     A MANO por el usuario. Apagar una materia prima a mano sigue sacando de
+ *     delivery a los artículos que la usan, aunque le quede stock.
+ *  2. NO ALCANZA PARA UNA UNIDAD — `evaluarRecetaPedido(id, 1, …)`: tiene
+ *     stock, pero menos del que consume la receta. Si la receta pide 5 vasitos
+ *     y hay 4, el motivo 1 daba "disponible" (4 > 0) y el artículo seguía
+ *     publicado. Ésta es la mitad que faltaba.
+ *
+ * Solo se devuelven ids de MATERIA_PRIMA: `materiasPrimasBloqueantes` es un
+ * mapa de materias primas, y es por materia prima que se dispara la
+ * reconciliación. Un artículo con stock propio usado como ingrediente lo cubre
+ * el cálculo en vivo del catálogo (`isArticleAvailable`).
+ *
+ * @returns {string[]} ids de materia prima que bloquean, sin repetir.
+ */
+export const materiasPrimasBloqueantes = (articuloId, articulos = {}, materiaPrima = {}) => {
+    const bloqueantes = [];
+    const agregar = (id) => { if (id && !bloqueantes.includes(id)) bloqueantes.push(id); };
+
+    for (const mpId of materiasPrimasDeArticulo(articuloId, articulos, materiaPrima)) {
+        if (!materiaPrimaDisponible(materiaPrima[mpId])) agregar(mpId);
+    }
+
+    const { faltantes, avisos } = evaluarRecetaPedido(articuloId, 1, articulos, materiaPrima);
+    for (const f of faltantes) {
+        if (materiaPrima[f.materiaPrimaId]) agregar(f.materiaPrimaId);
+    }
+
+    // 3. RECETA CIRCULAR: no hay materia prima a la que culpar, pero el artículo
+    //    tampoco se puede producir. Se marca con un bloqueante sentinela para
+    //    que también salga de delivery, y se limpia solo al corregir la receta.
+    if (avisos.some((a) => a && a.tipo === 'ciclo')) agregar(BLOQUEO_RECETA_CIRCULAR);
+
+    return bloqueantes;
 };
 
 /**
@@ -109,34 +223,6 @@ export const isPromoAvailable = (promoArticle, articlesData = {}, materiaPrimaDa
     return true;
 };
 
-// Parsea una cantidad que puede venir como número, string con coma decimal, u otro. Nunca NaN.
-const parseQty = (val) => {
-    if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
-    if (typeof val === 'string') {
-        const n = parseFloat(val.replace(',', '.'));
-        return Number.isFinite(n) ? n : 0;
-    }
-    return 0;
-};
-
-// Normaliza un stock crudo a un número >= 0. Nunca negativo, nunca NaN.
-const parseStockAmount = (val) => {
-    const n = Number(val);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-};
-
-const devWarnCycle = (chain, articleId) => {
-    if (import.meta.env?.DEV) {
-        console.warn(`[getAvailableUnits] Ciclo detectado al resolver stock: ${[...chain, articleId].join(' -> ')}. Se devuelve 0 para evitar un bucle infinito.`);
-    }
-};
-
-const devWarnMissing = (articleId) => {
-    if (import.meta.env?.DEV) {
-        console.warn(`[getAvailableUnits] Referencia inexistente al calcular stock disponible: "${articleId}" no se encontró en ARTICULOS ni en MATERIA_PRIMA. Se devuelve 0.`);
-    }
-};
-
 /**
  * Calcula cuántas unidades reales de `articleId` pueden fabricarse/venderse, siguiendo la
  * misma resolución conceptual de cadenas propio/heredado/receta que usa `resolveStockImpact`
@@ -148,7 +234,13 @@ const devWarnMissing = (articleId) => {
  * `isArticleAvailable`/`isPromoAvailable` (booleano, con gating por activoDelivery/activoMostrador),
  * que es un caso de uso distinto (¿se puede vender ahora?) y no una cantidad.
  *
- * Reglas:
+ * DELEGA en `unidadesFabricables` (disponibilidadReceta.js, módulo canónico idéntico en
+ * Desktop, Tablet y DLV). Antes esta función reimplementaba la MISMA resolución línea por
+ * línea; eran dos copias de la misma fórmula que había que mantener sincronizadas a mano.
+ * Se conserva el nombre y la firma porque son la API que ya consumen DataTable,
+ * managementApi y usePromotionMinimumStock.
+ *
+ * Reglas (las implementa el módulo canónico):
  * - `controlStock === false` (artículo o materia prima) → Infinity (no limita, "ilimitado").
  * - stock propio → el número de `stock.propio` (nunca negativo, nunca NaN).
  * - stock heredado → la disponibilidad del padre (misma unidad, sin dividir).
@@ -160,73 +252,15 @@ const devWarnMissing = (articleId) => {
  * - Materia prima (hoja, sin receta propia) → su stock numérico tal cual (SIN redondear: es una
  *   cantidad continua en su propia unidad —kg, litros—, no "unidades fabricables"; el redondeo
  *   final lo aplica quien la consume como ingrediente de una receta).
- * - Referencia inexistente (ni en ARTICULOS ni en MATERIA_PRIMA) → 0 (valor seguro que limita),
- *   con warning en desarrollo.
- * - Ciclo (A hereda/receta-usa B, B hereda/receta-usa A, directa o transitivamente) → 0, con
- *   warning en desarrollo. Se detecta con un set de IDs visitados POR RAMA (no global): permite
- *   que dos ingredientes distintos de una misma receta compartan una materia prima sin falsos
- *   positivos, pero corta cualquier referencia circular real antes de colgar la aplicación.
+ * - Referencia inexistente (ni en ARTICULOS ni en MATERIA_PRIMA) → 0 (valor seguro que limita).
+ * - Ciclo (A hereda/receta-usa B, B hereda/receta-usa A, directa o transitivamente) → 0. Se
+ *   detecta con un set de IDs visitados POR RAMA (no global): permite que dos ingredientes
+ *   distintos de una misma receta compartan una materia prima sin falsos positivos, pero corta
+ *   cualquier referencia circular real antes de colgar la aplicación.
  *
  * @returns {number} unidades disponibles (entero, resultado de un único Math.floor final para
  *   artículos por receta) o `Infinity` si no hay control de stock. Nunca NaN, nunca negativo.
  */
-export const getAvailableUnits = (articleId, articlesData = {}, materiaPrimaData = {}, visited = new Set()) => {
-    if (!articleId) return 0;
-
-    if (visited.has(articleId)) {
-        devWarnCycle(visited, articleId);
-        return 0;
-    }
-    const nextVisited = new Set(visited);
-    nextVisited.add(articleId);
-
-    const article = articlesData[articleId];
-    if (article) {
-        if (article.controlStock === false) return Infinity;
-
-        const stock = article.stock || {};
-        const stockType = getStockType(stock);
-
-        if (stockType === 'heredado' && stock.heredadoDe) {
-            return getAvailableUnits(stock.heredadoDe, articlesData, materiaPrimaData, nextVisited);
-        }
-
-        if (stockType === 'receta' && stock.receta) {
-            const receta = stock.receta;
-            const entries = Array.isArray(receta)
-                ? receta.map(ing => [ing.codigo || ing.id || ing.nombre, ing.cantidad]).filter(([id]) => Boolean(id))
-                : Object.entries(receta);
-
-            if (entries.length === 0) return Infinity; // receta vacía: nada la limita
-
-            let minRatio = Infinity;
-            for (const [ingredientId, rawQty] of entries) {
-                const qtyNeeded = parseQty(rawQty);
-                if (!(qtyNeeded > 0)) continue; // cantidad inválida/cero: ese ingrediente no restringe
-
-                const ingredientAvailable = getAvailableUnits(ingredientId, articlesData, materiaPrimaData, nextVisited);
-                const ratio = ingredientAvailable / qtyNeeded; // SIN redondear todavía
-                if (ratio < minRatio) minRatio = ratio;
-            }
-
-            if (minRatio === Infinity) return Infinity;
-            return Math.max(0, Math.floor(minRatio)); // UN SOLO floor, al final
-        }
-
-        // propio (o tipo desconocido): stock numérico directo del artículo.
-        return parseStockAmount(stock.propio);
-    }
-
-    const rawMaterial = materiaPrimaData[articleId];
-    if (rawMaterial) {
-        if (rawMaterial.controlStock === false) return Infinity;
-        if (materiaPrimaIgnoraStock(rawMaterial)) return Infinity; // "Ignora Stock": no limita
-        if (rawMaterial.heredadoDe) {
-            return getAvailableUnits(rawMaterial.heredadoDe, articlesData, materiaPrimaData, nextVisited);
-        }
-        return parseStockAmount(rawMaterial.stock); // cantidad continua, sin redondear aquí
-    }
-
-    devWarnMissing(articleId);
-    return 0;
-};
+export const getAvailableUnits = (articleId, articlesData = {}, materiaPrimaData = {}, visited = new Set()) => (
+    unidadesFabricables(articleId, articlesData, materiaPrimaData, visited)
+);

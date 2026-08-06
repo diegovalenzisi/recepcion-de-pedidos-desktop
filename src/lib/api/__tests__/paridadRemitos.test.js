@@ -27,6 +27,19 @@ const ARCHIVOS = [
   'src/lib/api/remitos.js',
   'src/lib/api/remitosFlujo.js',
   'src/lib/api/remitosApi.js',
+  // La decisión factura/remito: si un receptor decidiera distinto que el otro,
+  // la misma venta saldría facturada en uno y con FCX en el otro.
+  'src/lib/api/facturaORemito.js',
+  'src/lib/api/facturaORemitoApi.js',
+  'src/lib/api/__tests__/facturaORemito.test.js',
+  'src/lib/api/__tests__/comprobanteEmulator.integration.mjs',
+  // Facturar un remito a posteriori: si un receptor lo hiciera distinto, el
+  // mismo FCX podría terminar con dos facturas.
+  'src/lib/api/facturacionDeRemito.js',
+  'src/lib/api/facturacionDeRemitoApi.js',
+  'src/lib/api/__tests__/facturacionDeRemito.test.js',
+  'src/lib/api/__tests__/facturacionRemitoEmulator.integration.mjs',
+  'src/pages/SalesTable.jsx',
   'src/lib/api/__tests__/remitos.test.js',
   'src/lib/api/__tests__/remitosEmulator.integration.mjs',
   'src/lib/api/__tests__/paridadRemitos.test.js',
@@ -71,6 +84,59 @@ check('el nodo se llama Remitos y el local es el primer segmento', async () => {
   assert.ok(/construirRutaLocal\(localId, NODO_REMITOS\)/.test(fuente),
     'la ruta ya no se construye con el localId como primer segmento');
   assert.ok(!/'Remitos\/\$\{localId\}'|`Remitos\//.test(fuente), 'aparece una ruta /Remitos/{localId}');
+});
+
+console.log('\nContrato de la decisión:');
+check('el remito se omite por la decisión, no por el nombre del medio de pago', () => {
+  const fuente = fs.readFileSync(path.join(esteRepo, 'src/lib/api/remitosFlujo.js'), 'utf8');
+  assert.ok(/ventaSeFactura\(venta\)/.test(fuente), 'la compuerta ya no usa ventaSeFactura()');
+});
+check('el interruptor se llama imprimeFactura en los dos receptores', () => {
+  for (const repo of [esteRepo, ...otrosRepos]) {
+    const fuente = fs.readFileSync(path.join(repo, 'src/lib/api/facturaORemito.js'), 'utf8');
+    assert.ok(/CAMPO_IMPRIME_FACTURA = 'imprimeFactura'/.test(fuente),
+      `cambió el nombre del campo en ${nombre(repo)}`);
+  }
+});
+check('las colas fiscales se resuelven por coincidencia exacta, sin includes()', () => {
+  for (const rel of ['src/lib/api/counterApi.js', 'src/lib/api/ordersApi.js']) {
+    for (const repo of [esteRepo, ...otrosRepos]) {
+      const fuente = fs.readFileSync(path.join(repo, rel), 'utf8');
+      assert.ok(!/includes\('transferencia/i.test(fuente),
+        `${rel} de ${nombre(repo)} todavía elige la cola por substring del nombre`);
+      assert.ok(!/getFacturacionNodeForPayment/.test(fuente),
+        `${rel} de ${nombre(repo)} conserva el ruteo viejo por nombre`);
+    }
+  }
+});
+check('facturar un remito NO emite notas de crédito en ningún receptor', () => {
+  for (const rel of ['src/lib/api/facturacionDeRemito.js', 'src/lib/api/facturacionDeRemitoApi.js']) {
+    for (const repo of [esteRepo, ...otrosRepos]) {
+      // Se miran los comentarios aparte: ahí SÍ se explica que no se anula nada.
+      const codigo = fs.readFileSync(path.join(repo, rel), 'utf8')
+        .replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').toLowerCase();
+      for (const prohibido of ['notacredito', 'nota_credito', 'notadecredito', 'anular']) {
+        assert.ok(!codigo.includes(prohibido), `${rel} de ${nombre(repo)} menciona "${prohibido}"`);
+      }
+    }
+  }
+});
+check('los dos receptores escriben el remito en /{localId}/Remitos', () => {
+  for (const repo of [esteRepo, ...otrosRepos]) {
+    const fuente = fs.readFileSync(path.join(repo, 'src/lib/api/facturacionDeRemitoApi.js'), 'utf8');
+    assert.ok(/rutaRemito\(raiz, numeroComprobante\)/.test(fuente),
+      `${nombre(repo)} no usa la ruta canónica del remito`);
+    assert.ok(!/['"`]Remitos\//.test(fuente), `${nombre(repo)} arma una ruta /Remitos/...`);
+  }
+});
+check('el comprobante se emite por el TOTAL, nunca por el importe de un pago', () => {
+  for (const rel of ['src/lib/api/counterApi.js', 'src/lib/api/ordersApi.js']) {
+    for (const repo of [esteRepo, ...otrosRepos]) {
+      const fuente = fs.readFileSync(path.join(repo, rel), 'utf8');
+      assert.ok(!/total: payment\.amount|total: pago\.amount/.test(fuente),
+        `${rel} de ${nombre(repo)} factura el importe parcial de un pago`);
+    }
+  }
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

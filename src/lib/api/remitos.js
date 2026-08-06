@@ -120,6 +120,15 @@ const numero = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * Total COMPLETO de la venta. Es el único importe con el que se emite un
+ * comprobante: ni el remito ni la factura se parten por medio de pago.
+ */
+export function totalDeVenta(venta) {
+  if (!venta || typeof venta !== 'object') return 0;
+  return numero(venta.total ?? venta.payment?.total ?? venta.payment?.amount ?? venta.importe) ?? 0;
+}
+
 /** Lista de pagos normalizada, mire donde mire el formato de la venta. */
 export function listarPagos(venta) {
   if (!venta || typeof venta !== 'object') return [];
@@ -197,7 +206,7 @@ export function construirRemitoDesdeVenta({ venta, canal, numeroComprobante, loc
   if (!id) throw new Error(`LOCAL_ID_REQUIRED: remito sin local (${JSON.stringify(localId)})`);
 
   const pagos = listarPagos(venta);
-  const total = numero(venta.total ?? venta.payment?.total ?? venta.importe) ?? 0;
+  const total = totalDeVenta(venta);
   const origenId = venta.id ?? venta.orderId ?? null;
 
   return limpiarIndefinidos({
@@ -239,6 +248,8 @@ export function normalizarRemitoParaTabla(id, data) {
 
   return {
     id: String(id),
+    // El N° de comprobante de la fila es el del REMITO. El de la factura, si el
+    // remito se facturó después, va aparte en `numeroFacturaFiscal`.
     numeroFactura: d.numeroComprobante || d.NumeroFactura || String(id),
     fecha: d.fecha || d.FECHA || null,
     hora: d.hora || d.HORA || null,
@@ -253,22 +264,34 @@ export function normalizarRemitoParaTabla(id, data) {
       selectedOptionals: p.selectedOptionals,
     })),
     facturado: d.facturado === true,
+    // Ciclo de facturación posterior del remito (ver facturacionDeRemito.js).
+    estadoFacturacion: d.estadoFacturacion || null,
+    numeroFacturaFiscal: d.numeroFactura || null,
+    tipoFactura: d.tipoFactura || null,
+    cae: d.cae ?? null,
+    errorFacturacion: d.errorFacturacion || null,
     origen: d.origen || null,
     esRemito: true,
   };
 }
 
 /**
- * Nodo Remitos crudo → filas ordenadas listas para la tabla. Los remitos que
- * TERMINARON facturados quedan fuera: ya se ven en Facturación y no pueden
- * contarse dos veces.
+ * Nodo Remitos crudo → filas ordenadas listas para la tabla.
+ *
+ * Los remitos facturados a posteriori SIGUEN listados, mostrando su estado y el
+ * número de la factura con la que quedaron vinculados: el remito existió y hay
+ * que poder reimprimirlo. Lo que no se cuenta dos veces es el IMPORTE — de eso
+ * se encarga totalNoFacturado(), porque esa plata ya figura en Facturación.
  */
 export function filasDeRemitos(data) {
   return ordenarRemitos(
-    Object.keys(data || {})
-      .map((k) => normalizarRemitoParaTabla(k, data[k]))
-      .filter((fila) => !fila.facturado)
+    Object.keys(data || {}).map((k) => normalizarRemitoParaTabla(k, data[k]))
   );
+}
+
+/** Suma de los remitos que todavía NO se facturaron. Evita el doble conteo. */
+export function totalNoFacturado(filas) {
+  return (filas || []).reduce((suma, f) => (f.facturado ? suma : suma + (Number(f.importe) || 0)), 0);
 }
 
 /** Ordena remitos por fecha+hora, del más nuevo al más viejo. */

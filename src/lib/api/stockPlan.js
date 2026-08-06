@@ -83,7 +83,22 @@ export function resolverRutasFisicas({ id, cantidad, articulos, materiaPrima, ac
   }
 
   if (mp) {
-    if (mp.controlStock === false) { avisos.push({ tipo: 'sin-control-de-stock', id: resolvedId }); return acc; }
+    // UNA MATERIA PRIMA SE DESCUENTA SIEMPRE.
+    //
+    // Ni `ignoraStock` ni `controlStock` la sacan del plan: son banderas de
+    // DISPONIBILIDAD (si bloquea la venta y si apaga los artículos que la
+    // usan), no de consumo. El inventario tiene que reflejar lo que realmente
+    // se gastó, aunque después el saldo quede en cero o en negativo y aunque la
+    // materia prima se considere siempre disponible.
+    //
+    // Antes había acá un `if (mp.controlStock === false) return acc;` que la
+    // excluía del plan y del ledger: se vendía, se consumía y el saldo no se
+    // movía nunca. `ignoraStock` ya se trataba bien (nunca llegó a filtrar acá);
+    // el que estaba mal era `controlStock`.
+    //
+    // Quién decide bloquear o desactivar: materiaPrimaDisponible() en
+    // deliveryPorStock.js y unidadesFabricables() en disponibilidadReceta.js.
+    // Esas funciones son las únicas que miran estas banderas.
     if (mp.heredadoDe) {
       return resolverRutasFisicas({ id: mp.heredadoDe, cantidad, articulos, materiaPrima, acc, visitados: visitadosAhora, avisos, permitirNombre, origen });
     }
@@ -94,9 +109,20 @@ export function resolverRutasFisicas({ id, cantidad, articulos, materiaPrima, ac
     return acc;
   }
 
-  // Artículo con control de stock desactivado: ilimitado, no mueve nada.
-  if (art.controlStock === false) { avisos.push({ tipo: 'sin-control-de-stock', id: resolvedId }); return acc; }
-
+  // `controlStock === false` significa ILIMITADO PARA DISPONIBILIDAD: el
+  // artículo nunca bloquea una venta ni figura como agotado. NO significa
+  // "no consume nada".
+  //
+  // Confundir las dos cosas fue la regresión: este chequeo estaba ANTES de
+  // resolver receta/heredado, así que un artículo con receta y el interruptor
+  // en "no controla stock" —la configuración normal de un producto elaborado,
+  // que no lleva cuenta propia porque su stock vive en la materia prima— salía
+  // de acá sin tocar NADA. Ni el artículo (correcto: no tiene cuenta propia) ni
+  // sus materias primas (incorrecto: cada una sí lleva la suya).
+  //
+  // Por eso la resolución de heredado/receta va PRIMERO y `controlStock` se
+  // consulta solo en la rama de stock propio, que es la única cuenta que el
+  // interruptor apaga de verdad.
   const tipo = tipoDeStock(art);
   if (tipo === 'heredado' && art.stock.heredadoDe) {
     return resolverRutasFisicas({ id: art.stock.heredadoDe, cantidad, articulos, materiaPrima, acc, visitados: visitadosAhora, avisos, permitirNombre, origen });
@@ -116,6 +142,11 @@ export function resolverRutasFisicas({ id, cantidad, articulos, materiaPrima, ac
     return acc;
   }
   if (tipo === 'ninguno') { avisos.push({ tipo: 'sin-configuracion-de-stock', id: resolvedId }); return acc; }
+
+  // STOCK PROPIO: la única cuenta que `controlStock` apaga. Un artículo
+  // declarado sin control de stock no lleva unidades propias, así que no hay
+  // nada que descontarle.
+  if (art.controlStock === false) { avisos.push({ tipo: 'sin-control-de-stock', id: resolvedId }); return acc; }
 
   const ruta = rutaRecurso('', resolvedId, 'ARTICULO').replace(/^\//, '');
   acc[ruta] = acc[ruta] || { id: resolvedId, tipo: 'ARTICULO', cantidad: 0, origenes: [] };

@@ -1,5 +1,20 @@
-import { getDatabase, ref, get } from 'firebase/database';
+import { getDatabase, ref, get, query, orderByKey, limitToLast, onValue } from 'firebase/database';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
+import { listarCuentasFiscales, normalizarComprobante } from '@/lib/api/comprobanteFiscal';
+
+/** Ventana de comprobantes que se escucha en vivo (detectar altas, no traer todo). */
+const VENTAS_EN_VIVO = 80;
+
+// COMPROBANTES FISCALES DEL LOCAL — /{localId}/VENTAS
+//
+// Los registros vienen con los nombres de campo que dejó el runtime que los
+// emitió (PRODUCTO / producto / producto_1…, CLIENTE / clientes, TOTAL / total,
+// VtoCAE / CAE_VTO). La traducción a una única forma vive en
+// comprobanteFiscal.js: acá sólo se lee Firebase.
+//
+// La configuración fiscal del local se lee JUNTO con las ventas porque es la
+// que permite saber qué cuenta emitió cada comprobante y, con eso, su letra
+// real. El prefijo de la clave (FCB…/FCC…) NO decide la letra.
 
 export const fetchBillingData = async () => {
   const localId = getCurrentDatabasePath();
@@ -8,51 +23,67 @@ export const fetchBillingData = async () => {
   }
 
   const db = getDatabase();
-  const salesRef = ref(db, `${localId}/VENTAS`);
 
   try {
-    const snapshot = await get(salesRef);
-    if (snapshot.exists()) {
-      const salesData = snapshot.val();
-      const salesArray = Object.keys(salesData).map(key => ({
-        id: key,
-        ...salesData[key],
-      }));
-      
-      salesArray.sort((a, b) => {
-        const fechaA = a.FECHA || a.fecha;
-        const horaA = a.HORA || a.hora;
-        const fechaB = b.FECHA || b.fecha;
-        const horaB = b.HORA || b.hora;
+    const [snapshot, cfgSnap] = await Promise.all([
+      get(ref(db, `${localId}/VENTAS`)),
+      get(ref(db, `${localId}/CONFIGURACION/FACTURACION_AFIP`)),
+    ]);
 
-        if (!fechaA || !horaA || !fechaB || !horaB) {
-          return 0;
-        }
-        try {
-          const dateA = new Date(`${fechaA.split('/').reverse().join('-')}T${horaA}`);
-          const dateB = new Date(`${fechaB.split('/').reverse().join('-')}T${horaB}`);
-          if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) return 0;
-          return dateB - dateA;
-        } catch (e) {
-          return 0;
-        }
-      });
+    if (!snapshot.exists()) return [];
 
-      return salesArray.map(sale => ({
-        id: sale.id,
-        fecha: sale.FECHA || sale.fecha,
-        hora: sale.HORA || sale.hora,
-        numeroFactura: sale.NumeroFactura || sale.id,
-        importe: sale.total || sale.TOTAL || sale.IMPORTE || 0,
-        articulos: sale.ARTICULOS || [],
-        cliente: sale.CLIENTE,
-        modo: sale.MODO,
-        pdfBase64: sale.PDF_BASE64,
-      }));
-    }
-    return [];
+    const config = cfgSnap.exists() ? cfgSnap.val() : null;
+    // Se indexa una sola vez para todo el listado, no una por comprobante.
+    const cuentas = listarCuentasFiscales(config);
+
+    const salesData = snapshot.val();
+    const comprobantes = Object.keys(salesData).map((key) =>
+      normalizarComprobante(key, salesData[key], { config, cuentas })
+    );
+
+    const instante = (c) => {
+      const [d, m, a] = String(c.fecha || '').split(/[-/]/);
+      if (!a) return 0;
+      const [hh = '0', mi = '0', ss = '0'] = String(c.hora || '').split(':');
+      const t = new Date(Number(a), Number(m) - 1, Number(d), Number(hh), Number(mi), Number(ss)).getTime();
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    return comprobantes.sort((a, b) => instante(b) - instante(a));
   } catch (error) {
     console.error('Error fetching billing data:', error);
     throw error;
   }
+};
+
+/**
+ * Aviso EN VIVO de que /{localId}/VENTAS cambió.
+ *
+ * No devuelve los datos: sólo dispara el callback para que la pantalla vuelva a
+ * leer con `fetchBillingData` (que además necesita la configuración fiscal para
+ * resolver la letra de cada comprobante). Es lo que hace que una factura recién
+ * emitida —por ejemplo, la de un remito convertido— aparezca sola en la pestaña
+ * Facturación, sin refrescar a mano.
+ *
+ * Se escucha una VENTANA de los últimos comprobantes, no el nodo entero: alcanza
+ * para detectar altas y evita traerse todo el historial en cada cambio.
+ *
+ * @param {Function} callback  se llama en cada cambio (y una vez al suscribirse)
+ * @param {Function} [onError]
+ * @returns {Function} cancelar la suscripción
+ */
+export const suscribirCambiosDeVentas = (callback, onError = null) => {
+  const localId = getCurrentDatabasePath();
+  if (!localId) return () => {};
+
+  const consulta = query(ref(getDatabase(), `${localId}/VENTAS`), orderByKey(), limitToLast(VENTAS_EN_VIVO));
+  const suscripcion = onValue(
+    consulta,
+    () => { try { callback(); } catch (e) { console.error('[billingApi] error avisando cambio de ventas:', e); } },
+    (err) => {
+      console.error('[billingApi] error escuchando VENTAS:', err);
+      if (onError) onError(err);
+    }
+  );
+  return () => suscripcion();
 };

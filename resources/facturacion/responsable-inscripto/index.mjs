@@ -36,6 +36,50 @@ const EMISOR_CUIT_FORMAT = process.env.EMISOR_CUIT_FORMAT || '';
 const EMISOR_COND_IVA = process.env.EMISOR_COND_IVA || 'Responsable Inscripto';
 const EMISOR_INICIO_ACTIVIDADES = process.env.EMISOR_INICIO_ACTIVIDADES || '';
 const EMISOR_DOMICILIO = process.env.EMISOR_DOMICILIO || '';
+const EMISOR_IIBB = process.env.EMISOR_IIBB || '';
+
+/** CbteTipo de ARCA para Factura B. */
+const CBTE_TIPO = 6;
+
+// ESTA cola y ESTE local salen del propio FIREBASE_PATH ({localId}/FACTURACION_N).
+// Se graban en la factura para que quede escrito con qué cuenta fiscal se emitió.
+const RUTA_COLA = String(process.env.FIREBASE_PATH || '').trim().replace(/^\/+|\/+$/g, '');
+const LOCAL_ID  = /^\d+$/.test(RUTA_COLA.split('/')[0]) ? RUTA_COLA.split('/')[0] : null;
+const COLA      = /^FACTURACION(_[1-9])?$/.test(RUTA_COLA.split('/').pop()) ? RUTA_COLA.split('/').pop() : null;
+console.log(`[Facturación] Cuenta fiscal: local=${LOCAL_ID} cola=${COLA} CUIT=${process.env.CUIT} ptoVta=${process.env.PTO_VTA}`);
+
+const money = (v) => `$${Number(v || 0).toFixed(2)}`;
+const primerValor = (...v) => v.find((x) => x !== undefined && x !== null && String(x).trim() !== '');
+const aNumero = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Detalle del comprobante, normalizado desde el payload de la cola.
+ *
+ * Antes el PDF imprimía `nombre x cantidad` y la cola no mandaba `cantidad`, así
+ * que salía "x undefined". Acá la cantidad ausente se asume 1 (no se inventa) y
+ * se calculan unitario y subtotal.
+ */
+function normalizarRenglones(productos) {
+  const lista = Array.isArray(productos) ? productos : Object.keys(productos || {})
+    .sort((a, b) => (Number(String(a).replace(/\D/g, '')) || 0) - (Number(String(b).replace(/\D/g, '')) || 0))
+    .map((k) => productos[k]);
+
+  return lista.filter(Boolean).map((it) => {
+    const cantidad = aNumero(primerValor(it.cantidad, it.CANTIDAD)) ?? 1;
+    const unitario = aNumero(primerValor(it.precioUnitario, it.valor, it.precio, it.PRECIO));
+    const total = aNumero(primerValor(it.precioTotal, it.precio_total, it.subtotalLinea));
+    return {
+      nombre: String(primerValor(it.nombre, it.NOMBRE, it.name) || 'Sin nombre'),
+      cantidad,
+      precioUnitario: unitario ?? (total !== null && cantidad ? total / cantidad : 0),
+      precioTotal: total ?? (unitario ?? 0) * cantidad,
+    };
+  });
+}
 
 const httpsAgent = new https.Agent({
   cert: CERT,
@@ -162,7 +206,9 @@ async function generarQR({ cae, nroCbte, fecha, cuit, importe }) {
   const qrUrl = `https://www.arca.gob.ar/fe/qr/?p=${base64}`;
   console.log("QR ARCA JSON:", qrData);
   console.log("QR ARCA URL:", qrUrl);
-  return await QRCode.toDataURL(qrUrl);
+  // Se devuelven también el payload y la URL: se guardan en el comprobante para
+  // que la app pueda mostrar el MISMO QR sin tener que reconstruirlo.
+  return { dataUrl: await QRCode.toDataURL(qrUrl), qrData, qrUrl };
 }
 
 /* =======================
@@ -219,6 +265,7 @@ async function procesarSnapshot(snapshot) {
   const cliente = pedido.CLIENTE || pedido.clientes || "Consumidor Final";
   const total = pedido.TOTAL || pedido.total || 0;
   const productos = pedido.PRODUCTO || pedido.producto || pedido.producto_1;
+  const renglones = normalizarRenglones(productos);
 
   if (!total || !productos) {
     console.log(`❌ Pedido ${pedidoId} incompleto, se omite.`);
@@ -234,7 +281,7 @@ async function procesarSnapshot(snapshot) {
     const caeData = await solicitarCAE(auth, client, pedido, nroCbte);
 
     const fechaCbte = moment().format("DD/MM/YYYY");
-    const qrData = await generarQR({
+    const { dataUrl: qrData, qrData: qrPayload, qrUrl: qrUrlArca } = await generarQR({
       cae: caeData.CAE,
       nroCbte,
       fecha: moment().format('YYYY-MM-DD'),
@@ -248,14 +295,56 @@ async function procesarSnapshot(snapshot) {
     doc.on('end', async () => {
       const pdfBase64 = Buffer.concat(buffers).toString('base64');
 
+      const neto = +(Number(total) / 1.21).toFixed(2);
+      const ARTICULOS = {};
+      renglones.forEach((r, i) => { ARTICULOS[String(i + 1)] = r; });
+
       const historialRef = db.ref(`${process.env.FIREBASE_HISTORIAL}/FCB${nroFactura}`);
       await historialRef.set({
         ...pedido,
         CLIENTE: cliente,
         TOTAL: total,
         PRODUCTO: productos,
+        // Detalle normalizado que lee la app. `PRODUCTO` se conserva tal cual.
+        ARTICULOS,
+
+        // --- Identidad fiscal del comprobante --------------------------------
+        // Tipo fiscal REAL autorizado por ARCA, para que la letra no dependa del
+        // prefijo de la clave.
+        CbteTipo: CBTE_TIPO,
+        tipoFactura: 'Factura B',
+        letra: 'B',
+        numeroFactura: nroFactura,
+        puntoVenta: String(PTO_VTA).padStart(4, '0'),
+        PTO_VTA, NRO_CMP: nroCbte,
+
+        // --- Emisor: SIEMPRE el de ESTA cola ---------------------------------
+        CUIT: String(CUIT),
+        cuit: EMISOR_CUIT_FORMAT || String(CUIT),
+        razonSocial: EMISOR_RAZON_SOCIAL || null,
+        nombreFantasia: EMISOR_FANTASIA || null,
+        condicionIVA: EMISOR_COND_IVA || null,
+        domicilioComercial: EMISOR_DOMICILIO || null,
+        ingresosBrutos: EMISOR_IIBB || null,
+        inicioActividades: EMISOR_INICIO_ACTIVIDADES || null,
+        colaFacturacion: COLA,
+        localId: LOCAL_ID,
+
+        // --- Receptor ---------------------------------------------------------
+        cliente,
+        documentoCliente: { tipo: 99, numero: 0 },
+        condicionIVACliente: 'Consumidor Final',
+
+        // --- Importes ---------------------------------------------------------
+        total: Number(total),
+        ImpNeto: neto,
+        ImpIVA: +(Number(total) - neto).toFixed(2),
+
+        // --- Autorización -----------------------------------------------------
         CAE: caeData.CAE,
         VtoCAE: caeData.CAEFchVto,
+        CAE_VTO: caeData.CAEFchVto,
+        qrData: qrPayload, qrUrl: qrUrlArca,
         PDF_BASE64: pdfBase64,
       });
       await snapshot.ref.remove();
@@ -272,22 +361,33 @@ async function procesarSnapshot(snapshot) {
     if (EMISOR_FANTASIA) doc.text(`Nombre Fantasía: ${EMISOR_FANTASIA}`);
     if (EMISOR_CUIT_FORMAT) doc.text(`CUIT: ${EMISOR_CUIT_FORMAT}`);
     doc.text(`IVA: ${EMISOR_COND_IVA}`);
+    if (EMISOR_IIBB) doc.text(`Ingresos Brutos: ${EMISOR_IIBB}`);
     if (EMISOR_INICIO_ACTIVIDADES) doc.text(`Inicio actividades: ${EMISOR_INICIO_ACTIVIDADES}`);
     if (EMISOR_DOMICILIO) doc.text(`Dirección: ${EMISOR_DOMICILIO}`);
+    doc.text(`Punto de venta: ${String(PTO_VTA).padStart(4, '0')}`);
     doc.text(`Fecha: ${fechaCbte}`);
     doc.moveDown();
 
     doc.text(`Cliente: ${cliente}`);
     if (pedido.DIRECCION) doc.text(`Dirección: ${pedido.DIRECCION}`);
+    doc.text('Cond. IVA receptor: Consumidor Final');
     doc.moveDown();
 
-    doc.text('Productos:');
-    Object.entries(productos).forEach(([key, value], index) => {
-      doc.text(`${index + 1}. ${value.nombre} x ${value.cantidad}`);
-    });
+    doc.text('Detalle:');
+    if (renglones.length === 0) {
+      doc.text('(el pedido no trajo detalle de productos)');
+    } else {
+      for (const r of renglones) {
+        doc.text(`${r.cantidad} x ${r.nombre}`);
+        doc.text(`     ${money(r.precioUnitario)} c/u        ${money(r.precioTotal)}`);
+      }
+    }
 
     doc.moveDown();
-    doc.text(`TOTAL: $${total}`, { align: 'right' });
+    const netoPdf = +(Number(total) / 1.21).toFixed(2);
+    doc.text(`Neto gravado: ${money(netoPdf)}`, { align: 'right' });
+    doc.text(`IVA 21%: ${money(Number(total) - netoPdf)}`, { align: 'right' });
+    doc.text(`TOTAL: ${money(total)}`, { align: 'right' });
     doc.text(`CAE: ${caeData.CAE}`);
     doc.text(`Vto CAE: ${caeData.CAEFchVto}`);
     doc.image(qrData, doc.x, doc.y + 10, { width: 100 });

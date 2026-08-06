@@ -51,10 +51,12 @@ check('NO borra ni reutiliza la marca original', () => {
   assert.ok(!/set\([^)]*PROCESSED_STOCK_IDS\/\$\{referenceIdOriginal\}[^)]*\),\s*null/.test(cuerpo));
   assert.ok(cuerpo.includes('referenceIdReversion'), 'escribe bajo su propia referencia');
 });
-check('solo revierte si la original quedó completed', () => {
+check('no revierte una venta que nunca descontó; sí una que quedó parcial', () => {
   const i = trans.indexOf('export const reverseStockForCounterSale');
   const cuerpo = trans.slice(i, trans.indexOf('export const processStockForCounterSale'));
-  assert.ok(cuerpo.includes("marcaOriginal.status !== 'completed'"));
+  // `partial` también se revierte: el reductor solo repone los recursos que
+  // registraron la operación original, así que devuelve exactamente lo aplicado.
+  assert.ok(cuerpo.includes("['completed', 'partial'].includes(marcaOriginal.status)"));
   assert.ok(cuerpo.includes("'original-not-applied'"));
 });
 check('una segunda cancelación devuelve already-reversed', () => {
@@ -67,11 +69,22 @@ check('usa el mismo plan que el descuento (base + promo + opcionales)', () => {
   const cuerpo = trans.slice(i, trans.indexOf('export const processStockForCounterSale'));
   assert.ok(cuerpo.includes('construirPlanDeStock('), 'no reconstruye desde el pedido actual');
 });
-check('precarga el nodo antes de la transacción (si no, el reductor recibe null)', () => {
+check('NO usa el patrón de precarga con onValue, que se colgaba con listeners vivos', () => {
+  // El nodo null de la primera invocación ya lo resuelve `revertirEnRecurso`
+  // (devuelve {} para forzar la reejecución) y `resolverResultadoRecurso`
+  // distingue después caché fría de recurso inexistente. La "precarga" con
+  //   const off = onValue(ref, () => { off(); resolve(); })
+  // rompía con cualquier otro listener activo sobre la ruta: RTDB invoca el
+  // callback sincrónicamente y `off` todavía está en la zona muerta del const.
   const i = trans.indexOf('export const reverseStockForCounterSale');
   const cuerpo = trans.slice(i, trans.indexOf('export const processStockForCounterSale'));
-  assert.ok(cuerpo.includes('onValue('), 'falta la precarga');
+  assert.ok(!/const\s+off\s*=\s*onValue\(/.test(cuerpo), 'volvió el patrón que se colgaba');
   assert.ok(cuerpo.includes('resolverResultadoRecurso('), 'falta resolver el retryable');
+});
+check('el descuento tampoco usa esa precarga', () => {
+  const i = trans.indexOf('const processStockUpdate');
+  const cuerpo = trans.slice(i, trans.indexOf('\nexport const processStockForDeliveredOrder'));
+  assert.ok(!/const\s+off\s*=\s*onValue\(/.test(cuerpo), 'volvió el patrón que se colgaba');
 });
 check('registra el estado parcial en vez de darlo por completo', () => {
   const i = trans.indexOf('export const reverseStockForCounterSale');

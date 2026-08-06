@@ -62,6 +62,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     depsOk:       () => ipcRenderer.invoke('facturacion:deps-ok'),
     filesOk:      (tipo, cuentaId) => ipcRenderer.invoke('facturacion:files-ok', tipo, cuentaId),
     nodeVersion:  () => ipcRenderer.invoke('facturacion:node-version'),
+    // ¿Hay un motor de facturación corriendo en esta PC? (solo lectura)
+    isRunning:    () => ipcRenderer.invoke('facturacion:is-running'),
     // Proceso
     start:     (key, accountDir) => ipcRenderer.invoke('facturacion:start', key, accountDir),
     stop:      (key) => ipcRenderer.invoke('facturacion:stop', key),
@@ -111,6 +113,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     shouldCheck:       (params) => ipcRenderer.invoke('image-cache:should-check', params),
     recordCheck:       (params) => ipcRenderer.invoke('image-cache:record-check', params),
     markRemoteDeleted: (params) => ipcRenderer.invoke('image-cache:mark-remote-deleted', params),
+    // Autocorrección: la imagen volvió a existir → se levanta `remote-deleted`.
+    clearRemoteDeleted: (params) => ipcRenderer.invoke('image-cache:clear-remote-deleted', params),
     download:          (params) => ipcRenderer.invoke('image-cache:download', params),
     sweep:             (params) => ipcRenderer.invoke('image-cache:sweep', params),
   },

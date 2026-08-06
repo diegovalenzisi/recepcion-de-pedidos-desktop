@@ -4,7 +4,7 @@ import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/
 export const savePartialClose = async (shift, summary, responsible) => {
     checkLocalId();
     const localId = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(localId);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     if (!shift || !shift.id || !shift.date) {

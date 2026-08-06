@@ -48,7 +48,7 @@ export const createNewShift = async (initialFund, date) => {
     // revalidan solas — a diferencia del SDK, un fetch() con la URL vieja
     // escribiría igual en el local viejo aunque ya se haya cambiado a otro.
     // beginFirebaseOperation()/getDatabaseOrAbort() cierra ese hueco.
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const allShiftsUrl = `${API_URL}/${LOCAL_ID}/CONTADORES/turnos.json`;
 
     let lastShiftNumber = 0;
@@ -178,7 +178,14 @@ const backupShiftData = async (shift, closingPayload, progressCallback, op) => {
     await remove(freshShiftRef);
 };
 
-export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible, progressCallback) => {
+/**
+ * @param {object} [ejecutadoPor] identidad de QUIEN ejecuta el cierre
+ *   (id, usuario, nombre, rol, fecha). Es información de auditoría y es
+ *   independiente de `responsible`: cuando cierra un dueño o un encargado no se
+ *   elige vendedor y los dos coinciden. Parámetro opcional y aditivo — no
+ *   cambia ningún cálculo ni el significado de `cierreResponsable`.
+ */
+export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible, progressCallback, ejecutadoPor = null) => {
     checkLocalId();
     // Un solo "op" para TODO el cierre (múltiples lotes + backup del turno):
     // captura el local/generación acá y se revalida en cada escritura. Si el
@@ -243,6 +250,7 @@ export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible
         cierreElectGastosPagos: totalElectronicExpenses,
         cierreTotalesPorPago: totalsByPaymentMethod,
         cierreResponsable: responsible,
+        ...(ejecutadoPor ? { cierreEjecutadoPor: ejecutadoPor } : {}),
         costoTotal: Math.round(totalCostValue * 1000) / 1000,
         cierreGanancia: Math.round(ganancia * 1000) / 1000
     };

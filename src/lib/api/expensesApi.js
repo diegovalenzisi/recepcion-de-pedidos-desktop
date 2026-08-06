@@ -25,7 +25,7 @@ export const addExpenseToShift = async (shift, expenseData) => {
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     if (!shift || !shift.id || !shift.date) {

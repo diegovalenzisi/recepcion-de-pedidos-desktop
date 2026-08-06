@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2, Plus, RefreshCw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,7 @@ function CounterTab({ currentShift, settings }) {
   const [refreshing, setRefreshing] = useState(false);
   const { toast } = useToast();
 
-  const { 
+  const {
     hasOutOfStock, 
     hasLowStock, 
     outOfStockCount, 
@@ -98,7 +98,14 @@ function CounterTab({ currentShift, settings }) {
         emiteFactura: emiteFactura
       };
 
+      // NO se le pregunta NADA al cajero. La cola fiscal la decide la regla por
+      // medio de pago (facturaORemito.js) y, para PedidosYa, el alias favorito
+      // del local. El efectivo puro es remito y punto.
       const savedSale = await saveCounterSale(saleData, currentShift);
+
+      // La pantalla se libera ACÁ, apenas la venta quedó guardada. La
+      // facturación y la impresión siguen solas en segundo plano.
+      handlePaymentSuccess();
 
       if (settings?.printCounterCommand) {
         const tPrint = Date.now();
@@ -113,7 +120,7 @@ function CounterTab({ currentShift, settings }) {
       });
 
       console.log(`[VENTA MOSTRADOR] actualizar UI: ${Date.now() - tUI} ms`);
-      handlePaymentSuccess();
+      // El modal ya se cerró arriba, apenas se guardó la venta.
     } catch (error) {
       console.error("[CounterTab] Error saving sale:", error);
       toast({
@@ -253,6 +260,7 @@ function CounterTab({ currentShift, settings }) {
         localId={localId}
         departments={[]}
       />
+
     </>
   );
 }

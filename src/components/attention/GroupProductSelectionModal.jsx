@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
-function GroupProductSelectionModal({ isOpen, choice, currentIndex, totalChoices, onSelect }) {
+/**
+ * `onCancel` es OBLIGATORIO para poder cerrar. Antes el Dialog se montaba con
+ * `onOpenChange={() => {}}`, así que la X (que es un DialogPrimitive.Close y
+ * dispara onOpenChange(false)) no hacía nada: el modal quedaba trabado y no
+ * había forma de salir sin elegir una opción.
+ */
+function GroupProductSelectionModal({ isOpen, choice, currentIndex, totalChoices, onSelect, onCancel }) {
   const [selected, setSelected] = useState([]);      // single-select: string[]
   const [quantities, setQuantities] = useState({});   // multi-select: { [articleId]: number }
 
@@ -13,10 +19,17 @@ function GroupProductSelectionModal({ isOpen, choice, currentIndex, totalChoices
 
   if (!choice) return null;
 
+  // Cerrar = cancelar la promoción entera: no se agrega el artículo principal y
+  // se descarta la selección provisional (el estado local se limpia solo, por el
+  // useEffect de arriba, cuando cambia el choice).
+  const handleOpenChange = (open) => {
+    if (!open && onCancel) onCancel();
+  };
+
   // ── Single-select (comportamiento original) ──────────────────────────────
   if (!choice.isMultiSelect) {
     return (
-      <Dialog open={isOpen} onOpenChange={() => {}}>
+      <Dialog open={isOpen} onOpenChange={handleOpenChange}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -85,15 +98,24 @@ function GroupProductSelectionModal({ isOpen, choice, currentIndex, totalChoices
     max !== null ? `Elegí hasta ${max} producto${max !== 1 ? 's' : ''}` :
     null;
 
+  // AVISO DE MÁXIMO: solo cuando hay un EXCESO real (total > max).
+  //
+  // Antes la condición era `atMax` (total >= max), así que alcanzar el máximo
+  // permitido se mostraba como si fuera un error: elegir 1 GIO en un grupo de
+  // exactamente 1 daba "Total elegido: 1 / 1" junto con "Máximo 1 unidades en
+  // total", aunque la selección era válida y el botón dejaba confirmar.
+  //
+  // `atMax` se sigue usando para lo que corresponde: deshabilitar el "+" y
+  // frenar `increment`, que es lo que impide llegar a un exceso.
   const validationMsg =
     total > 0 && total < min
       ? `Debés elegir al menos ${min} en total para ${choice.nombre}.`
-      : atMax
+      : (max !== null && total > max)
         ? `Máximo ${max} unidades en total. Bajá la cantidad de algún artículo para cambiar.`
         : null;
 
   return (
-    <Dialog open={isOpen} onOpenChange={() => {}}>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>

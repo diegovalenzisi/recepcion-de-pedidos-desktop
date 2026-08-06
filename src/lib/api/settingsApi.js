@@ -398,7 +398,7 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
     // Un solo "op" para todo el pago: hay varios await reales (lectura del
     // resumen, getNextPaymentId) antes de cada una de las tres escrituras
     // definitivas de abajo. Se revalida antes de cada una.
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     const accountSummaryRef = ref(db, `${LOCAL_ID}/RESUMEN_CUENTA`);

@@ -135,7 +135,28 @@ const getCurrentDatabaseOrThrow = (localId = getCurrentLocalId() || getLocalId()
 };
 
 // == copia de core.js: beginFirebaseOperation ==
-const beginFirebaseOperation = (localId = getCurrentLocalId() || getLocalId()) => {
+// == copia de core.js: getLocationSpecificDatabasePath / getCurrentDatabasePath ==
+// La raíz de datos NO es necesariamente el número de local: un local con
+// override de rutas guarda su `databasePath`. Los tres conceptos (localId,
+// databasePath, databaseURL) son distintos aunque hoy suelan coincidir.
+const OVERRIDES = {};   // { [localId]: { databasePath } }
+const getLocationSpecificDatabasePath = (localId) => OVERRIDES[localId]?.databasePath || localId;
+const getCurrentDatabasePath = () => getLocationSpecificDatabasePath(getCurrentLocalId() || getLocalId());
+
+// == copia de core.js: normalizarLocalIdDeOperacion ==
+let ultimoErrorDeNormalizacion = null;
+const normalizarLocalIdDeOperacion = (valor) => {
+  const activo = getCurrentLocalId() || getLocalId();
+  if (!valor || valor === activo) return valor;
+  if (String(valor) === String(getLocationSpecificDatabasePath(activo))) {
+    ultimoErrorDeNormalizacion = { recibido: valor, activo };
+    return activo;
+  }
+  return valor;
+};
+
+const beginFirebaseOperation = (localIdRecibido = getCurrentLocalId() || getLocalId()) => {
+  const localId = normalizarLocalIdDeOperacion(localIdRecibido);
   const generation = getFirebaseGeneration();
   const getDatabaseOrAbort = () => {
     if (!isFirebaseReady()) {
@@ -309,6 +330,79 @@ await check('beginFirebaseOperation()+getDatabaseOrAbort() inmediato equivale a 
   const db2 = getCurrentDatabaseOrThrow();
   assert.strictEqual(db1.app.options.databaseURL, db2.app.options.databaseURL);
 });
+
+// ---------------------------------------------------------------------------
+// 9. localId !== databasePath
+//
+// Bug latente encontrado en el hotfix de stock: ~31 call sites hacían
+//   const LOCAL_ID = getCurrentDatabasePath();
+//   const op = beginFirebaseOperation(LOCAL_ID);   // ← espera un localId
+// Mientras la raíz de datos coincide con el número de local nadie lo nota. En
+// el primer local con override de rutas, `activeLocalId !== localId` es SIEMPRE
+// verdadero y toda escritura de esa operación aborta: no se puede vender, ni
+// descontar stock, ni cerrar caja.
+// ---------------------------------------------------------------------------
+console.log('\n9. localId !== databasePath (override de rutas por local):');
+await resetAll();
+OVERRIDES['local-A'] = { databasePath: 'RAIZ_ALTERNATIVA_A' };
+await loadInitialDataSimulated('local-A');
+
+await check('los tres conceptos son distintos y no se confunden', () => {
+  assert.strictEqual(getCurrentLocalId(), 'local-A', 'identidad del comercio');
+  assert.strictEqual(getCurrentDatabasePath(), 'RAIZ_ALTERNATIVA_A', 'raíz de datos');
+  assert.strictEqual(getConfig('local-A').dbUrl, 'https://proj-a-default-rtdb.firebaseio.com', 'base de datos');
+});
+
+await check('pasar el databasePath por error NO aborta la operación', () => {
+  ultimoErrorDeNormalizacion = null;
+  const op = beginFirebaseOperation(getCurrentDatabasePath());
+  assert.strictEqual(op.localId, 'local-A', 'se normaliza al localId real');
+  assert.doesNotThrow(() => op.getDatabaseOrAbort(), 'antes esto tiraba FirebaseNotReadyError siempre');
+  assert.ok(ultimoErrorDeNormalizacion, 'debe quedar registrado para arreglar el call site');
+});
+
+await check('la forma correcta (sin argumento) también funciona con override', () => {
+  const op = beginFirebaseOperation();
+  assert.strictEqual(op.localId, 'local-A');
+  const db = op.getDatabaseOrAbort();
+  assert.strictEqual(db.app.options.databaseURL, 'https://proj-a-default-rtdb.firebaseio.com');
+});
+
+await check('la venta/stock/turno escriben bajo la raíz del local, no bajo el localId', () => {
+  const op = beginFirebaseOperation();
+  const raiz = getCurrentDatabasePath();
+  op.getDatabaseOrAbort();
+  // Las rutas se componen SIEMPRE con el databasePath; el localId es sólo
+  // identidad. Ninguna ruta puede caer bajo "local-A".
+  for (const nodo of ['MOSTRADOR/1', 'PEDIDOS/4046', 'ARTICULOS/5A/stock', 'MATERIA_PRIMA/3M', 'CAJAS/27-07-2026']) {
+    const ruta = `${raiz}/${nodo}`;
+    assert.ok(ruta.startsWith('RAIZ_ALTERNATIVA_A/'), ruta);
+    assert.ok(!ruta.startsWith('local-A/'), `no debe escribir bajo el localId: ${ruta}`);
+  }
+});
+
+await check('con override sigue abortando si el local cambia de verdad', async () => {
+  const op = beginFirebaseOperation(getCurrentDatabasePath());
+  await loadInitialDataSimulated('local-B');
+  assert.throws(() => op.getDatabaseOrAbort(), FirebaseNotReadyError,
+    'una operación de A no puede terminar escribiendo en B');
+});
+
+await check('el databasePath de OTRO local no se confunde con el activo', async () => {
+  OVERRIDES['local-B'] = { databasePath: 'RAIZ_ALTERNATIVA_B' };
+  await resetAll();
+  OVERRIDES['local-A'] = { databasePath: 'RAIZ_ALTERNATIVA_A' };
+  OVERRIDES['local-B'] = { databasePath: 'RAIZ_ALTERNATIVA_B' };
+  await loadInitialDataSimulated('local-A');
+  // Sólo se normaliza el databasePath del local ACTIVO. El de otro local es un
+  // valor ajeno y la operación debe abortar, no adoptarlo.
+  const op = beginFirebaseOperation('RAIZ_ALTERNATIVA_B');
+  assert.strictEqual(op.localId, 'RAIZ_ALTERNATIVA_B', 'no se normaliza a local-A');
+  assert.throws(() => op.getDatabaseOrAbort(), FirebaseNotReadyError);
+});
+
+delete OVERRIDES['local-A'];
+delete OVERRIDES['local-B'];
 
 await resetAll();
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

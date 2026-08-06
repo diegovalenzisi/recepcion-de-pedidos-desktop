@@ -94,6 +94,9 @@ const controller = createArticleImageController({
     shouldCheck: (p) => window.electronAPI.imageCache.shouldCheck(p),
     recordCheck: (p) => window.electronAPI.imageCache.recordCheck(p),
     markRemoteDeleted: (p) => window.electronAPI.imageCache.markRemoteDeleted(p),
+    // Puede no existir en una versión anterior del preload: el controlador lo
+    // trata como opcional y sigue funcionando sin él.
+    clearRemoteDeleted: (p) => window.electronAPI.imageCache.clearRemoteDeleted?.(p),
     download: (p) => window.electronAPI.imageCache.download(p),
   },
   fetchRemoteMetadata,

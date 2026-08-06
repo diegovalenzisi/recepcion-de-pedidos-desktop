@@ -12,7 +12,7 @@ export const recalcularTotalComisionAPagar = async () => {
   try {
     const localId = getCurrentDatabasePath();
     if (!localId) return;
-    const op = beginFirebaseOperation(localId);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
     const snap = await get(ref(db, `${localId}/RESUMEN_CUENTA/TOTALES`));
     if (!snap.exists()) return;
@@ -82,7 +82,7 @@ export const fetchAccountSummary = async () => {
 export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) => {
     checkLocalId();
     const localId = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(localId);
+    const op = beginFirebaseOperation();
 
     try {
         const percentage = await fetchSalesPercentage();
@@ -163,7 +163,7 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
 export const reversarVentaCuenta = async ({ numeroPedido, valor, tipo, dateKey }) => {
     checkLocalId();
     const localId = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(localId);
+    const op = beginFirebaseOperation();
 
     try {
         const percentage = await fetchSalesPercentage();

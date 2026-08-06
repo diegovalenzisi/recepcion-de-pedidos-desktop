@@ -16,7 +16,7 @@ const fetchProductGroupsArray = async (db, LOCAL_ID) => {
 export const checkAndUpdatePromotionStockStatus = async () => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     try {

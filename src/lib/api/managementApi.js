@@ -51,7 +51,7 @@ const processSnapshot = (snapshot, tabId) => {
 const syncOptionalToArticles = async (groupCode, optionalCode) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     try {
@@ -100,7 +100,7 @@ const syncOptionalToArticles = async (groupCode, optionalCode) => {
 const removeOptionalFromArticles = async (groupCode, optionalCode) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     try {
@@ -302,7 +302,7 @@ export const saveData = async (tabId, data, isEditing, allData = {}) => {
     // más awaits después (sync de opcionales, validación de stock heredado)
     // antes de la transacción del contador. Se revalida en cada punto de
     // escritura, no solo al principio.
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
     const db = op.getDatabaseOrAbort();
 
     if (!newKey) {
@@ -664,7 +664,7 @@ export const deleteData = async (tabId, item) => {
         path = `${LOCAL_ID}/${tabConfig.path}/${item.grupo}/${item.codigo}`;
     }
 
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
 
     if (tabId === 'opcionales') {
         try {

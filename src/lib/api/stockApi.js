@@ -85,7 +85,7 @@ export const updateStock = async (itemCodigo, newStock, itemType) => {
     // El fetch(url) de abajo lee el stock PREVIO antes de escribir el nuevo —
     // un await real. beginFirebaseOperation()/getDatabaseOrAbort() revalida
     // que el local no haya cambiado antes del PUT definitivo.
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
 
     const path = itemType === 'Artículo' ? 'ARTICULOS' : 'MATERIA_PRIMA';
     const url = `${API_URL}/${LOCAL_ID}/${path}/${itemCodigo}/stock.json`;
@@ -157,7 +157,7 @@ export const bulkUpdateStock = async (updates) => {
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
     if (!LOCAL_ID) throw new Error("Local ID no está configurado.");
-    const op = beginFirebaseOperation(LOCAL_ID);
+    const op = beginFirebaseOperation();
 
     const stockChanges = [];
     

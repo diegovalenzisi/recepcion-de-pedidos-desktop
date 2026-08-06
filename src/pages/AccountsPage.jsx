@@ -16,6 +16,11 @@ import { cn, getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import PrepaymentHistoryModal from '@/components/prepayment/PrepaymentHistoryModal';
 import { useDataLoader } from '@/hooks/useDataLoader';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import {
+  plataformaDeCuenta,
+  cuentasAsociablesParaFacturacion,
+  validarAsociacionPlataforma,
+} from '@/lib/api/facturaORemito';
 
 const ACCOUNT_NAMES = [
   "Transferencia",
@@ -29,7 +34,7 @@ const ACCOUNT_NAMES = [
   "PREPAGO RAPPI"
 ];
 
-const defaultAccountData = { nombre: '', aNombreDe: '', alias: '', imprimeFactura: false, isFavorite: false };
+const defaultAccountData = { nombre: '', aNombreDe: '', alias: '', imprimeFactura: false, isFavorite: false, cuentaFacturacionAsociadaId: '' };
 
 function AccountsPageContent() {
   const { toast } = useToast();
@@ -56,6 +61,26 @@ function AccountsPageContent() {
   const [isPrepaymentModalOpen, setIsPrepaymentModalOpen] = useState(false);
   const [prepaymentAmount, setPrepaymentAmount] = useState('');
   const [selectedPrepaymentType, setSelectedPrepaymentType] = useState('');
+
+  // ¿La cuenta que se está editando es PedidosYa o Rappi? Sólo esas muestran el
+  // desplegable de cuenta asociada.
+  const esPlataforma = useMemo(
+    () => !!plataformaDeCuenta(accountData.nombre),
+    [accountData.nombre]
+  );
+
+  // Opciones del desplegable: SOLO cuentas que resuelven FACTURACION_1, 2 o 3.
+  // Sin remitos y sin otras plataformas. La cantidad depende de este local.
+  const opcionesAsociables = useMemo(
+    () => cuentasAsociablesParaFacturacion(accounts || []),
+    [accounts]
+  );
+
+  /** Cola a la que iría la cuenta elegida, para mostrarla debajo del desplegable. */
+  const colaAsociada = useMemo(() => {
+    const elegida = opcionesAsociables.find((o) => o.id === accountData.cuentaFacturacionAsociadaId);
+    return elegida ? elegida.cola : null;
+  }, [opcionesAsociables, accountData.cuentaFacturacionAsociadaId]);
 
   // Initial load
   React.useEffect(() => {
@@ -96,6 +121,7 @@ function AccountsPageContent() {
         alias: account.alias || '',
         imprimeFactura: account.imprimeFactura || false,
         isFavorite: account.isFavorite || false,
+        cuentaFacturacionAsociadaId: account.cuentaFacturacionAsociadaId || '',
     } : defaultAccountData);
     setIsModalOpen(true);
   }, []);
@@ -163,7 +189,25 @@ function AccountsPageContent() {
     }
     setIsSaving(true);
     try {
+      // PedidosYa / Rappi: no se guardan como facturables sin una cuenta
+      // asociada VÁLIDA. La misma validación que usa la facturación.
+      const plataforma = plataformaDeCuenta(accountData.nombre);
+      if (plataforma && accountData.imprimeFactura) {
+        const v = validarAsociacionPlataforma({
+          plataformaId: editingAccount?.id ?? null,
+          asociadaId: accountData.cuentaFacturacionAsociadaId,
+          cuentas: accounts,
+        });
+        if (!v.ok) {
+          toast({ variant: 'destructive', title: 'Falta la cuenta asociada', description: v.motivo });
+          setIsSaving(false);
+          return;
+        }
+      }
+
       const dataToSave = { ...editingAccount, ...accountData };
+      // Sólo las plataformas guardan la asociación; el resto no la arrastra.
+      if (!plataforma) delete dataToSave.cuentaFacturacionAsociadaId;
       if (!editingAccount && accounts.length === 0) {
         dataToSave.isFavorite = true;
       }
@@ -176,7 +220,7 @@ function AccountsPageContent() {
     } finally {
       setIsSaving(false);
     }
-  }, [accountData, editingAccount, accounts.length, handleCloseModal, toast, reloadAccounts]);
+  }, [accountData, editingAccount, accounts, handleCloseModal, toast, reloadAccounts]);
 
   const handleDelete = useCallback(async () => {
     if (!itemToDelete) return;
@@ -350,6 +394,44 @@ function AccountsPageContent() {
                 />
                 <Label htmlFor="imprimeFactura" className="cursor-pointer">Imprime Factura</Label>
               </div>
+
+              {/* PedidosYa y Rappi no tienen cola propia: facturan por la cuenta
+                  que se elija acá. Se guarda el ID, así renombrar la cuenta no
+                  rompe el vínculo. Para las demás cuentas no aparece. */}
+              {esPlataforma && (
+                <div className="space-y-2 pt-2 border-t">
+                  <Label htmlFor="cuentaAsociada">
+                    Cuenta asociada para facturación <span className="text-red-500">*</span>
+                  </Label>
+                  {opcionesAsociables.length === 0 ? (
+                    <p className="text-sm text-red-600">
+                      Este local no tiene ninguna cuenta que resuelva FACTURACION_1, 2 o 3.
+                      Cargá una Transferencia, Transferencia 2 o Transferencia 3 antes de configurar esta cuenta.
+                    </p>
+                  ) : (
+                    <>
+                      <Select
+                        value={accountData.cuentaFacturacionAsociadaId || ''}
+                        onValueChange={(v) => setAccountData((prev) => ({ ...prev, cuentaFacturacionAsociadaId: v }))}
+                      >
+                        <SelectTrigger id="cuentaAsociada" className={cn(!accountData.cuentaFacturacionAsociadaId && 'text-muted-foreground')}>
+                          <SelectValue placeholder="Seleccione la cuenta con la que se factura" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {opcionesAsociables.map((o) => (
+                            <SelectItem key={o.id} value={o.id}>{o.nombre}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {colaAsociada && (
+                        <p className="text-sm text-muted-foreground">
+                          Esta cuenta enviará las ventas a <span className="font-semibold">{colaAsociada}</span>.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button type="button" variant="secondary" onClick={handleCloseModal}>Cancelar</Button>

@@ -33,7 +33,7 @@ export const savePrepaymentForApp = async (appType, amount, currentShiftDate) =>
   const LOCAL_ID = getCurrentDatabasePath();
   if (!LOCAL_ID) throw new Error("Local ID no configurado");
 
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
   const dbType = `PREPAGO_${appType.toUpperCase()}`;
 

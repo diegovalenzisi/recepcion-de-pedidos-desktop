@@ -6,11 +6,15 @@ import { cancelarComision } from '@/lib/api/comisionesApi';
 import { processStockForCounterSale, reverseStockForCounterSale } from '@/lib/api/transactionsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
-import { saveFacturacionForPayments } from './ordersApi';
 import { emitirRemitoDeVenta } from './remitosApi';
+import { COMPROBANTE_FACTURA } from '@/lib/api/facturaORemito';
+import { resolverComprobanteDeVenta } from '@/lib/api/facturaORemitoApi';
 import { updateStatistics } from './salesApi';
 import { addExpenseToShift } from './expensesApi';
 import { savePrepaymentForApp } from '@/lib/api/prepaymentApi';
+import { referenciaDeVenta } from '@/lib/api/facturaMostrador';
+import { idDeEsteDispositivo } from '@/lib/api/facturacionDeRemitoApi';
+import { validarStockDeCarrito } from '@/lib/api/validacionStockVentaApi';
 
 const getNextCounterSaleId = async (db, localId) => {
   const counterRef = ref(db, `${localId}/CONTADORES/mostrador`);
@@ -24,17 +28,16 @@ const getNextCounterSaleId = async (db, localId) => {
   return snapshot.val();
 };
 
-const getFacturacionNodeForPayment = (paymentMethod) => {
-  const methodName = paymentMethod.toLowerCase();
-  if (methodName.includes('transferencia 3')) return 'FACTURACION_3';
-  if (methodName.includes('transferencia 2')) return 'FACTURACION_2';
-  if (methodName.includes('transferencia')) return 'FACTURACION_1';
-  return null;
-};
-
-const saveCounterSaleToFacturacion = async (db, localId, saleId, saleData) => {
-  const paymentDetails = saleData.payments || [];
-  
+/**
+ * UNA sola entrada en UNA sola cola, por el TOTAL COMPLETO de la venta.
+ *
+ * La cola y el importe ya vienen resueltos en `encolado` (facturaORemito.js).
+ * Antes acá entraba cualquier método cuyo NOMBRE contuviera "transferencia",
+ * con su importe PARCIAL, sin mirar el interruptor: una cuenta apagada se
+ * facturaba igual y además recibía su FCX, y un pago combinado generaba una
+ * factura por cada medio de pago.
+ */
+const saveCounterSaleToFacturacion = async (db, localId, saleId, saleData, encolado, impresion = null) => {
   const productos = {};
   (saleData.items || []).forEach((item, index) => {
     productos[`producto_${index + 1}`] = {
@@ -44,33 +47,52 @@ const saveCounterSaleToFacturacion = async (db, localId, saleId, saleData) => {
   });
 
   const now = new Date();
+  // Encabezado ÚNICO de mostrador. Antes convivían dos: el del tilde manual
+  // ("Consumidor Final" / "Sin Datos") y el del camino automático
+  // ("consumidor final" / "  "). Queda el primero para las dos. El resto del
+  // payload fiscal no se toca.
   const facturaData = {
-    clientes: "consumidor final",
-    direccion: "  ",
+    clientes: "Consumidor Final",
+    direccion: "Sin Datos",
     producto: productos,
     fecha: saleData.date || formatDateForFirebase(now),
     hora: saleData.hora || now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   };
 
-  const prefixedSaleId = `M${saleId}`;
+  const rutaCola = `${localId}/${encolado.cola}/M${saleId}`;
+  console.log(`[FACTURACION] Venta finalizada: mostrador M${saleId} por ${encolado.total}`);
+  if (encolado.medioDePago) console.log(`[FACTURACION] Medio de pago: ${encolado.medioDePago}`);
+  if (encolado.regla) console.log(`[FACTURACION] Regla aplicada: ${encolado.regla}`);
+  console.log(`[FACTURACION] Cuenta fiscal resuelta: ${encolado.cuenta}`);
+  console.log(`[FACTURACION] Cola seleccionada: ${encolado.cola}`);
+  console.log(`[FACTURACION] Ruta destino: ${rutaCola}`);
+  console.log('[FACTURACION] Iniciando escritura');
 
-  // Handle split payments - check each payment
-  if (paymentDetails.length > 0) {
-    for (const payment of paymentDetails) {
-      const facturacionNode = getFacturacionNodeForPayment(payment.method);
-      if (facturacionNode) {
-        try {
-          const paymentFacturaData = { ...facturaData, total: payment.amount };
-          const facturacionRef = ref(db, `${localId}/${facturacionNode}/${prefixedSaleId}`);
-          await set(facturacionRef, paymentFacturaData);
-        } catch (error) {
-          console.error(`Error saving to ${facturacionNode} for counter sale ${saleId}:`, error);
-        }
-      }
-    }
-  }
+  const facturacionRef = ref(db, rutaCola);
+  await set(facturacionRef, {
+    ...facturaData,
+    total: encolado.total,
+    // REFERENCIA DE VUELTA. El motor AFIP hace `{...pedido}` al guardar el
+    // comprobante en /{localId}/VENTAS, así que estos campos viajan hasta la
+    // factura emitida y permiten reconocer a qué venta corresponde sin tocar el
+    // motor. Es lo que hace posible imprimir el ticket recién cuando hay CAE.
+    ...referenciaDeVenta({ localId, saleId }),
+    // IMPRESIÓN AUTOMÁTICA. Viaja encolado y el motor lo copia dentro del
+    // comprobante emitido, así que la factura llega a VENTAS sabiendo que hay
+    // que imprimirla y en qué terminal se pidió. Nada depende de que esta
+    // pantalla siga abierta.
+    ...(impresion ? { imprimirAlEmitir: true, impresionSolicitadaPor: impresion.deviceId, emitidaAt: Date.now() } : {}),
+    colaFacturacion: encolado.cola,
+    cuentaCobro: encolado.cuenta,
+  });
+  console.log(`[FACTURACION] Escritura confirmada: ${rutaCola}`);
 };
 
+/**
+ * Guarda una venta de mostrador. La cola fiscal la decide ENTERAMENTE
+ * `resolverComprobanteDeVenta` a partir del medio de pago; no hay forma de
+ * forzarla desde la pantalla y no se le pregunta nada al cajero.
+ */
 export const saveCounterSale = async (saleData, shift) => {
   const t0 = Date.now();
   console.log('[VENTA MOSTRADOR] inicio confirmar venta');
@@ -82,14 +104,41 @@ export const saveCounterSale = async (saleData, shift) => {
   // background: si el local cambia en cualquier punto, cada escritura que
   // quede (incluidas las de background) se aborta en vez de terminar
   // escribiendo en el local equivocado.
-  const op = beginFirebaseOperation(LOCAL_ID);
+  const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
   try {
+    // ── STOCK: ÚLTIMA PALABRA, ANTES DE TOCAR NADA ────────────────────────
+    //
+    // Entre "Proceder al pago" y este punto pasó el modal de cobro: pudo
+    // agotarse una materia prima (otra terminal, la cocina). Se revalida contra
+    // un snapshot FRESCO con la cantidad REAL del carrito, y se corta ACÁ:
+    // todavía no se consumió el número de venta ni se escribió nada. El mensaje
+    // dice qué falta y cuánto, y CounterTab lo muestra tal cual.
+    const stock = await validarStockDeCarrito(saleData.items);
+    if (!stock.suficiente) {
+      console.error(`[VENTA MOSTRADOR] venta NO registrada: falta stock`, stock.faltantes);
+      throw new Error(stock.mensaje);
+    }
+
     // ── FASE 1: Ruta crítica — bloquea UI hasta completar ─────────────────
     let t = Date.now();
-    const saleId = await getNextCounterSaleId(db, LOCAL_ID);
-    console.log(`[VENTA MOSTRADOR] obtener ID: ${Date.now() - t} ms`);
+    // FACTURA o REMITO se decide ANTES de guardar la venta, para que la venta
+    // guardada ya lleve la decisión (`comprobante`) y todo lo que venga después
+    // —facturación, remito, reprocesos— lea el mismo valor. Va en paralelo con
+    // el ID para no agregar latencia a la ruta crítica.
+    //
+    // Si la venta DEBE facturarse y no se puede determinar una cola válida,
+    // resolverComprobanteDeVenta LANZA: la venta no se confirma y el cajero ve
+    // el error. No se cae a un FCX ni se manda a una cola equivocada.
+    const [saleId, decision] = await Promise.all([
+      getNextCounterSaleId(db, LOCAL_ID),
+      resolverComprobanteDeVenta(
+        { payments: saleData.payments },
+        { emiteFacturaManual: saleData.emiteFactura === true }
+      ),
+    ]);
+    console.log(`[VENTA MOSTRADOR] obtener ID + decidir comprobante: ${Date.now() - t} ms`);
 
     const now = new Date();
     const fechaCaja = formatDateForFirebase(getOperationalDate(now));
@@ -112,7 +161,11 @@ export const saveCounterSale = async (saleData, shift) => {
       payment:         { total: saleData.total, details: saleData.payments, payments: saleData.payments },
       payments:        saleData.payments,
       specialDiscount: saleData.specialDiscount || null,
+      // `emiteFactura` sigue siendo lo que TILDÓ el operador. La decisión real
+      // —la que mira facturación y la que mira el remito— es `comprobante`.
       emiteFactura:    saleData.emiteFactura || false,
+      comprobante:       decision.comprobante,
+      motivoComprobante: decision.motivo,
       timestamp:       formattedDate,
       date:            formattedDate,
       hora:            formattedTime,
@@ -135,21 +188,37 @@ export const saveCounterSale = async (saleData, shift) => {
     });
     if (!response.ok) throw new Error('Network response was not ok');
     console.log(`[VENTA MOSTRADOR] guardar venta Firebase: ${Date.now() - t} ms`);
+
+    // ── DESCUENTO DE STOCK: RUTA CRÍTICA, NO BACKGROUND ────────────────────
+    //
+    // Antes esto corría dentro de `runBackground()`, que se lanzaba sin await:
+    // la pantalla daba la venta por terminada mientras el descuento seguía
+    // pendiente, y si fallaba nadie se enteraba. Con el cuelgue de la precarga
+    // de `onValue` eso significaba vender sin descontar durante horas.
+    //
+    // Ahora la venta no se considera terminada hasta que el stock quedó
+    // efectivamente aplicado en Firebase (recursos + appliedOps + marca). El
+    // resultado viaja en `stockResult` para que la pantalla pueda avisar.
+    const tStock = Date.now();
+    let stockResult;
+    try {
+      stockResult = await processStockForCounterSale(saleWithTimestamp);
+    } catch (e) {
+      console.error('[VENTA MOSTRADOR] error stock:', e);
+      stockResult = { success: false, error: e?.message || String(e) };
+    }
+    const msStock = Date.now() - tStock;
+    console.log(`[VENTA MOSTRADOR] descontar stock: ${msStock} ms — ${stockResult.success ? 'aplicado' : 'PENDIENTE: ' + (stockResult.error || stockResult.motivo || '')}`);
+    if (!stockResult.success) {
+      console.error(`[VENTA MOSTRADOR] la venta ${saleId} quedó SIN descontar stock`, stockResult);
+    }
     console.log(`[VENTA MOSTRADOR] ruta crítica total: ${Date.now() - t0} ms — liberando pantalla`);
 
     // ── FASE 2: Background — NO bloquea la UI ─────────────────────────────
-    // Stock, facturación, comisiones y estadísticas corren en segundo plano.
-    // La venta ya está guardada de forma segura en Firebase antes de llegar aquí.
+    // Facturación, remito, comisiones y estadísticas corren en segundo plano.
+    // El stock YA quedó aplicado antes de llegar acá.
     const runBackground = async () => {
       let tb;
-
-      tb = Date.now();
-      try {
-        await processStockForCounterSale(saleWithTimestamp);
-        console.log(`[VENTA MOSTRADOR] descontar stock: ${Date.now() - tb} ms`);
-      } catch (e) {
-        console.error('[VENTA MOSTRADOR] error stock:', e);
-      }
 
       // LEDGER DE PREPAGOS (PedidosYa / Rappi).
       //
@@ -175,30 +244,20 @@ export const saveCounterSale = async (saleData, shift) => {
         }
       }
 
+      // FACTURACIÓN — UNA sola entrada, en UNA sola cola, por el TOTAL COMPLETO.
+      // Si el comprobante decidido es REMITO no se escribe NADA en ninguna cola
+      // fiscal: es lo que evita que la misma venta salga facturada y con FCX.
+      // La cola ya quedó resuelta y validada antes de guardar la venta.
       tb = Date.now();
       try {
-        if (saleData.emiteFactura) {
-          const facturacionData = {
-            client: { name: 'Consumidor Final', address: 'Sin Datos' },
-            items: saleData.items,
-            payment: { total: saleData.total, payments: saleData.payments },
-            emiteFactura: true,
-            date: formattedDate,
-            hora: formattedTime,
-          };
-          await saveFacturacionForPayments(saleId, facturacionData, 'mostrador');
-          console.log(`[VENTA MOSTRADOR] guardar facturación: ${Date.now() - tb} ms`);
+        if (decision.comprobante !== COMPROBANTE_FACTURA) {
+          console.log(`[VENTA MOSTRADOR] no se factura (${decision.motivo}) — va a remito`);
         } else {
-          const hasTransferencia = saleData.payments && saleData.payments.some(
-            p => p.method.toLowerCase().includes('transferencia')
-          );
-          if (hasTransferencia) {
-            // Revalida: esto corre en background, potencialmente mucho después
-            // de que arrancó la venta — si el local cambió, se aborta acá.
-            const bgDb = op.getDatabaseOrAbort();
-            await saveCounterSaleToFacturacion(bgDb, LOCAL_ID, saleId, saleWithTimestamp);
-            console.log(`[VENTA MOSTRADOR] guardar facturación transferencia: ${Date.now() - tb} ms`);
-          }
+          // Revalida: esto corre en background, potencialmente mucho después
+          // de que arrancó la venta — si el local cambió, se aborta acá.
+          const bgDb = op.getDatabaseOrAbort();
+          await saveCounterSaleToFacturacion(bgDb, LOCAL_ID, saleId, saleWithTimestamp, decision.encolado);
+          console.log(`[VENTA MOSTRADOR] guardar facturación: ${Date.now() - tb} ms`);
         }
       } catch (facError) {
         console.error('[VENTA MOSTRADOR] error facturación:', facError);
@@ -246,7 +305,12 @@ export const saveCounterSale = async (saleData, shift) => {
 
     runBackground().catch(e => console.error('[VENTA MOSTRADOR] error inesperado en background:', e));
 
-    return { ...saleWithTimestamp, id: saleId };
+    // `stockResult` viaja con la venta: la pantalla puede distinguir una venta
+    // completa de una que quedó con el descuento pendiente.
+    //
+    // `comprobanteEncolado` NO se persiste (no está en saleWithTimestamp): sólo
+    // se devuelve para que la pantalla sepa en qué cola fiscal esperar el CAE.
+    return { ...saleWithTimestamp, id: saleId, stockResult, comprobanteEncolado: decision.encolado || null };
   } catch (error) {
     console.error('[VENTA MOSTRADOR] error crítico guardando venta:', error);
     throw error;

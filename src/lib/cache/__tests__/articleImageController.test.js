@@ -132,9 +132,77 @@ await check('objeto eliminado y luego recreado en el mismo path: vuelve a descar
   const emitted = [];
   const ctrl = createArticleImageController({ api, placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'ok', meta: { generation: '2' } }), fetchFreshDownloadUrl: async () => null });
   await ctrl.orchestrate('L', IDENTITY, { force: true, emit: (s) => emitted.push(s) });
-  assert.strictEqual(emitted[0], PLACEHOLDER, 'primero muestra placeholder (estaba eliminada)');
+  // Ya NO se emite el placeholder de entrada: una marca vieja no puede tapar
+  // una imagen que existe. Se muestra la URL remota y después la copia local.
+  assert.strictEqual(emitted[0], IDENTITY.url, 'primero la URL remota, nunca el placeholder');
+  assert.ok(!emitted.includes(PLACEHOLDER), 'el placeholder no aparece en ningún momento');
   assert.strictEqual(dlCalls, 1, 'recreada → re-descarga');
   assert.ok(emitted.includes('dlvimg://L/K?v=g2'), 'emite la copia recreada');
+});
+
+console.log('\nAutocorrección del caché (marca remote-deleted obsoleta):');
+await check('si la imagen existe, se levanta remote-deleted del manifiesto', async () => {
+  const limpiadas = [];
+  const api = baseApi({
+    resolveLocal: async () => ({ ok: true, cached: false, remoteDeleted: true, entry: { generation: '1', state: 'remote-deleted' } }),
+    download: async () => ({ ok: true, protocolUrl: 'dlvimg://L/K?v=g2' }),
+    clearRemoteDeleted: async (p) => { limpiadas.push(p); return { ok: true, cleared: true }; },
+  });
+  const ctrl = createArticleImageController({ api, placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'ok', meta: { generation: '2' } }), fetchFreshDownloadUrl: async () => null });
+  await ctrl.orchestrate('L', IDENTITY, { force: false, emit: () => {} });
+  assert.strictEqual(limpiadas.length, 1, 'se limpia la marca sin necesidad de guardar el artículo');
+  assert.strictEqual(limpiadas[0].objectPath, IDENTITY.objectPath);
+});
+await check('la marca se limpia AUNQUE la descarga falle', async () => {
+  const limpiadas = [];
+  const api = baseApi({
+    resolveLocal: async () => ({ ok: true, cached: false, remoteDeleted: true, entry: { state: 'remote-deleted' } }),
+    download: async () => ({ ok: false, code: 'NETWORK' }),
+    clearRemoteDeleted: async (p) => { limpiadas.push(p); return { ok: true, cleared: true }; },
+  });
+  const ctrl = createArticleImageController({ api, placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'ok', meta: { generation: '2' } }), fetchFreshDownloadUrl: async () => null });
+  await ctrl.orchestrate('L', IDENTITY, { force: false, emit: () => {} });
+  assert.strictEqual(limpiadas.length, 1, 'la reparación no depende de que la descarga salga bien');
+});
+await check('una eliminación REAL sigue marcándose y mostrando placeholder', async () => {
+  const marcadas = []; const limpiadas = [];
+  const api = baseApi({
+    resolveLocal: async () => ({ ok: true, cached: false, entry: null }),
+    markRemoteDeleted: async (p) => { marcadas.push(p); return { ok: true }; },
+    clearRemoteDeleted: async (p) => { limpiadas.push(p); return { ok: true }; },
+  });
+  const emitted = [];
+  const ctrl = createArticleImageController({ api, placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'deleted' }), fetchFreshDownloadUrl: async () => null });
+  await ctrl.orchestrate('L', IDENTITY, { force: true, emit: (s) => emitted.push(s) });
+  assert.strictEqual(marcadas.length, 1, 'un 404 confirmado sí marca');
+  assert.strictEqual(limpiadas.length, 0, 'y no se limpia');
+  assert.ok(emitted.includes(PLACEHOLDER), 'ahí sí corresponde el placeholder');
+});
+await check('sin clearRemoteDeleted en el preload, no rompe', async () => {
+  const api = baseApi({
+    resolveLocal: async () => ({ ok: true, cached: false, remoteDeleted: true, entry: { state: 'remote-deleted' } }),
+    download: async () => ({ ok: true, protocolUrl: 'dlvimg://L/K?v=g2' }),
+  });
+  delete api.clearRemoteDeleted;
+  const ctrl = createArticleImageController({ api, placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'ok', meta: { generation: '2' } }), fetchFreshDownloadUrl: async () => null });
+  await assert.doesNotReject(() => ctrl.orchestrate('L', IDENTITY, { force: false, emit: () => {} }));
+});
+
+console.log('\nimmediateSrc: el placeholder no tapa una URL remota usable:');
+await check('con placeholder cacheado pero URL remota disponible, gana la remota', () => {
+  const ctrl = createArticleImageController({ api: baseApi({}), placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'keep' }), fetchFreshDownloadUrl: async () => null });
+  ctrl.resultCache.set(`L::${IDENTITY.bucket}::${IDENTITY.objectPath}`, { src: PLACEHOLDER, deleted: false });
+  assert.strictEqual(ctrl.immediateSrc('L', IDENTITY), IDENTITY.url);
+});
+await check('una eliminación confirmada sí muestra placeholder', () => {
+  const ctrl = createArticleImageController({ api: baseApi({}), placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'keep' }), fetchFreshDownloadUrl: async () => null });
+  ctrl.resultCache.set(`L::${IDENTITY.bucket}::${IDENTITY.objectPath}`, { src: PLACEHOLDER, deleted: true });
+  assert.strictEqual(ctrl.immediateSrc('L', IDENTITY), PLACEHOLDER);
+});
+await check('la copia local sigue teniendo prioridad', () => {
+  const ctrl = createArticleImageController({ api: baseApi({}), placeholderSrc: PLACEHOLDER, fetchRemoteMetadata: async () => ({ status: 'keep' }), fetchFreshDownloadUrl: async () => null });
+  ctrl.resultCache.set(`L::${IDENTITY.bucket}::${IDENTITY.objectPath}`, { src: 'dlvimg://L/K?v=g1' });
+  assert.strictEqual(ctrl.immediateSrc('L', IDENTITY), 'dlvimg://L/K?v=g1');
 });
 
 console.log('\ndecideSweep (catálogo completo vacío permitido):');
