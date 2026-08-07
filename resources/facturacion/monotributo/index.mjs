@@ -6,6 +6,17 @@ import admin from 'firebase-admin';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import { execSync } from 'child_process';
+// Módulo compartido con el motor de Responsable Inscripto. syncFacturacionEngine
+// lo copia AL LADO de este index.mjs, así el import es el mismo en las dos
+// cuentas (que cuelgan a profundidades distintas del árbol de facturación).
+import {
+  CLAIM_TTL_MS,
+  reductorDeClaim,
+  gano,
+  marcaDeIntento,
+  decidirEmision,
+  sinDatosOperativos,
+} from './claimPedido.mjs';
 
 dotenv.config();
 
@@ -47,22 +58,29 @@ console.log('✅ Firebase inicializado. DB:', admin.app().options.databaseURL);
 // ---------------------------------------------------------------------------
 // ANTI DOBLE-FACTURACIÓN — SIN LOCKS EN FIREBASE
 //
-// El facturador corre en UNA sola PC, con UNA sola instancia por cuenta fiscal
-// y UN solo listener. Con esa garantía no hace falta un bloqueo distribuido, y
-// el sistema de `{COLA}_LOCKS` quedó eliminado por completo: ya no se crea, ni
-// se consulta, ni se renueva, ni se vence, ni se borra ninguna rama de locks.
+// AHORA PUEDE HABER VARIAS PCs FACTURANDO. Ya no existe "PC dueña": toda PC
+// arranca el motor salvo que alguien apague el switch en esa computadora. Lo
+// normal sigue siendo una sola PC, pero el motor no puede asumirlo.
 //
-// La protección contra duplicados queda apoyada en cuatro cosas simples:
+// La rama `{COLA}_LOCKS` sigue ELIMINADA: no se crea, no se consulta, no se
+// renueva, no se vence y no se borra. Lo que hay es un claim DENTRO del propio
+// pedido, que se va con él cuando se emite la factura.
+//
+// La protección contra duplicados se apoya en cinco cosas, de adentro hacia
+// afuera:
 //
 //   1. UN SOLO LISTENER y una COLA SECUENCIAL (`queue` + `processing`): nunca se
-//      procesan dos pedidos a la vez.
+//      procesan dos pedidos a la vez dentro de este proceso.
 //   2. `pedidosEnProceso` / `pedidosYaFacturados` — memoria del proceso: si
 //      Firebase repite un evento `child_added` (reconexión, resync), se ignora.
-//   3. El pedido SIGUE EN LA COLA como condición para facturarlo: al emitir se
+//   3. CLAIM ATÓMICO POR PEDIDO (`transaction` sobre el nodo del pedido): es lo
+//      único que funciona ENTRE PCs distintas. Dos PCs que ven el mismo pedido
+//      compiten por el claim y solo una lo gana.
+//   4. El pedido SIGUE EN LA COLA como condición para facturarlo: al emitir se
 //      borra de `FACTURACION_N`, así que un reinicio no lo vuelve a ver.
-//   4. Antes de emitir se revisa el HISTORIAL. Cubre el único hueco real que
-//      queda: si el proceso muere entre "guardé la factura" y "borré el pedido
-//      de la cola", al reiniciar el pedido sigue encolado y se re-emitiría.
+//   5. Antes de emitir se revisa el HISTORIAL. Cubre el reinicio tras una caída
+//      entre "guardé la factura" y "borré el pedido", y la ventana del TTL del
+//      claim. Es la última barrera antes de pedir un CAE, que no se puede anular.
 // ---------------------------------------------------------------------------
 
 const MACHINE_ID = process.env.MACHINE_ID || `unknown-${Date.now()}`;
@@ -206,6 +224,35 @@ async function getLastVoucher(auth) {
         (err2, result) => {
           if (err2) return reject(err2);
           resolve(result.FECompUltimoAutorizadoResult.CbteNro);
+        }
+      );
+    });
+  });
+}
+
+/**
+ * ¿ARCA ya tiene autorizado este número de comprobante?
+ *
+ * Es la ÚNICA fuente de verdad para el caso peligroso: una PC pidió el CAE, ARCA
+ * lo autorizó, y la PC murió antes de registrarlo. El historial local no sabe
+ * nada de esa factura, pero ARCA sí. Sin esta consulta, otra PC volvería a
+ * emitir y el pedido terminaría con DOS comprobantes.
+ *
+ * @returns {Promise<object|null>} el comprobante autorizado, o null si no existe.
+ */
+async function consultarComprobante(auth, nroCbte) {
+  const wsfeWsdl = 'https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL';
+  return new Promise((resolve, reject) => {
+    soap.createClient(wsfeWsdl, { wsdl_options: { agent: httpsAgent } }, (err, client) => {
+      if (err) return reject(err);
+      client.FECompConsultar(
+        { Auth: auth, FeCompConsReq: { CbteTipo: 11, CbteNro: nroCbte, PtoVta: PTO_VTA } },
+        (err2, result) => {
+          if (err2) return reject(err2);
+          const det = result?.FECompConsultarResult?.ResultGet;
+          // Si el comprobante no existe, ARCA responde con Errors (602) y sin
+          // ResultGet. Solo se considera emitido si trae código de autorización.
+          resolve(det && det.CodAutorizacion ? det : null);
         }
       );
     });
@@ -409,7 +456,9 @@ const toNumber = (v) => {
 };
 
 function normalizarPedido(raw) {
-  const p = { ...raw };
+  // `claim` es un dato operativo del reparto de trabajo entre PCs, no del
+  // comprobante. Se saca acá para que no viaje al registro fiscal por el spread.
+  const p = sinDatosOperativos(raw);
   p.CLIENTE   = firstNonEmpty(p.CLIENTE, p.cliente, p.Clientes, p.clientes) || 'Consumidor Final';
   p.DIRECCION = firstNonEmpty(p.DIRECCION, p.direccion) || null;
 
@@ -510,11 +559,33 @@ async function procesarSnapshot(snapshot) {
     return;
   }
 
-  const datosCrudos = snapshot.val() || {};
+  // ── CLAIM ATÓMICO POR PEDIDO ──────────────────────────────────────────────
+  //
+  // Todas las protecciones de arriba son de ESTE proceso: no sirven si hay dos
+  // PCs encendidas escuchando la misma cola. Acá se resuelve entre PCs.
+  //
+  // Es una transacción sobre el PROPIO pedido — no una rama de locks: el claim
+  // viaja dentro del nodo, desaparece con él cuando se emite la factura, y no
+  // necesita árbol paralelo, ni renovación, ni barrido de vencidos.
+  //
+  // Si otra PC ya lo tomó hace menos de CLAIM_TTL, este proceso lo suelta. El
+  // TTL existe para que un pedido no quede trabado para siempre si la PC que lo
+  // tomó se apagó a mitad; el hueco que abre lo cierra la revisión del historial
+  // que va JUSTO DESPUÉS de ganar el claim.
+  const claim = await snapshot.ref.transaction(reductorDeClaim(MACHINE_ID));
+
+  if (!gano(claim, MACHINE_ID)) {
+    console.log(`⏭️ Pedido ${pedidoId}: lo está facturando otra PC. No se procesa acá.`);
+    return;
+  }
+
+  const datosCrudos = claim.snapshot.val() || {};
 
   // HISTORIAL: cubre el reinicio tras una caída entre "guardé la factura" y
-  // "borré el pedido de la cola". Si ya existe el comprobante, NO se re-emite:
-  // se limpia la cola y listo.
+  // "borré el pedido de la cola", y también la ventana del TTL del claim. Si ya
+  // existe el comprobante, NO se re-emite: se limpia la cola y listo. Va DESPUÉS
+  // del claim a propósito — es la última barrera antes de pedir un CAE, que no
+  // se puede anular.
   const yaFacturado = await yaEstaEnHistorial(pedidoId, datosCrudos.idempotencyKey);
   if (yaFacturado) {
     console.warn(`[FACTURACION] ${pedidoId} YA estaba en el historial como ${yaFacturado}. No se re-emite; se quita de la cola.`);
@@ -542,10 +613,50 @@ async function procesarSnapshot(snapshot) {
     console.log(`[FACTURACION] Iniciando emisión: ${pedidoId} — cola ${COLA} — CUIT ${CUIT} — PC ${MACHINE_ID}`);
     const { token, sign } = await getTA();
     const auth            = { Token: token, Sign: sign, Cuit: CUIT };
-    const lastVoucher     = await getLastVoucher(auth);
-    const nroCbte         = lastVoucher + 1;
-    const det             = await emitirFacturaC(auth, pedido.TOTAL, nroCbte);
-    console.log('✅ Factura C emitida. CAE:', det.CAE);
+
+    let nroCbte;
+    let det;
+
+    // ── RECONCILIACIÓN CONTRA ARCA ────────────────────────────────────────
+    //
+    // El caso que el historial NO cubre: otra PC ganó el claim, le pidió a ARCA
+    // el comprobante N, ARCA lo AUTORIZÓ, y esa PC se cerró antes de guardar el
+    // historial. Vencido el TTL, esta PC toma el pedido. El historial está
+    // vacío, así que sin esto se emitiría un SEGUNDO comprobante para la misma
+    // venta — y un CAE no se puede anular.
+    //
+    // Por eso, antes de pedir un CAE nuevo se le pregunta a ARCA por el número
+    // que el intento anterior dejó anotado. Si ya está autorizado, no se emite
+    // nada: se sigue con ESE comprobante y el flujo de abajo genera su PDF y lo
+    // guarda en el historial como si lo hubiéramos emitido nosotros.
+    const intentoPrevio = claim.snapshot.val()?.claim?.intento || null;
+    const decision = decidirEmision({
+      claveEnHistorial: null,   // ya se revisó arriba; si estuviera, no se llega acá
+      intentoPrevio,
+      comprobanteEnArca: intentoPrevio?.nroCbte
+        ? await consultarComprobante(auth, intentoPrevio.nroCbte)
+        : null,
+    });
+    console.log(`[FACTURACION] ${pedidoId}: ${decision.motivo}`);
+
+    if (decision.accion === 'reconciliar') {
+      nroCbte = decision.nroCbte;
+      det = decision.cae;
+    } else {
+      const lastVoucher = await getLastVoucher(auth);
+      nroCbte = lastVoucher + 1;
+
+      // INTENCIÓN ANTES DEL CAE: se deja anotado qué número vamos a pedir. Si
+      // esta PC muere en el próximo segundo, la que retome el pedido sabe qué
+      // preguntarle a ARCA. Sin esta marca, la reconciliación de arriba no
+      // tendría por dónde empezar.
+      await snapshot.ref.child('claim/intento').set(
+        marcaDeIntento({ nroCbte, ptoVta: PTO_VTA, cbteTipo: 11, machineId: MACHINE_ID })
+      );
+
+      det = await emitirFacturaC(auth, pedido.TOTAL, nroCbte);
+      console.log('✅ Factura C emitida. CAE:', det.CAE);
+    }
 
     const nroCmpStr  = String(nroCbte).padStart(8, '0');
     const ptoVtaStr  = String(PTO_VTA).padStart(4, '0');

@@ -7,6 +7,15 @@ import moment from 'moment';
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import { execSync } from 'child_process';
+// Mismo módulo compartido que usa Monotributo. syncFacturacionEngine lo copia AL
+// LADO de este index.mjs, así el import es idéntico en las dos cuentas.
+import {
+  reductorDeClaim,
+  gano,
+  marcaDeIntento,
+  decidirEmision,
+  sinDatosOperativos,
+} from './claimPedido.mjs';
 
 dotenv.config();
 
@@ -40,6 +49,68 @@ const EMISOR_IIBB = process.env.EMISOR_IIBB || '';
 
 /** CbteTipo de ARCA para Factura B. */
 const CBTE_TIPO = 6;
+
+// ---------------------------------------------------------------------------
+// VARIAS PCs PUEDEN ESTAR FACTURANDO
+//
+// Desde que toda PC arranca el motor por defecto, dos computadoras del mismo
+// local pueden escuchar esta cola. Las protecciones son las mismas que las de
+// Monotributo —claim atómico, intento antes del CAE, consulta a ARCA e
+// historial— pero adaptadas a ESTE motor, que tiene otro tipo de comprobante
+// (Factura B, CbteTipo 6), otra numeración y habla con WSFE en modo Async.
+// ---------------------------------------------------------------------------
+
+const MACHINE_ID = process.env.MACHINE_ID || `unknown-${Date.now()}`;
+
+/** Pedidos que este proceso está facturando ahora mismo. */
+const pedidosEnProceso = new Set();
+/** Pedidos que este proceso ya facturó (ignora un `child_added` repetido). */
+const pedidosYaFacturados = new Set();
+
+// Ventana de historial que se revisa para detectar una re-emisión. Las claves
+// son FCB{ptoVta}-{nroCmp}, que ordenan por número de comprobante, así que
+// `limitToLast` devuelve los últimos emitidos.
+const VENTANA_HISTORIAL = 200;
+
+/**
+ * ¿Este pedido ya fue facturado? Se compara por `pedidoOrigenId` (la clave con
+ * la que entró a la cola) y, si viene, por `idempotencyKey`. Nunca por importe
+ * ni por hora.
+ *
+ * OJO: `pedidoOrigenId` se empieza a grabar en esta versión, así que las
+ * facturas emitidas ANTES no se encuentran por este camino. Para esas sigue
+ * valiendo la barrera de que el pedido ya no está en la cola.
+ */
+async function yaEstaEnHistorial(pedidoId, idempotencyKey) {
+  const snap = await db.ref(process.env.FIREBASE_HISTORIAL)
+    .orderByKey()
+    .limitToLast(VENTANA_HISTORIAL)
+    .once('value');
+  const registros = snap.val() || {};
+  for (const [facturaKey, reg] of Object.entries(registros)) {
+    if (!reg || typeof reg !== 'object') continue;
+    if (reg.pedidoOrigenId === pedidoId) return facturaKey;
+    if (idempotencyKey && reg.idempotencyKey === idempotencyKey) return facturaKey;
+  }
+  return null;
+}
+
+/**
+ * ¿ARCA ya tiene autorizado este número de comprobante?
+ *
+ * Es la única forma de cubrir el caso peligroso: una PC pidió el CAE, ARCA lo
+ * autorizó y la PC murió antes de registrarlo. El historial local no sabe nada
+ * de esa factura; ARCA sí. Reutiliza el cliente SOAP que ya abrió getLastVoucher.
+ */
+async function consultarComprobante(auth, client, nroCbte) {
+  const [r] = await client.FECompConsultarAsync({
+    Auth: auth,
+    FeCompConsReq: { CbteTipo: CBTE_TIPO, CbteNro: nroCbte, PtoVta: PTO_VTA },
+  });
+  const det = r?.FECompConsultarResult?.ResultGet;
+  // Si no existe, ARCA responde con Errors (602) y sin ResultGet.
+  return det && det.CodAutorizacion ? det : null;
+}
 
 // ESTA cola y ESTE local salen del propio FIREBASE_PATH ({localId}/FACTURACION_N).
 // Se graban en la factura para que quede escrito con qué cuenta fiscal se emitió.
@@ -259,8 +330,34 @@ async function processNext() {
    ======================= */
 
 async function procesarSnapshot(snapshot) {
-  const pedido = snapshot.val();
   const pedidoId = snapshot.key;
+
+  // Sigue en la cola? Si otra PC ya lo facturó y lo borró, no hay nada que hacer.
+  const still = await snapshot.ref.once('value');
+  if (!still.exists()) {
+    console.log(`⏭️ Pedido ${pedidoId} ya no existe (procesado por otra PC).`);
+    return;
+  }
+
+  // Memoria de ESTE proceso: un `child_added` repetido no vuelve a facturar.
+  if (pedidosEnProceso.has(pedidoId) || pedidosYaFacturados.has(pedidoId)) {
+    console.log(`[FACTURACION] Omitido ${pedidoId}: ya procesado o en proceso.`);
+    return;
+  }
+
+  // ── CLAIM ATÓMICO ────────────────────────────────────────────────────────
+  // Lo único que funciona ENTRE PCs. El claim va DENTRO del pedido y se va con
+  // él al emitir: no hay rama de locks.
+  const claim = await snapshot.ref.transaction(reductorDeClaim(MACHINE_ID));
+  if (!gano(claim, MACHINE_ID)) {
+    console.log(`⏭️ Pedido ${pedidoId}: lo está facturando otra PC. No se procesa acá.`);
+    return;
+  }
+
+  const crudo = claim.snapshot.val() || {};
+  // `claim` es reparto de trabajo, no dato fiscal: fuera antes de que el spread
+  // del historial lo arrastre al comprobante.
+  const pedido = sinDatosOperativos(crudo);
 
   const cliente = pedido.CLIENTE || pedido.clientes || "Consumidor Final";
   const total = pedido.TOTAL || pedido.total || 0;
@@ -268,18 +365,59 @@ async function procesarSnapshot(snapshot) {
   const renglones = normalizarRenglones(productos);
 
   if (!total || !productos) {
-    console.log(`❌ Pedido ${pedidoId} incompleto, se omite.`);
+    console.error(`[FACTURACION] ERROR — pedido incompleto, no se factura`, {
+      pedidoId, rutaFirebase: `${process.env.FIREBASE_PATH}/${pedidoId}`,
+      cola: COLA, cuentaFiscal: EMISOR_RAZON_SOCIAL || String(CUIT),
+    });
     return;
   }
 
+  // HISTORIAL: cubre el reinicio tras una caída entre "guardé la factura" y
+  // "borré el pedido de la cola".
+  const yaFacturado = await yaEstaEnHistorial(pedidoId, crudo.idempotencyKey);
+  if (yaFacturado) {
+    console.warn(`[FACTURACION] ${pedidoId} YA estaba en el historial como ${yaFacturado}. No se re-emite; se quita de la cola.`);
+    pedidosYaFacturados.add(pedidoId);
+    await snapshot.ref.remove();
+    return;
+  }
+
+  pedidosEnProceso.add(pedidoId);
   try {
     const { token, sign } = await getTA();
     const auth = { Token: token, Sign: sign, Cuit: CUIT };
     const { client, lastVoucher } = await getLastVoucher(auth);
-    const nroCbte = lastVoucher + 1;
-    const nroFactura = `${PTO_VTA.toString().padStart(4, '0')}-${nroCbte.toString().padStart(8, '0')}`;
-    const caeData = await solicitarCAE(auth, client, pedido, nroCbte);
 
+    // ── RECONCILIACIÓN CONTRA ARCA ──────────────────────────────────────
+    // Si un intento anterior ya pidió un número, hay que preguntarle a ARCA
+    // ANTES de pedir otro: pudo haberse autorizado y no haber quedado
+    // registrado. Un CAE no se puede anular.
+    const intentoPrevio = crudo.claim?.intento || null;
+    const decision = decidirEmision({
+      claveEnHistorial: null,      // ya se revisó arriba
+      intentoPrevio,
+      comprobanteEnArca: intentoPrevio?.nroCbte
+        ? await consultarComprobante(auth, client, intentoPrevio.nroCbte)
+        : null,
+    });
+    console.log(`[FACTURACION] ${pedidoId}: ${decision.motivo}`);
+
+    let nroCbte;
+    let caeData;
+    if (decision.accion === 'reconciliar') {
+      nroCbte = decision.nroCbte;
+      caeData = decision.cae;
+    } else {
+      nroCbte = lastVoucher + 1;
+      // INTENCIÓN ANTES DEL CAE: si esta PC muere en el próximo segundo, la que
+      // retome sabe qué número preguntarle a ARCA.
+      await snapshot.ref.child('claim/intento').set(
+        marcaDeIntento({ nroCbte, ptoVta: PTO_VTA, cbteTipo: CBTE_TIPO, machineId: MACHINE_ID })
+      );
+      caeData = await solicitarCAE(auth, client, pedido, nroCbte);
+    }
+
+    const nroFactura = `${PTO_VTA.toString().padStart(4, '0')}-${nroCbte.toString().padStart(8, '0')}`;
     const fechaCbte = moment().format("DD/MM/YYYY");
     const { dataUrl: qrData, qrData: qrPayload, qrUrl: qrUrlArca } = await generarQR({
       cae: caeData.CAE,
@@ -289,12 +427,27 @@ async function procesarSnapshot(snapshot) {
       importe: Number(total),
     });
 
-    const buffers = [];
-    const doc = new PDFDocument({ size: [230, 600], margin: 10 });
-    doc.on('data', buffers.push.bind(buffers));
-    doc.on('end', async () => {
-      const pdfBase64 = Buffer.concat(buffers).toString('base64');
+    // PDF COMO PROMESA ESPERABLE.
+    //
+    // Antes el historial y el borrado del pedido vivían dentro de
+    // `doc.on('end', async () => {...})`, que `procesarSnapshot` NO esperaba: la
+    // función terminaba con el CAE ya obtenido y esas dos escrituras todavía
+    // pendientes. Si el proceso moría en ese hueco, el pedido quedaba en la cola
+    // con un comprobante ya autorizado en ARCA — exactamente el caso que después
+    // hay que reconciliar. Ahora el PDF se espera y las operaciones fiscales
+    // quedan en el flujo principal.
+    const pdfBase64 = await new Promise((resolve, reject) => {
+      const buffers = [];
+      const doc = new PDFDocument({ size: [230, 600], margin: 10 });
+      doc.on('data', (b) => buffers.push(b));
+      doc.on('error', reject);
+      doc.on('end', () => resolve(Buffer.concat(buffers).toString('base64')));
+      renderPDF(doc, {
+        pedido, cliente, total, renglones, nroFactura, fechaCbte, caeData, qrData,
+      });
+    });
 
+    {
       const neto = +(Number(total) / 1.21).toFixed(2);
       const ARTICULOS = {};
       renglones.forEach((r, i) => { ARTICULOS[String(i + 1)] = r; });
@@ -346,56 +499,76 @@ async function procesarSnapshot(snapshot) {
         CAE_VTO: caeData.CAEFchVto,
         qrData: qrPayload, qrUrl: qrUrlArca,
         PDF_BASE64: pdfBase64,
+
+        // Identidad del pedido de origen: es lo que permite detectar una
+        // re-emisión sin comparar importes ni horarios.
+        pedidoOrigenId: pedidoId,
+        ...(crudo.idempotencyKey ? { idempotencyKey: crudo.idempotencyKey } : {}),
+        emitidaPor: MACHINE_ID,
       });
+
+      // Recién con el historial YA escrito se saca el pedido de la cola. El
+      // orden importa: si se muriera en el medio, el pedido sigue encolado y la
+      // revisión de historial lo detecta sin volver a emitir.
       await snapshot.ref.remove();
+      pedidosYaFacturados.add(pedidoId);
       console.log(`✅ Factura FCB${nroFactura} emitida. CAE: ${caeData.CAE}`);
-    });
-
-    if (EMISOR_FANTASIA) doc.fontSize(14).text(EMISOR_FANTASIA, { align: 'center' });
-    doc.fontSize(10).text('Factura B', { align: 'center' });
-    doc.text(`Factura Nº: ${nroFactura}`, { align: 'center' });
-    doc.moveDown();
-
-    doc.fontSize(9);
-    if (EMISOR_RAZON_SOCIAL) doc.text(`Razón Social: ${EMISOR_RAZON_SOCIAL}`);
-    if (EMISOR_FANTASIA) doc.text(`Nombre Fantasía: ${EMISOR_FANTASIA}`);
-    if (EMISOR_CUIT_FORMAT) doc.text(`CUIT: ${EMISOR_CUIT_FORMAT}`);
-    doc.text(`IVA: ${EMISOR_COND_IVA}`);
-    if (EMISOR_IIBB) doc.text(`Ingresos Brutos: ${EMISOR_IIBB}`);
-    if (EMISOR_INICIO_ACTIVIDADES) doc.text(`Inicio actividades: ${EMISOR_INICIO_ACTIVIDADES}`);
-    if (EMISOR_DOMICILIO) doc.text(`Dirección: ${EMISOR_DOMICILIO}`);
-    doc.text(`Punto de venta: ${String(PTO_VTA).padStart(4, '0')}`);
-    doc.text(`Fecha: ${fechaCbte}`);
-    doc.moveDown();
-
-    doc.text(`Cliente: ${cliente}`);
-    if (pedido.DIRECCION) doc.text(`Dirección: ${pedido.DIRECCION}`);
-    doc.text('Cond. IVA receptor: Consumidor Final');
-    doc.moveDown();
-
-    doc.text('Detalle:');
-    if (renglones.length === 0) {
-      doc.text('(el pedido no trajo detalle de productos)');
-    } else {
-      for (const r of renglones) {
-        doc.text(`${r.cantidad} x ${r.nombre}`);
-        doc.text(`     ${money(r.precioUnitario)} c/u        ${money(r.precioTotal)}`);
-      }
     }
 
-    doc.moveDown();
-    const netoPdf = +(Number(total) / 1.21).toFixed(2);
-    doc.text(`Neto gravado: ${money(netoPdf)}`, { align: 'right' });
-    doc.text(`IVA 21%: ${money(Number(total) - netoPdf)}`, { align: 'right' });
-    doc.text(`TOTAL: ${money(total)}`, { align: 'right' });
-    doc.text(`CAE: ${caeData.CAE}`);
-    doc.text(`Vto CAE: ${caeData.CAEFchVto}`);
-    doc.image(qrData, doc.x, doc.y + 10, { width: 100 });
-    doc.end();
-
-  } catch (err) {
-    throw err;
+  } finally {
+    // Se libera siempre: si falló, el pedido tiene que poder reintentarse en
+    // esta misma PC sin esperar a que venza el claim.
+    pedidosEnProceso.delete(pedidoId);
   }
+}
+
+/**
+ * Dibuja el comprobante. Separado de `procesarSnapshot` para que la generación
+ * del PDF pueda esperarse como una promesa y las escrituras fiscales queden en
+ * el flujo principal, no en un callback suelto.
+ */
+function renderPDF(doc, { pedido, cliente, total, renglones, nroFactura, fechaCbte, caeData, qrData }) {
+  if (EMISOR_FANTASIA) doc.fontSize(14).text(EMISOR_FANTASIA, { align: 'center' });
+  doc.fontSize(10).text('Factura B', { align: 'center' });
+  doc.text(`Factura Nº: ${nroFactura}`, { align: 'center' });
+  doc.moveDown();
+
+  doc.fontSize(9);
+  if (EMISOR_RAZON_SOCIAL) doc.text(`Razón Social: ${EMISOR_RAZON_SOCIAL}`);
+  if (EMISOR_FANTASIA) doc.text(`Nombre Fantasía: ${EMISOR_FANTASIA}`);
+  if (EMISOR_CUIT_FORMAT) doc.text(`CUIT: ${EMISOR_CUIT_FORMAT}`);
+  doc.text(`IVA: ${EMISOR_COND_IVA}`);
+  if (EMISOR_IIBB) doc.text(`Ingresos Brutos: ${EMISOR_IIBB}`);
+  if (EMISOR_INICIO_ACTIVIDADES) doc.text(`Inicio actividades: ${EMISOR_INICIO_ACTIVIDADES}`);
+  if (EMISOR_DOMICILIO) doc.text(`Dirección: ${EMISOR_DOMICILIO}`);
+  doc.text(`Punto de venta: ${String(PTO_VTA).padStart(4, '0')}`);
+  doc.text(`Fecha: ${fechaCbte}`);
+  doc.moveDown();
+
+  doc.text(`Cliente: ${cliente}`);
+  if (pedido.DIRECCION) doc.text(`Dirección: ${pedido.DIRECCION}`);
+  doc.text('Cond. IVA receptor: Consumidor Final');
+  doc.moveDown();
+
+  doc.text('Detalle:');
+  if (renglones.length === 0) {
+    doc.text('(el pedido no trajo detalle de productos)');
+  } else {
+    for (const r of renglones) {
+      doc.text(`${r.cantidad} x ${r.nombre}`);
+      doc.text(`     ${money(r.precioUnitario)} c/u        ${money(r.precioTotal)}`);
+    }
+  }
+
+  doc.moveDown();
+  const netoPdf = +(Number(total) / 1.21).toFixed(2);
+  doc.text(`Neto gravado: ${money(netoPdf)}`, { align: 'right' });
+  doc.text(`IVA 21%: ${money(Number(total) - netoPdf)}`, { align: 'right' });
+  doc.text(`TOTAL: ${money(total)}`, { align: 'right' });
+  doc.text(`CAE: ${caeData.CAE}`);
+  doc.text(`Vto CAE: ${caeData.CAEFchVto}`);
+  doc.image(qrData, doc.x, doc.y + 10, { width: 100 });
+  doc.end();
 }
 
 /* =======================

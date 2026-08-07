@@ -9,11 +9,18 @@ const path = require('path');
 const os = require('os');
 const { randomUUID, createHash } = require('crypto');
 const { spawn, execSync } = require('child_process');
-const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync } = require('fs');
+const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, renameSync } = require('fs');
 const https = require('https');
 const http  = require('http');
 const { resolveRequestTransport, normalizeFirebaseDatabaseURL, classifyTransportError } = require('./lib/firebaseHttpTransport');
 const { createImageCacheService, assertRedirectAllowed, DEFAULT_ALLOWED_DOWNLOAD_HOSTS, validateDownloadUrl: validateImageDownloadUrl } = require('./lib/imageCacheService');
+// Política de arranque de la facturación automática (módulo puro, con pruebas).
+const {
+  BILLING_AUTOSTART_POLICY_VERSION,
+  migrarPoliticaAutoStart: migrarPolitica,
+  facturacionHabilitada,
+  colaDesdeFirebasePath,
+} = require('./lib/decidirArranqueFacturacion');
 
 const isDev = !app.isPackaged;
 
@@ -381,20 +388,78 @@ function getMonoDir(cuentaId, localId = getActiveLocalId()) {
 // desde el template empaquetado en la app. NUNCA toca .env, certificados,
 // serviceAccount ni configuración del local. Sirve para que las correcciones del
 // motor (p. ej. el armado del QR ARCA) lleguen a instalaciones existentes al actualizar.
-function syncFacturacionEngine(accountDir, tipo) {
+// Módulos compartidos que el motor importa con ruta relativa PROPIA
+// (`./claimPedido.mjs`). Van copiados AL LADO del index.mjs de cada cuenta.
+//
+// Por qué al lado y no una sola copia en FACTURACION_USER_DIR(): las cuentas
+// cuelgan a PROFUNDIDADES distintas —`locales/{id}/ri/` y
+// `locales/{id}/mono/{cuentaId}/`—, así que una copia compartida obligaría a dos
+// rutas relativas distintas según el tipo de cuenta, que es justo lo contrario a
+// un import estable. (Con `node_modules` no pasa porque Node lo busca subiendo
+// solo; para un archivo suelto ese mecanismo no existe.) Copiarlo junto al motor
+// da el MISMO import en los dos, y se actualiza en cada sync igual que index.mjs.
+const MODULOS_COMPARTIDOS_MOTOR = ['claimPedido.mjs'];
+
+/**
+ * Copia un archivo de forma segura: primero a un temporal en el MISMO directorio
+ * y recién después el rename, que en el mismo volumen es atómico. Así el motor
+ * nunca ve un archivo a medio escribir si el proceso muere en el medio.
+ */
+function copiarAtomico(src, dest) {
+  const tmp = `${dest}.tmp-${process.pid}`;
+  copyFileSync(src, tmp);
   try {
-    if (!existsSync(accountDir)) return;
+    renameSync(tmp, dest);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* ya no está */ }
+    throw e;
+  }
+}
+
+/**
+ * Deja el motor de una cuenta al día: `index.mjs` + los módulos compartidos que
+ * importa.
+ *
+ * @returns {{ ok: boolean, faltantes: string[], error?: string }}
+ *   ok:false → el runtime quedó INCOMPLETO y NO hay que arrancar el motor. Una
+ *   PC facturando con media copia del motor es peor que una PC que no factura.
+ */
+function syncFacturacionEngine(accountDir, tipo) {
+  const faltantes = [];
+  try {
+    if (!existsSync(accountDir)) return { ok: false, faltantes: ['(el directorio de la cuenta no existe)'] };
+
+    const templatesDir = getTemplatesDir();
     const templateDir = path.join(
-      getTemplatesDir(),
+      templatesDir,
       tipo === 'responsable_inscripto' ? 'responsable-inscripto' : 'monotributo'
     );
+
     const srcIndex = path.join(templateDir, 'index.mjs');
-    if (existsSync(srcIndex)) {
-      copyFileSync(srcIndex, path.join(accountDir, 'index.mjs'));
-      console.log(`[AFIP ENGINE SYNC] index.mjs actualizado desde template en ${accountDir}`);
+    if (!existsSync(srcIndex)) {
+      faltantes.push('index.mjs');
+    } else {
+      copiarAtomico(srcIndex, path.join(accountDir, 'index.mjs'));
     }
+
+    // Los módulos compartidos viven en resources/facturacion/lib/ (y en
+    // facturacion-runtime/lib/ cuando el runtime se bajó como componente).
+    for (const nombre of MODULOS_COMPARTIDOS_MOTOR) {
+      const src = path.join(templatesDir, 'lib', nombre);
+      if (!existsSync(src)) { faltantes.push(`lib/${nombre}`); continue; }
+      copiarAtomico(src, path.join(accountDir, nombre));
+    }
+
+    if (faltantes.length > 0) {
+      console.error(`❌ [AFIP ENGINE SYNC] runtime INCOMPLETO en ${accountDir}: faltan [${faltantes.join(', ')}]. NO se inicia el motor.`);
+      return { ok: false, faltantes };
+    }
+
+    console.log(`[AFIP ENGINE SYNC] motor + módulos compartidos actualizados en ${accountDir}`);
+    return { ok: true, faltantes: [] };
   } catch (e) {
-    console.error('[AFIP ENGINE SYNC] error:', e.message);
+    console.error(`❌ [AFIP ENGINE SYNC] error sincronizando ${accountDir}: ${e.message}. NO se inicia el motor.`);
+    return { ok: false, faltantes, error: e.message };
   }
 }
 
@@ -641,27 +706,38 @@ async function fetchFacturacionOwnerRemote(firebaseDb, cuit, ptoVta, localId) {
   return nuevo;
 }
 
-// Valida TODO lo necesario antes de decidir si esta PC debe arrancar el motor de
-// facturación para una cuenta:
-//   1. `activo` local (Inicio automático de facturación) — decisión de esta PC,
-//      nunca sincronizada vía Firebase (ver afipConfigApi.js / enforceLocalActivo).
-//   2. Cuenta inicializada, .env / certs / serviceAccount / motor presentes.
-//   3. Ownership REAL confirmado contra Firebase (FACTURACION_OWNERS) — cierra el
-//      caso borde de una PC que perdió la posesión mientras estaba apagada/offline
-//      y todavía tiene `activo:true` en su archivo local desactualizado.
-// Si algo falla, no se escucha Firebase, no se pide CAE, no se emite nada, no se
-// mueve nada a historial.
+// TODA PC FACTURA POR DEFECTO.
+//
+// Antes esta función exigía `activo === true`, un flag que nacía en `false` y
+// que sólo se encendía entrando a Configuración y apretando "Iniciar". Por eso
+// una PC recién instalada —o una que nadie tocó nunca— no facturaba aunque
+// tuviera todo lo necesario. Ahora la decisión es al revés:
+//
+//     facturacionAutomatica !== false   →   ARRANCA
+//
+// Es decir, se arranca salvo que alguien haya APAGADO el switch a propósito en
+// ESTA PC. Ese OFF es lo único que frena el motor, vive sólo en el archivo local
+// (nunca se sincroniza por Firebase) y se respeta en todos los arranques
+// siguientes: no se vuelve a encender solo.
+//
+// Lo que sí se sigue exigiendo son los REQUISITOS REALES: .env, certificado,
+// clave, serviceAccount y motor presentes. Sin eso no se escucha Firebase, no se
+// pide CAE y no se emite nada — pero se informa exactamente qué falta y las
+// demás cuentas del local siguen su camino.
+//
+// `initialized` dejó de ser una condición: era otro flag de configuración que en
+// las PCs viejas quedaba en false aunque los archivos estuvieran completos. Los
+// archivos son la verdad; el flag sólo se informa.
+//
+// Tampoco se consulta "PC dueña": ese concepto se eliminó. Que dos PCs no
+// facturen el mismo pedido lo garantiza el claim atómico POR PEDIDO del motor.
 async function evaluateAutoStart(key, dir, fields, label) {
-  const initialized = !!fields.initialized;
-  const activo = !!fields.activo;
-
-  if (!activo) {
-    console.log(`Facturación automática desactivada para esta PC/cuenta. No se inicia el motor. (${label})`);
-    return { start: false };
+  if (!facturacionHabilitada(fields)) {
+    console.log(`[Facturación automática] ${label}: DETENIDA MANUALMENTE en esta PC (switch en OFF). No se inicia el motor.`);
+    return { start: false, detenidaManualmente: true };
   }
-  if (!initialized) {
-    console.log(`[AFIP AUTOSTART] ${label}: activo=true pero cuenta no inicializada — no se inicia el motor.`);
-    return { start: false };
+  if (!fields.initialized) {
+    console.log(`[Facturación automática] ${label}: la cuenta figura como no inicializada; se valida por los archivos reales.`);
   }
 
   const envPath  = path.join(dir, '.env');
@@ -687,38 +763,57 @@ async function evaluateAutoStart(key, dir, fields, label) {
 
   const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([k]) => k);
   if (missing.length > 0) {
-    console.log(`[AFIP AUTOSTART] ${label}: activo=true pero faltan requisitos [${missing.join(', ')}] — no se inicia el motor. El renderer intentará reconstruir automáticamente.`);
-    return { start: false };
+    // No rompe nada ni frena a las demás cuentas: se informa qué falta y esta
+    // cola queda sin iniciar. El renderer intentará reconstruirla.
+    console.log(`⚠️ [Facturación automática] ${label}: no iniciada, falta configuración fiscal [${missing.join(', ')}].`);
+    return { start: false, missing };
   }
 
   if (facturacionProcs[key]?.status === 'running') {
-    console.log(`[AFIP AUTOSTART] ${label}: ya hay un proceso corriendo para esta cuenta (key=${key}) — no se inicia otro.`);
-    return { start: false };
+    console.log(`ℹ️ [Facturación automática] ${label}: ya tiene un proceso activo (key=${key}). No se duplica.`);
+    return { start: false, yaCorriendo: true };
   }
 
-  // Verificación remota de ownership — la autoridad final. El nodo cuelga del
-  // número de local, que se deriva del primer segmento de FIREBASE_PATH.
+  // NO se consulta "PC dueña": ese concepto quedó eliminado a propósito. Antes
+  // acá se preguntaba a Firebase quién era el dueño y una PC que no lo fuera no
+  // arrancaba nunca — es lo que hacía falta desactivar para que toda PC facture.
+  // La protección contra doble emisión ya no vive en "qué PC arranca" sino en el
+  // claim atómico por pedido que hace el motor antes de pedir el CAE.
   const localIdCuenta = localIdDesdeFirebasePath(envVars.FIREBASE_PATH);
-  if (!localIdCuenta) {
-    console.log(`[AFIP AUTOSTART] ${label}: no se pudo determinar el número de local desde FIREBASE_PATH ("${envVars.FIREBASE_PATH || ''}") — por seguridad, no se inicia el motor.`);
-    return { start: false };
-  }
-  console.log(`[Facturación AutoStart] Consultando ownership (local=${localIdCuenta})`);
-  const { ok: ownerCheckOk, owner, code: ownerCheckCode } = await fetchFacturacionOwnerRemote(envVars.FIREBASE_DB, envVars.CUIT, envVars.PTO_VTA, localIdCuenta);
-  if (!ownerCheckOk) {
-    console.log(`[AFIP AUTOSTART] ${label}: no se pudo confirmar el dueño de facturación en Firebase (código=${ownerCheckCode || 'ERROR_DE_RED'}) — por seguridad, no se inicia el motor.`);
-    return { start: false };
-  }
-  if (!owner || owner.machineId !== MACHINE_ID) {
-    console.log(`[AFIP AUTOSTART] ${label}: OWNER_NO_COINCIDE — Esta PC ya no es la autorizada para facturar. Se detiene facturación automática.`);
-    return { start: false, ownershipMismatch: true };
-  }
-  console.log(`[Facturación AutoStart] Ownership confirmado (machineId=${MACHINE_ID})`);
+  console.log(`[Facturación automática] ${label}: habilitada (local=${localIdCuenta || '?'}, machineId=${MACHINE_ID}).`);
 
   return { start: true };
 }
 
+/**
+ * Migración de una sola vez a la política 2. La regla vive en
+ * `decidirArranqueFacturacion.js` (módulo puro, con pruebas); acá sólo se logea.
+ * @returns {boolean} true si hubo cambios para persistir.
+ */
+function migrarPoliticaAutoStart(config, localId) {
+  const { migrado, cuentasTocadas } = migrarPolitica(config);
+  if (migrado) {
+    console.log(
+      `[Facturación automática] Migración a política v${BILLING_AUTOSTART_POLICY_VERSION} (local ${localId}): ` +
+      `${cuentasTocadas} cuenta(s) quedan con facturación automática habilitada. ` +
+      'Los `activo:false` viejos no se interpretan como una decisión del usuario.'
+    );
+  }
+  return migrado;
+}
+
+/** Nombre de la cola de una cuenta, leído de su propio `.env`. */
+function colaDeCuenta(dir) {
+  try {
+    const env = parseEnvFile(path.join(dir, '.env'));
+    return colaDesdeFirebasePath(env.FIREBASE_PATH) || '(cola desconocida)';
+  } catch {
+    return '(cola desconocida)';
+  }
+}
+
 async function autoStartFacturacion() {
+  const iniciadas = [];
   try {
     const localId = getActiveLocalId();
     if (!localId) {
@@ -731,24 +826,27 @@ async function autoStartFacturacion() {
       return;
     }
     const config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
-    console.log(`[AFIP AUTOSTART] config loaded local=${localId} tipo=${config.tipo}`);
-    let dirty = false;
+    console.log('[Facturación automática] Verificando configuración...');
+    console.log(`[Facturación automática] Local: ${localId} (tipo=${config.tipo})`);
+    let dirty = migrarPoliticaAutoStart(config, localId);
 
     if (config.tipo === 'responsable_inscripto') {
       const ri = config.ri || {};
       const riDir = getRIDir();
       const label = `${ri.nombre || 'Responsable Inscripto'} / CUIT ${ri.cuit || '?'} / Pto. Vta. ${ri.ptoVta || '?'}`;
-      const { start, ownershipMismatch } = await evaluateAutoStart('ri', riDir, ri, label);
+      const { start } = await evaluateAutoStart('ri', riDir, ri, label);
       if (start) {
-        console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
-        console.log('[Facturación AutoStart] Iniciando proceso');
-        syncFacturacionEngine(riDir, 'responsable_inscripto');
+        // Si el runtime quedó incompleto NO se arranca: media copia del motor
+        // factura peor que nada.
+        const sync = syncFacturacionEngine(riDir, 'responsable_inscripto');
+        if (!sync.ok) {
+          console.error(`⚠️ [Facturación automática] ${label}: no iniciada, el runtime fiscal quedó incompleto [${sync.faltantes.join(', ')}].`);
+          return;
+        }
         const ok = spawnFacturacionProc('ri', riDir);
-        console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
-      } else if (ownershipMismatch) {
-        config.ri = { ...ri, activo: false };
-        dirty = true;
-        stopFacturacionProc('ri');
+        const cola = colaDeCuenta(riDir);
+        console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
+        if (ok) iniciadas.push(cola);
       }
     } else if (config.tipo === 'monotributo') {
       const cuentas = config.monotributo?.cuentas || [];
@@ -756,30 +854,38 @@ async function autoStartFacturacion() {
         const key = `mono_${c.id}`;
         const dir = getMonoDir(c.id);
         const label = `${c.nombre || 'Monotributo'} / CUIT ${c.cuit || '?'} / Pto. Vta. ${c.ptoVta || '?'}`;
-        const { start, ownershipMismatch } = await evaluateAutoStart(key, dir, c, label);
+        const { start } = await evaluateAutoStart(key, dir, c, label);
         if (start) {
-          console.log(`Facturación automática activada. Iniciando motor para cuenta: ${label}.`);
-          console.log('[Facturación AutoStart] Iniciando proceso');
-          syncFacturacionEngine(dir, 'monotributo');
+          // Runtime incompleto → esta cuenta no arranca, pero las demás siguen.
+          const sync = syncFacturacionEngine(dir, 'monotributo');
+          if (!sync.ok) {
+            console.error(`⚠️ [Facturación automática] ${label}: no iniciada, el runtime fiscal quedó incompleto [${sync.faltantes.join(', ')}].`);
+            continue;
+          }
           const ok = spawnFacturacionProc(key, dir);
-          console.log(`[AFIP AUTOSTART] process started ok=${ok}`);
-        } else if (ownershipMismatch) {
-          c.activo = false;
-          dirty = true;
-          stopFacturacionProc(key);
+          const cola = colaDeCuenta(dir);
+          console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
+          if (ok) iniciadas.push(cola);
         }
       }
     }
 
-    // Persistir la corrección local si esta PC perdió ownership — evita repetir
-    // el chequeo remoto en cada reinicio con el mismo resultado "ya no soy dueña".
+    // Persistir la migración de política (una sola vez por PC y por local).
     if (dirty) {
       try { writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8'); } catch (e) {
-        console.error('[AFIP AUTOSTART] no se pudo persistir activo:false tras perder ownership:', e.message);
+        console.error('[Facturación automática] no se pudo persistir la política de arranque:', e.message);
       }
     }
   } catch (e) {
-    console.error('[AFIP AUTOSTART] process failed:', e.message);
+    console.error('[Facturación automática] falló el arranque:', e.message);
+  } finally {
+    // Resumen final: una línea que dice de un vistazo si esta PC quedó facturando.
+    const unicas = [...new Set(iniciadas)];
+    if (unicas.length > 0) {
+      console.log(`✅ Facturación automática activa — ${unicas.length} cola(s): ${unicas.join(', ')}`);
+    } else {
+      console.log('ℹ️ Facturación automática: ninguna cola iniciada en esta PC (ver los avisos de arriba).');
+    }
   }
 }
 
@@ -3102,6 +3208,27 @@ app.whenReady().then(() => {
   // El chequeo de actualizaciones ahora ocurre UNA sola vez antes del login,
   // a pedido del renderer vía IPC 'check-updates-now' (ver PreLoginUpdateCheck en App.jsx).
   // Se eliminó el setTimeout(checkForUpdates, 15000) para evitar un segundo aviso duplicado.
+  // ARRANQUE CON WINDOWS, POR DEFECTO.
+  //
+  // Antes dependía de que alguien encendiera "Auto Start" a mano, así que una PC
+  // recién instalada no se abría sola y por lo tanto tampoco facturaba. Ahora se
+  // habilita solo, una única vez: si después alguien lo apaga a propósito, queda
+  // apagado (se registra la marca y no se vuelve a forzar).
+  //
+  // OJO: esto es INDEPENDIENTE del switch de facturación. Apagar la facturación
+  // en una PC NO le saca el arranque con Windows: la app sigue sirviendo para
+  // vender, sólo queda detenido el motor fiscal.
+  try {
+    const marca = path.join(app.getPath('userData'), 'autostart-windows-aplicado.json');
+    if (!existsSync(marca)) {
+      app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });
+      writeFileSync(marca, JSON.stringify({ aplicadoAt: Date.now(), version: app.getVersion() }, null, 2), 'utf-8');
+      console.log('[Facturación automática] Arranque con Windows habilitado por defecto en esta PC.');
+    }
+  } catch (e) {
+    console.error('[Facturación automática] no se pudo configurar el arranque con Windows:', e.message);
+  }
+
   setTimeout(autoStartFacturacion, 8000);
 
   // Retry de arranque del backend MP + creación de mp-accounts.json si falta (por local)

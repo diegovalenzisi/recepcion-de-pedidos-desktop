@@ -18,6 +18,11 @@ import { useFacturacionOwnership } from '@/hooks/useFacturacionOwnership';
 import ColasFiscalesPanel from '@/components/settings/local/admin/ColasFiscalesPanel';
 import { normalizeFirebaseDatabaseURL } from '@/lib/utils/firebaseUrl';
 import {
+  facturacionActivaEnEstaPC,
+  aplicarSwitchFacturacion,
+  clavesDeProceso,
+} from '@/lib/api/switchFacturacion';
+import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
@@ -692,16 +697,35 @@ function enforceLocalActivo(candidateCfg, localSaved) {
   const localCuentaActivo = (id) =>
     localSaved?.monotributo?.cuentas?.find(c => c.id === id)?.activo ?? false;
 
+  // `facturacionAutomatica` va por el MISMO camino y por el mismo motivo: es la
+  // decisión de ESTA computadora. La diferencia con `activo` es el valor cuando
+  // falta: acá se deja `undefined` a propósito —no `false`— porque "el campo no
+  // existe" significa ON por defecto. Ponerle false reproduciría exactamente el
+  // problema que este cambio vino a arreglar.
+  const localRiAuto = localSaved?.ri?.facturacionAutomatica;
+  const localCuentaAuto = (id) =>
+    localSaved?.monotributo?.cuentas?.find(c => c.id === id)?.facturacionAutomatica;
+
+  const conAuto = (nodo, valor) => (
+    valor === undefined
+      ? (() => { const n = { ...nodo }; delete n.facturacionAutomatica; return n; })()
+      : { ...nodo, facturacionAutomatica: valor }
+  );
+
   const out = { ...candidateCfg };
-  if (out.ri) out.ri = { ...out.ri, activo: localRiActivo };
+  if (out.ri) out.ri = conAuto({ ...out.ri, activo: localRiActivo }, localRiAuto);
   if (out.monotributo?.cuentas) {
     out.monotributo = {
       ...out.monotributo,
-      cuentas: out.monotributo.cuentas.map(c => ({ ...c, activo: localCuentaActivo(c.id) })),
+      cuentas: out.monotributo.cuentas.map(c =>
+        conAuto({ ...c, activo: localCuentaActivo(c.id) }, localCuentaAuto(c.id))),
     };
   }
   return out;
 }
+
+// `facturacionActivaEnEstaPC`, `aplicarSwitchFacturacion` y `clavesDeProceso`
+// viven en switchFacturacion.js (módulo puro, con pruebas). Acá sólo se usan.
 
 // ---------------------------------------------------------------------------
 // FacturacionManager — componente principal
@@ -716,6 +740,7 @@ const FacturacionManager = () => {
   const [machineId, setMachineId]     = useState(null);
   const [firebaseConfig, setFirebaseConfig] = useState(null);
   const [syncing, setSyncing]         = useState(false);
+  const [aplicandoSwitch, setAplicandoSwitch] = useState(false);
   const { toast } = useToast();
   // Evitar doble-trigger de autostart en el mismo montaje
   const autoStartFiredRef = useRef(false);
@@ -957,6 +982,47 @@ const FacturacionManager = () => {
   // ---------------------------------------------------------------------------
   // Reconstruir local desde Firebase (descarga certs de Storage)
   // ---------------------------------------------------------------------------
+  /**
+   * El switch de facturación de ESTA PC.
+   *
+   * ON  → guarda el ON y arranca en el acto todos los motores válidos, sin
+   *       esperar a reiniciar la aplicación.
+   * OFF → guarda el OFF y detiene todos los motores de esta PC.
+   *
+   * Se persiste ANTES de tocar los procesos: si algo falla al arrancar, la
+   * decisión igual quedó guardada y se respeta en el próximo arranque.
+   */
+  const cambiarSwitchFacturacion = async (encendido) => {
+    setAplicandoSwitch(true);
+    try {
+      const f = fAPI();
+      const nuevo = aplicarSwitchFacturacion(config, encendido);
+      await f.writeConfig(nuevo);
+      setConfig(nuevo);
+
+      for (const key of clavesDeProceso(nuevo)) {
+        try {
+          if (encendido) {
+            if (statuses[key] === 'running') continue;   // no se duplica
+            await f.start(key, accountDirs[key]);
+            setStatuses((prev) => ({ ...prev, [key]: 'running' }));
+            console.log(`[Facturación] Switch ON → motor iniciado: ${key}`);
+          } else {
+            await f.stop(key);
+            setStatuses((prev) => ({ ...prev, [key]: 'stopped' }));
+            console.log(`[Facturación] Switch OFF → motor detenido: ${key}`);
+          }
+        } catch (e) {
+          console.error(`[Facturación] switch ${encendido ? 'ON' : 'OFF'} falló para ${key}:`, e.message);
+        }
+      }
+    } catch (e) {
+      console.error('[Facturación] no se pudo guardar el switch:', e.message);
+    } finally {
+      setAplicandoSwitch(false);
+    }
+  };
+
   const rebuildFromFirebase = async () => {
     if (!firebaseConfig) return;
     setSyncing(true);
@@ -1247,15 +1313,29 @@ const FacturacionManager = () => {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Switch
-            id="facturacion-autostart"
-            checked={config.autoStart}
-            onCheckedChange={(v) => setConfig(c => ({ ...c, autoStart: v }))}
-          />
-          <Label htmlFor="facturacion-autostart" className="text-sm cursor-pointer">
-            Iniciar automáticamente con la app
-          </Label>
+        {/* EL switch de facturación de ESTA PC.
+            Por defecto está en ON: toda computadora factura sin que nadie entre
+            acá. Apagarlo es la única forma de que esta PC deje de facturar, y esa
+            decisión queda guardada SOLO en este equipo (facturacionAutomatica
+            está en LOCAL_ONLY_FIELDS). No afecta el arranque con Windows: la app
+            sigue abriéndose para vender. */}
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="facturacion-autostart"
+              checked={facturacionActivaEnEstaPC(config)}
+              disabled={aplicandoSwitch}
+              onCheckedChange={cambiarSwitchFacturacion}
+            />
+            <Label htmlFor="facturacion-autostart" className="text-sm cursor-pointer">
+              Facturación automática en esta PC
+            </Label>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {facturacionActivaEnEstaPC(config)
+              ? 'ACTIVA — esta PC factura sola al abrir la aplicación.'
+              : 'DETENIDA MANUALMENTE — esta PC no factura. La app sigue funcionando para vender.'}
+          </span>
         </div>
       </div>
 

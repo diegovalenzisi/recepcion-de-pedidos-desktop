@@ -10,7 +10,12 @@ const AFIP_PATH = (localId) => `${localId}/CONFIGURACION/FACTURACION_AFIP`;
 // PC-local: si se sincronizara vía Firebase, cualquier otra PC que abra el mismo
 // local heredaría automáticamente el inicio automático y podría facturar el mismo
 // pedido dos veces. Nunca debe viajar a Firebase ni adoptarse desde Firebase.
-const LOCAL_ONLY_FIELDS = ['certFile', 'keyFile', 'serviceAccountFile', 'activo'];
+//
+// `facturacionAutomatica` es el switch NUEVO (toda PC factura salvo OFF expreso)
+// y va por el mismo camino, por el mismo motivo y con más razón: apagar la
+// facturación en UNA computadora no puede apagarla en las demás del local, ni
+// encenderla. Es una decisión de esa PC y de ninguna otra.
+const LOCAL_ONLY_FIELDS = ['certFile', 'keyFile', 'serviceAccountFile', 'activo', 'facturacionAutomatica'];
 
 function sanitize(fields) {
   const out = { ...fields };
