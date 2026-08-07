@@ -360,11 +360,46 @@ function maybeMigrateMpToLocal(localId) {
   }
 }
 
+/**
+ * De dónde salen el motor y sus módulos compartidos.
+ *
+ * Un candidato sirve solo si está COMPLETO: los dos motores Y los módulos
+ * compartidos. Antes alcanzaba con que existiera `responsable-inscripto/index.mjs`,
+ * así que un runtime viejo sin `lib/` se daba por bueno y las cuentas quedaban
+ * sin `claimPedido.mjs` — exactamente el error de la 1.3.85. La ruta elegida se
+ * logea siempre: sin eso no había forma de saber de dónde salió el index.
+ */
+const MODULOS_COMPARTIDOS_MOTOR = ['claimPedido.mjs'];
+
 function getTemplatesDir() {
-  if (isDev) return path.join(__dirname, '..', 'resources', 'facturacion');
-  const resourcesDir = path.join(process.resourcesPath, 'facturacion');
-  if (existsSync(path.join(resourcesDir, 'responsable-inscripto', 'index.mjs'))) return resourcesDir;
-  return path.join(app.getPath('userData'), 'facturacion-runtime');
+  const candidatos = isDev
+    ? [path.join(__dirname, '..', 'resources', 'facturacion')]
+    : [
+      path.join(process.resourcesPath, 'facturacion'),
+      path.join(app.getPath('userData'), 'facturacion-runtime'),
+    ];
+
+  const completo = (dir) => (
+    existsSync(path.join(dir, 'responsable-inscripto', 'index.mjs')) &&
+    existsSync(path.join(dir, 'monotributo', 'index.mjs')) &&
+    MODULOS_COMPARTIDOS_MOTOR.every((n) => existsSync(path.join(dir, 'lib', n)))
+  );
+
+  for (const dir of candidatos) {
+    if (completo(dir)) {
+      console.log(`[AFIP TEMPLATES] fuente completa: ${dir}`);
+      return dir;
+    }
+    if (existsSync(dir)) {
+      console.warn(`[AFIP TEMPLATES] descartada por incompleta (le falta el motor o lib/): ${dir}`);
+    }
+  }
+
+  // Ninguno completo: se devuelve el primero que exista para que el error diga
+  // exactamente qué falta y de dónde, en vez de fallar en un lugar cualquiera.
+  const fallback = candidatos.find((d) => existsSync(d)) || candidatos[0];
+  console.error(`❌ [AFIP TEMPLATES] ninguna fuente está completa. Se reporta contra: ${fallback}`);
+  return fallback;
 }
 
 function getOpensslDir() {
@@ -388,6 +423,7 @@ function getMonoDir(cuentaId, localId = getActiveLocalId()) {
 // desde el template empaquetado en la app. NUNCA toca .env, certificados,
 // serviceAccount ni configuración del local. Sirve para que las correcciones del
 // motor (p. ej. el armado del QR ARCA) lleguen a instalaciones existentes al actualizar.
+// (declarado más arriba, antes de getTemplatesDir, que también lo consulta)
 // Módulos compartidos que el motor importa con ruta relativa PROPIA
 // (`./claimPedido.mjs`). Van copiados AL LADO del index.mjs de cada cuenta.
 //
@@ -398,7 +434,7 @@ function getMonoDir(cuentaId, localId = getActiveLocalId()) {
 // un import estable. (Con `node_modules` no pasa porque Node lo busca subiendo
 // solo; para un archivo suelto ese mecanismo no existe.) Copiarlo junto al motor
 // da el MISMO import en los dos, y se actualiza en cada sync igual que index.mjs.
-const MODULOS_COMPARTIDOS_MOTOR = ['claimPedido.mjs'];
+// (la constante se declara junto a getTemplatesDir, que también la consulta)
 
 /**
  * Copia un archivo de forma segura: primero a un temporal en el MISMO directorio
@@ -424,42 +460,70 @@ function copiarAtomico(src, dest) {
  *   ok:false → el runtime quedó INCOMPLETO y NO hay que arrancar el motor. Una
  *   PC facturando con media copia del motor es peor que una PC que no factura.
  */
+/**
+ * Deja el motor de una cuenta al día: `index.mjs` + los módulos compartidos que
+ * importa, y VERIFICA que los destinos existan de verdad.
+ *
+ * Lo que salió mal en la 1.3.85 y esto corrige:
+ *
+ *  1. Se copiaba `index.mjs` PRIMERO y recién después se miraba si existía el
+ *     módulo compartido. Si no existía, la cuenta quedaba con el index NUEVO
+ *     —que importa './claimPedido.mjs'— y sin el módulo: rota. Ahora se
+ *     resuelven y verifican TODAS las fuentes antes de tocar un solo archivo.
+ *  2. No se comprobaba el DESTINO. Ahora, después de copiar, se verifica que
+ *     los archivos estén físicamente ahí.
+ *  3. La fuente elegida no quedaba registrada, así que era imposible saber de
+ *     dónde había salido el index. Ahora se logea la ruta real.
+ *
+ * @returns {{ ok: boolean, faltantes: string[], fuente?: string, destinos?: string[] }}
+ */
 function syncFacturacionEngine(accountDir, tipo) {
-  const faltantes = [];
   try {
-    if (!existsSync(accountDir)) return { ok: false, faltantes: ['(el directorio de la cuenta no existe)'] };
+    if (!existsSync(accountDir)) {
+      return { ok: false, faltantes: ['(el directorio de la cuenta no existe)'] };
+    }
 
     const templatesDir = getTemplatesDir();
-    const templateDir = path.join(
-      templatesDir,
-      tipo === 'responsable_inscripto' ? 'responsable-inscripto' : 'monotributo'
-    );
+    const subdir = tipo === 'responsable_inscripto' ? 'responsable-inscripto' : 'monotributo';
 
-    const srcIndex = path.join(templateDir, 'index.mjs');
-    if (!existsSync(srcIndex)) {
-      faltantes.push('index.mjs');
-    } else {
-      copiarAtomico(srcIndex, path.join(accountDir, 'index.mjs'));
+    // 1. RESOLVER todas las fuentes y verificarlas ANTES de copiar nada.
+    const fuentes = [
+      { nombre: 'index.mjs', src: path.join(templatesDir, subdir, 'index.mjs'), dest: path.join(accountDir, 'index.mjs') },
+      ...MODULOS_COMPARTIDOS_MOTOR.map((n) => ({
+        nombre: `lib/${n}`, src: path.join(templatesDir, 'lib', n), dest: path.join(accountDir, n),
+      })),
+    ];
+
+    const faltanFuentes = fuentes.filter((f) => !existsSync(f.src));
+    if (faltanFuentes.length > 0) {
+      console.error(
+        `❌ Runtime fiscal incompleto EN LA FUENTE.\n` +
+        `   Fuente: ${templatesDir}\n` +
+        faltanFuentes.map((f) => `   Falta: ${f.src}`).join('\n') +
+        `\n   Motor NO iniciado. No se toca la cuenta ${accountDir} para no dejarla a medias.`
+      );
+      return { ok: false, faltantes: faltanFuentes.map((f) => f.nombre), fuente: templatesDir };
     }
 
-    // Los módulos compartidos viven en resources/facturacion/lib/ (y en
-    // facturacion-runtime/lib/ cuando el runtime se bajó como componente).
-    for (const nombre of MODULOS_COMPARTIDOS_MOTOR) {
-      const src = path.join(templatesDir, 'lib', nombre);
-      if (!existsSync(src)) { faltantes.push(`lib/${nombre}`); continue; }
-      copiarAtomico(src, path.join(accountDir, nombre));
+    // 2. COPIAR (atómico: temporal + rename en el mismo directorio).
+    for (const f of fuentes) copiarAtomico(f.src, f.dest);
+
+    // 3. VERIFICAR EL DESTINO. Copiar sin comprobar fue justamente el agujero.
+    const faltanDestinos = fuentes.filter((f) => !existsSync(f.dest));
+    if (faltanDestinos.length > 0) {
+      console.error(
+        `❌ Runtime fiscal incompleto EN EL DESTINO.\n` +
+        faltanDestinos.map((f) => `   Falta: ${f.dest}`).join('\n') +
+        `\n   Motor NO iniciado.`
+      );
+      return { ok: false, faltantes: faltanDestinos.map((f) => f.nombre), fuente: templatesDir };
     }
 
-    if (faltantes.length > 0) {
-      console.error(`❌ [AFIP ENGINE SYNC] runtime INCOMPLETO en ${accountDir}: faltan [${faltantes.join(', ')}]. NO se inicia el motor.`);
-      return { ok: false, faltantes };
-    }
-
-    console.log(`[AFIP ENGINE SYNC] motor + módulos compartidos actualizados en ${accountDir}`);
-    return { ok: true, faltantes: [] };
+    console.log(`[AFIP ENGINE SYNC] ${accountDir}\n   fuente: ${templatesDir}\n   copiados: ${fuentes.map((f) => f.nombre).join(', ')}`);
+    return { ok: true, faltantes: [], fuente: templatesDir, destinos: fuentes.map((f) => f.dest) };
   } catch (e) {
-    console.error(`❌ [AFIP ENGINE SYNC] error sincronizando ${accountDir}: ${e.message}. NO se inicia el motor.`);
-    return { ok: false, faltantes, error: e.message };
+    console.error(`❌ [AFIP ENGINE SYNC] error sincronizando ${accountDir}: ${e.message}. Motor NO iniciado.`);
+    return { ok: false, faltantes: [`(error: ${e.message})`] };
   }
 }
 
@@ -491,6 +555,28 @@ function spawnFacturacionProc(key, accountDir) {
 
   const entry = { proc: null, logs: facturacionProcs[key]?.logs || [], status: 'running', accountDir };
   facturacionProcs[key] = entry;
+
+  // ── GUARD ÚNICO, ANTES DE CUALQUIER spawn ────────────────────────────────
+  //
+  // Acá pasan TODOS los caminos que arrancan un motor: el autostart del proceso
+  // principal, `facturacion:start` y `facturacion:restart` desde la pantalla de
+  // Configuración. En la 1.3.85 el guard estaba sólo en el autostart, así que
+  // los dos IPC arrancaban el motor sin sincronizar y sin verificar nada: por
+  // ahí salió el ERR_MODULE_NOT_FOUND en bucle.
+  //
+  // Ponerlo dentro de spawn hace imposible saltearlo, y de paso REPARA la cuenta
+  // en cada arranque: una cuenta vieja a la que le falte el módulo compartido
+  // queda completa sin recrearla ni entrar a Configuración.
+  const tipo = key === 'ri' ? 'responsable_inscripto' : 'monotributo';
+  const sync = syncFacturacionEngine(accountDir, tipo);
+  if (!sync.ok) {
+    entry.status = 'error';
+    const detalle = `Runtime fiscal incompleto. Falta: ${sync.faltantes.join(', ')}. Motor NO iniciado.`;
+    entry.logs.push(`[${new Date().toLocaleTimeString('es-AR')}] [ERR] ${detalle}`);
+    console.error(`❌ [facturacion] '${key}': ${detalle}`);
+    mainWindow?.webContents?.send('facturacion:status', { key, status: 'error' });
+    return false;
+  }
 
   let proc;
   try {
@@ -836,13 +922,8 @@ async function autoStartFacturacion() {
       const label = `${ri.nombre || 'Responsable Inscripto'} / CUIT ${ri.cuit || '?'} / Pto. Vta. ${ri.ptoVta || '?'}`;
       const { start } = await evaluateAutoStart('ri', riDir, ri, label);
       if (start) {
-        // Si el runtime quedó incompleto NO se arranca: media copia del motor
-        // factura peor que nada.
-        const sync = syncFacturacionEngine(riDir, 'responsable_inscripto');
-        if (!sync.ok) {
-          console.error(`⚠️ [Facturación automática] ${label}: no iniciada, el runtime fiscal quedó incompleto [${sync.faltantes.join(', ')}].`);
-          return;
-        }
+        // `spawnFacturacionProc` sincroniza y verifica por su cuenta: si el
+        // runtime quedó incompleto devuelve false y no arranca nada.
         const ok = spawnFacturacionProc('ri', riDir);
         const cola = colaDeCuenta(riDir);
         console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
@@ -856,12 +937,8 @@ async function autoStartFacturacion() {
         const label = `${c.nombre || 'Monotributo'} / CUIT ${c.cuit || '?'} / Pto. Vta. ${c.ptoVta || '?'}`;
         const { start } = await evaluateAutoStart(key, dir, c, label);
         if (start) {
-          // Runtime incompleto → esta cuenta no arranca, pero las demás siguen.
-          const sync = syncFacturacionEngine(dir, 'monotributo');
-          if (!sync.ok) {
-            console.error(`⚠️ [Facturación automática] ${label}: no iniciada, el runtime fiscal quedó incompleto [${sync.faltantes.join(', ')}].`);
-            continue;
-          }
+          // Runtime incompleto → spawn devuelve false y esta cuenta no arranca,
+          // pero las demás del local siguen su camino.
           const ok = spawnFacturacionProc(key, dir);
           const cola = colaDeCuenta(dir);
           console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
