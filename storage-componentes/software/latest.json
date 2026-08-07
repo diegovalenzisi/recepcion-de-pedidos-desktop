@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.85",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.85%2FRecepcion-de-Pedidos-Setup-1.3.85.exe?alt=media",
-  "sha256": "106b80c3097e56a40aa98edf84b9a0d8aa967e36fe4358f433b5a41afc336753",
-  "size": 125267826,
+  "latest": "1.3.86",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.86%2FRecepcion-de-Pedidos-Setup-1.3.86.exe?alt=media",
+  "sha256": "8a1c1cf5eee2a47d384b43c4bc15d89ce639c59aadafee659e67413da78fff8c",
+  "size": 125271275,
   "mandatory": true,
   "releaseDate": "2026-08-07",
-  "notes": "Version 1.3.85. La facturacion ahora arranca sola en toda PC. Antes habia que entrar a Configuracion y apretar Iniciar, asi que una computadora recien instalada no facturaba aunque tuviera todo lo necesario. Desde esta version se arranca salvo que alguien apague el switch a proposito en esa PC, y ese apagado queda guardado solo en esa computadora: apagar una no apaga las demas del local. Volver a encenderlo arranca los motores en el acto, sin reiniciar la aplicacion, y apagarlo no impide que la aplicacion siga abriendose para vender. Se escuchan automaticamente todas las colas FACTURACION_X configuradas, sin importar cuantas sean. Como ahora varias PCs pueden facturar a la vez, cada pedido se reparte con un reclamo atomico dentro del propio pedido, y antes de pedir un CAE se consulta a ARCA por el numero que dejo anotado un intento anterior: si ARCA ya lo autorizo se registra ese comprobante en vez de emitir otro, de modo que una caida despues de obtener el CAE no genera una segunda factura. La misma proteccion quedo en Monotributo y en Responsable Inscripto, y en este ultimo se corrigio ademas que el guardado del historial y la eliminacion del pedido quedaban corriendo fuera del flujo principal."
+  "notes": "Version 1.3.86. Correccion urgente sobre la 1.3.85. En algunas PCs el motor de facturacion no podia arrancar: la cuenta quedaba con el index.mjs nuevo pero sin el modulo claimPedido.mjs que ese index necesita, y el motor reintentaba en bucle sin poder iniciar nunca. La proteccion se movio al unico punto por el que pasan todos los caminos que arrancan un motor, asi que ya no se puede arrancar con el runtime incompleto. Ademas la sincronizacion ahora verifica todos los archivos de origen ANTES de copiar cualquier cosa y comprueba los destinos despues de copiar, de modo que una cuenta no puede quedar a medias, y la carpeta de origen solo se acepta si esta completa. Como la sincronizacion corre en cada arranque, las cuentas ya instaladas se reparan solas: no hay que recrearlas ni entrar a Configuracion. La logica fiscal de la 1.3.85 no cambio: facturacion automatica por defecto, switch por PC, proteccion entre varias computadoras, consulta a ARCA y reconciliacion de comprobantes siguen igual."
 }
