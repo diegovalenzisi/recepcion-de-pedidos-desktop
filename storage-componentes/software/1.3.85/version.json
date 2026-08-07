@@ -1,0 +1,7 @@
+{
+  "version": "1.3.85",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.85.exe",
+  "releaseDate": "2026-08-07",
+  "sha256": "106b80c3097e56a40aa98edf84b9a0d8aa967e36fe4358f433b5a41afc336753",
+  "notes": "La facturacion ahora arranca sola en toda PC. Antes habia que entrar a Configuracion y apretar Iniciar, asi que una computadora recien instalada no facturaba aunque tuviera todo lo necesario. Desde esta version se arranca salvo que alguien apague el switch a proposito en esa PC, y ese apagado queda guardado solo en esa computadora: apagar una no apaga las demas del local. Volver a encenderlo arranca los motores en el acto, sin reiniciar la aplicacion, y apagarlo no impide que la aplicacion siga abriendose para vender. Se escuchan automaticamente todas las colas FACTURACION_X configuradas, sin importar cuantas sean. Como ahora varias PCs pueden facturar a la vez, cada pedido se reparte con un reclamo atomico dentro del propio pedido, y antes de pedir un CAE se consulta a ARCA por el numero que dejo anotado un intento anterior: si ARCA ya lo autorizo se registra ese comprobante en vez de emitir otro, de modo que una caida despues de obtener el CAE no genera una segunda factura. La misma proteccion quedo en Monotributo y en Responsable Inscripto, y en este ultimo se corrigio ademas que el guardado del historial y la eliminacion del pedido quedaban corriendo fuera del flujo principal."
+}
