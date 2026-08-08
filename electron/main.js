@@ -25,6 +25,33 @@ const {
 const isDev = !app.isPackaged;
 
 // ---------------------------------------------------------------------------
+// UNA SOLA INSTANCIA POR PC
+//
+// Va ACÁ ARRIBA, antes de registrar IPC, abrir la ventana, levantar el backend,
+// Firebase, los listeners, el motor de facturación o la impresión. Ese es el
+// punto: la segunda instancia tiene que morir ANTES de llegar a cualquiera de
+// esas cosas, no ocultar un formulario después de haberlo abierto.
+//
+// Sin esto, un doble clic con la aplicación ya abierta arrancaba un segundo
+// proceso que volvía a correr la configuración inicial y podía duplicar
+// listeners y motores.
+//
+// `mostrarVentanaPrincipal()` NO cambia de sección ni recarga nada: solo trae al
+// frente la ventana que ya existe, con la pantalla donde el usuario estaba.
+// ---------------------------------------------------------------------------
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  console.log('[APP] Ya existe una instancia activa. Cerrando segunda instancia.');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    console.log('[APP] Segundo intento de apertura detectado');
+    mostrarVentanaPrincipal();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Caché local de imágenes de artículos — esquema privilegiado dlvimg://
 // El registro del esquema DEBE ocurrir antes de app.ready (por eso está en el
 // top-level del módulo). Privilegios mínimos para poder cargar imágenes desde
@@ -1631,6 +1658,49 @@ function checkForUpdates() {
 // ---------------------------------------------------------------------------
 // Ventana principal
 // ---------------------------------------------------------------------------
+/**
+ * Trae al frente la ventana que YA está abierta. La usa el handler de
+ * `second-instance` cuando alguien hace doble clic con la app corriendo.
+ *
+ * NO navega, NO recarga y NO cambia de sección: el usuario tiene que volver a
+ * ver exactamente la pantalla donde estaba (Ventas, Configuración, Mostrador,
+ * lo que sea). Por eso acá no se toca el renderer para nada.
+ *
+ * Respeta el modo visual actual: si estaba en pantalla completa se queda en
+ * pantalla completa; si no, se maximiza (que es como arranca la app).
+ */
+function mostrarVentanaPrincipal() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    // Caso raro: la instancia primaria está viva pero sin ventana (cerrada a
+    // mano). Se abre una, que es lo que el usuario está pidiendo.
+    console.log('[APP] No hay ventana principal: se crea una.');
+    createWindow();
+    return;
+  }
+
+  console.log('[APP] Restaurando ventana principal');
+
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();          // oculta en tray
+
+  if (mainWindow.isFullScreen()) mainWindow.setFullScreen(true);
+  else mainWindow.maximize();
+
+  mainWindow.moveTop();
+  mainWindow.focus();
+
+  // El aviso va DESPUÉS de traerla al frente, y colgado de la ventana principal
+  // para que sea un cartel de esa ventana y no otra ventana nueva. Sin await: no
+  // se bloquea nada mientras el usuario sigue trabajando.
+  dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Recepción de Pedidos',
+    message: 'Recepción de Pedidos ya se encuentra abierto.',
+    buttons: ['Entendido'],
+    noLink: true,
+  }).catch(() => { /* si no se puede mostrar el cartel, la ventana ya quedó al frente */ });
+}
+
 function createWindow() {
   // Ruta al ícono: en producción está en resources/, en dev en build/
   const iconPath = app.isPackaged
@@ -3268,6 +3338,15 @@ ipcMain.handle('app:boot-flags', () => ({
 // Ciclo de vida
 // ---------------------------------------------------------------------------
 app.whenReady().then(() => {
+  // Segunda instancia: no inicializa NADA. `app.quit()` ya se llamó arriba, pero
+  // este corte lo hace determinista — sin él, una carrera entre el quit y el
+  // ready podría llegar a levantar backend, listeners o el motor de facturación
+  // por duplicado, o a mostrar la configuración inicial.
+  if (!gotTheLock) {
+    console.log('[APP] Segunda instancia: no se inicializa ningún servicio.');
+    return;
+  }
+
   // Quitar el menú nativo de Electron (File, Edit, View, Window, Help)
   initMachineId();
   Menu.setApplicationMenu(null);
