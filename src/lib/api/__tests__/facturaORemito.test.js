@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   CAMPO_IMPRIME_FACTURA,
   COLAS_POR_CUENTA,
+  esColaFiscalValida,
   COMPROBANTE_FACTURA,
   COMPROBANTE_REMITO,
   IMPRIME_FACTURA_POR_DEFECTO,
@@ -97,16 +98,19 @@ check('la normalización sólo toca mayúsculas y espacios', () => {
 });
 
 console.log('\nTabla de colas fiscales (coincidencia EXACTA):');
+// Esquema definitivo: transferencias 1–5, medios bancarios/digitales 6–9.
+// PEDIDOSYA y RAPPI NO están: no tienen cola propia, facturan por la
+// Transferencia que se les asocia.
 const TABLA = [
   ['Transferencia', 'FACTURACION_1'],
   ['Transferencia 2', 'FACTURACION_2'],
   ['Transferencia 3', 'FACTURACION_3'],
-  ['Mercado Pago', 'FACTURACION_4'],
-  ['Cuenta DNI', 'FACTURACION_5'],
-  ['Banco 1', 'FACTURACION_6'],
-  ['Banco 2', 'FACTURACION_7'],
-  ['PREPAGO PEDIDOSYA', 'FACTURACION_1'],
-  ['PREPAGO RAPPI', 'FACTURACION_9'],
+  ['Transferencia 4', 'FACTURACION_4'],
+  ['Transferencia 5', 'FACTURACION_5'],
+  ['Mercado Pago', 'FACTURACION_6'],
+  ['Cuenta DNI', 'FACTURACION_7'],
+  ['Banco 1', 'FACTURACION_8'],
+  ['Banco 2', 'FACTURACION_9'],
 ];
 for (const [nombre, cola] of TABLA) {
   check(`${nombre} → ${cola}`, () => {
@@ -115,14 +119,31 @@ for (const [nombre, cola] of TABLA) {
     assert.strictEqual(colaFiscalDeCuenta(`  ${nombre}  `), cola, 'no tolera espacios de más');
   });
 }
-check('la tabla tiene las 9 cuentas; PedidosYa comparte cola con Transferencia', () => {
+check('nueve cuentas, nueve colas distintas, sin repetir ninguna', () => {
+  const colas = Object.values(COLAS_POR_CUENTA);
   assert.strictEqual(Object.keys(COLAS_POR_CUENTA).length, 9);
-  // FACTURACION_1 la comparten "Transferencia" y "PREPAGO PEDIDOSYA": es una
-  // decisión explícita del negocio, no un descuido. El resto sigue sin repetir.
-  assert.strictEqual(COLAS_POR_CUENTA['PREPAGO PEDIDOSYA'], 'FACTURACION_1');
-  assert.strictEqual(COLAS_POR_CUENTA['TRANSFERENCIA'], 'FACTURACION_1');
-  const sinPedidosYa = Object.entries(COLAS_POR_CUENTA).filter(([k]) => k !== 'PREPAGO PEDIDOSYA');
-  assert.strictEqual(new Set(sinPedidosYa.map(([, v]) => v)).size, sinPedidosYa.length);
+  assert.strictEqual(new Set(colas).size, 9, 'dos cuentas no pueden compartir cola: cada una es un CUIT distinto');
+});
+
+check('las plataformas NO tienen cola propia en el mapa', () => {
+  // Los mapeos viejos (PedidosYa a FACTURACION_1, Rappi a FACTURACION_9) se
+  // eliminaron: mandaban a una cola fija sin mirar la cuenta asociada.
+  assert.strictEqual(COLAS_POR_CUENTA['PREPAGO PEDIDOSYA'], undefined);
+  assert.strictEqual(COLAS_POR_CUENTA['PREPAGO RAPPI'], undefined);
+  assert.strictEqual(colaFiscalDeCuenta('PREPAGO PEDIDOSYA'), null);
+  assert.strictEqual(colaFiscalDeCuenta('PREPAGO RAPPI'), null);
+});
+
+check('el tope es FACTURACION_9: no existe la 10 ni superior', () => {
+  for (const c of ['FACTURACION_1', 'FACTURACION_5', 'FACTURACION_9']) {
+    assert.strictEqual(esColaFiscalValida(c), true, c);
+  }
+  for (const c of ['FACTURACION_10', 'FACTURACION_11', 'FACTURACION_0', 'FACTURACION', '']) {
+    assert.strictEqual(esColaFiscalValida(c), false, c);
+  }
+  for (const cola of Object.values(COLAS_POR_CUENTA)) {
+    assert.strictEqual(esColaFiscalValida(cola), true, `${cola} tiene que entrar en el esquema 1..9`);
+  }
 });
 check('"Transferencia 2" NUNCA cae en la cola de "Transferencia"', () => {
   assert.strictEqual(colaFiscalDeCuenta('Transferencia 2'), 'FACTURACION_2');
@@ -222,12 +243,12 @@ check('Efectivo false + Transferencia true → factura TOTAL por FACTURACION_1',
   assert.strictEqual(d.encolado.cola, 'FACTURACION_1');
   assert.strictEqual(d.encolado.total, 5000, 'facturó un importe parcial');
 });
-check('Efectivo false + Mercado Pago true → factura TOTAL por FACTURACION_4', () => {
+check('Efectivo false + Mercado Pago true → factura TOTAL por FACTURACION_6', () => {
   const d = resolver(
     venta(['Efectivo', 3000], ['Mercado Pago', 1500]),
     [cuenta('Mercado Pago', true)]
   );
-  assert.strictEqual(d.encolado.cola, 'FACTURACION_4');
+  assert.strictEqual(d.encolado.cola, 'FACTURACION_6');
   assert.strictEqual(d.encolado.total, 4500);
 });
 check('todas apagadas → UN FCX por el total, ninguna factura', () => {
@@ -259,7 +280,7 @@ check('todas las cuentas usadas en true → UNA sola factura total, nunca FCX', 
     ]
   );
   assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
-  assert.strictEqual(d.encolado.cola, 'FACTURACION_6');
+  assert.strictEqual(d.encolado.cola, 'FACTURACION_8', 'Banco 1 pasó de la 6 a la 8');
   assert.strictEqual(d.encolado.total, 6000);
 });
 check('varias encendidas y la favorita NO es una de ellas → se DETIENE, no se elige a dedo', () => {
@@ -297,7 +318,7 @@ check('todas apagadas + tilde ON, con OTRA cuenta fiscal → usa esa, no la favo
   );
   assert.strictEqual(d.encolado.estado, 'encolar');
   assert.strictEqual(d.encolado.cuenta, 'Mercado Pago');
-  assert.strictEqual(d.encolado.cola, 'FACTURACION_4');
+  assert.strictEqual(d.encolado.cola, 'FACTURACION_6');
   assert.strictEqual(d.encolado.total, 5000);
 });
 check('tilde ON + una cuenta encendida → manda la cuenta usada, no la favorita', () => {
@@ -306,7 +327,7 @@ check('tilde ON + una cuenta encendida → manda la cuenta usada, no la favorita
     [cuenta('Mercado Pago', true), cuenta('Transferencia', false, { isFavorite: true })],
     true
   );
-  assert.strictEqual(d.encolado.cola, 'FACTURACION_4');
+  assert.strictEqual(d.encolado.cola, 'FACTURACION_6');
 });
 check('el tilde también se lee de la venta guardada', () => {
   const d = decidirComprobante({
@@ -445,7 +466,7 @@ check('la cuenta favorita se detecta por isFavorite', () => {
 console.log('\nLa DECISIÓN usa reglas por medio de pago, cerradas y explícitas:');
 check('las reglas por nombre están ancladas: nada de coincidencias parciales', () => {
   // Nombres que CONTIENEN una palabra de la regla pero no son esa cuenta.
-  for (const ajeno of ['Transferencia Mercado Pago', 'Efectivo en dólares', 'Mercado Pago', 'Transferencia 4']) {
+  for (const ajeno of ['Transferencia Mercado Pago', 'Efectivo en dólares', 'Mercado Pago', 'Transferencia 6', 'Transferencia bancaria']) {
     const r = resolverReglaMedioPago(ajeno);
     assert.strictEqual(r.cola, null, `"${ajeno}" no debe resolver ninguna cola (dio ${r.cola})`);
     assert.strictEqual(r.regla, REGLA.SIN_REGLA, `"${ajeno}" no debe matchear una regla`);
@@ -590,10 +611,12 @@ check('alias sin cuenta asociada → sin-cuenta', () => {
   const r = resolverCuentaDeAliasFavorito({ alias: 'ALIAS.QUE.NO.EXISTE', cuentas: CUENTAS_CON_ALIAS });
   assert.strictEqual(r.estado, 'sin-cuenta');
 });
-check('cuenta que no resuelve a FACTURACION_1/2/3 → cuenta-sin-cola', () => {
+check('una plataforma como alias → cuenta-sin-cola (no tiene cola propia)', () => {
+  // RAPPI ya no figura en COLAS_POR_CUENTA: factura por su cuenta asociada, así
+  // que como alias destacado no resuelve nada.
   const r = resolverCuentaDeAliasFavorito({ alias: 'RAPPI', cuentas: CUENTAS_CON_ALIAS });
   assert.strictEqual(r.estado, 'cuenta-sin-cola');
-  assert.match(r.motivo, /no resuelve a FACTURACION_1, 2 ni 3/);
+  assert.match(r.motivo, /no resuelve ninguna cola fiscal \(FACTURACION_1 a 9\)/);
 });
 check('cambiar el alias favorito cambia la cola, sin tocar el código', () => {
   const c = CUENTAS_CON_ALIAS;
@@ -717,7 +740,7 @@ check('asociada a una cuenta que genera remito / sin cola → inválida', () => 
 });
 
 console.log('\nDesplegable "Cuenta asociada para facturación":');
-check('sólo ofrece cuentas que resuelven FACTURACION_1, 2 o 3', () => {
+check('sólo ofrece Transferencias (FACTURACION_1 a 5)', () => {
   const cuentas = { ...localCon('cta-1', 'cta-1'), 'cta-mp': { nombre: 'Mercado Pago' }, 'cta-ef': { nombre: 'Efectivo' } };
   const ops = cuentasAsociablesParaFacturacion(cuentas);
   assert.deepStrictEqual(ops.map((o) => o.id).sort(), ['cta-1', 'cta-2', 'cta-3']);
@@ -885,5 +908,116 @@ check('las cuentas comunes conservan su comportamiento', () => {
     venta: { total: 1000, payments: [{ method: 'Efectivo', amount: 1000 }] }, cuentas,
   }).comprobante, COMPROBANTE_REMITO);
 });
+
+// ---------------------------------------------------------------------------
+// ESQUEMA DEFINITIVO: TRANSFERENCIAS 1–5
+// ---------------------------------------------------------------------------
+console.log('\nTransferencia 4 y 5, solas y combinadas con efectivo:');
+
+const localCon5Transferencias = () => ([
+  cuenta('Transferencia', true, { isFavorite: true }),
+  cuenta('Transferencia 2', true),
+  cuenta('Transferencia 3', true),
+  cuenta('Transferencia 4', true),
+  cuenta('Transferencia 5', true),
+  cuenta('Efectivo', false),
+]);
+
+for (const [nombre, cola] of [
+  ['Transferencia', 'FACTURACION_1'], ['Transferencia 2', 'FACTURACION_2'],
+  ['Transferencia 3', 'FACTURACION_3'], ['Transferencia 4', 'FACTURACION_4'],
+  ['Transferencia 5', 'FACTURACION_5'],
+]) {
+  check(`${nombre} sola → ${cola}`, () => {
+    const d = resolver(venta([nombre, 12000]), localCon5Transferencias());
+    assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
+    assert.strictEqual(d.encolado.cola, cola);
+    assert.strictEqual(d.encolado.total, 12000);
+  });
+
+  check(`Efectivo + ${nombre} → ${cola} por el TOTAL completo`, () => {
+    const d = resolver(venta(['Efectivo', 10000], [nombre, 20000]), localCon5Transferencias());
+    assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
+    assert.strictEqual(d.encolado.cola, cola);
+    assert.strictEqual(d.encolado.total, 30000, 'se factura el total, no solo la parte no efectiva');
+  });
+}
+
+check('Efectivo solo sigue yendo a remito, sin facturación automática', () => {
+  const d = resolver(venta(['Efectivo', 5000]), localCon5Transferencias());
+  assert.strictEqual(d.comprobante, COMPROBANTE_REMITO);
+});
+
+check('"Transferencia 5" no cae en la cola de "Transferencia"', () => {
+  // El orden de las reglas es lo que lo garantiza: la 5 y la 4 se evalúan antes
+  // que la genérica.
+  for (const [n, c] of [['Transferencia 4', 'FACTURACION_4'], ['Transferencia 5', 'FACTURACION_5']]) {
+    const r = resolverReglaMedioPago(n);
+    assert.strictEqual(r.cola, c);
+    assert.notStrictEqual(r.cola, 'FACTURACION_1');
+  }
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nPlataformas asociadas a Transferencia 4 y 5:');
+
+const localPlataformas = (asocPY, asocRa) => ({
+  'cta-1': { nombre: 'Transferencia', imprimeFactura: true, isFavorite: true },
+  'cta-2': { nombre: 'Transferencia 2', imprimeFactura: true },
+  'cta-3': { nombre: 'Transferencia 3', imprimeFactura: true },
+  'cta-4': { nombre: 'Transferencia 4', imprimeFactura: true },
+  'cta-5': { nombre: 'Transferencia 5', imprimeFactura: true },
+  'cta-py': { nombre: 'PREPAGO PEDIDOSYA', [CAMPO_CUENTA_ASOCIADA]: asocPY },
+  'cta-ra': { nombre: 'PREPAGO RAPPI', [CAMPO_CUENTA_ASOCIADA]: asocRa },
+});
+
+for (const [asoc, cola] of [['cta-4', 'FACTURACION_4'], ['cta-5', 'FACTURACION_5']]) {
+  check(`PedidosYa asociado a ${asoc} → ${cola}`, () => {
+    const cuentas = localPlataformas(asoc, 'cta-1');
+    const d = decidirComprobante({ venta: venta(['PREPAGO PEDIDOSYA', 9000]), cuentas });
+    const e = resolverEncolado(d, cuentas);
+    assert.strictEqual(e.cola, cola);
+    assert.strictEqual(e.cuentaAsociadaId, asoc);
+  });
+  check(`Rappi asociado a ${asoc} → ${cola}`, () => {
+    const cuentas = localPlataformas('cta-1', asoc);
+    const d = decidirComprobante({ venta: venta(['PREPAGO RAPPI', 9000]), cuentas });
+    const e = resolverEncolado(d, cuentas);
+    assert.strictEqual(e.cola, cola);
+    assert.strictEqual(e.cuentaAsociadaId, asoc);
+  });
+}
+
+check('el desplegable ofrece las 5 transferencias y NINGUNA cuenta 6–9', () => {
+  const cuentas = {
+    ...localPlataformas('cta-1', 'cta-1'),
+    'cta-mp': { nombre: 'Mercado Pago', imprimeFactura: true },
+    'cta-dni': { nombre: 'Cuenta DNI', imprimeFactura: true },
+    'cta-b1': { nombre: 'Banco 1', imprimeFactura: true },
+    'cta-b2': { nombre: 'Banco 2', imprimeFactura: true },
+  };
+  const ofrecidas = cuentasAsociablesParaFacturacion(cuentas).map((c) => c.nombre).sort();
+  assert.deepStrictEqual(ofrecidas, [
+    'Transferencia', 'Transferencia 2', 'Transferencia 3', 'Transferencia 4', 'Transferencia 5',
+  ].sort(), 'las plataformas solo se asocian a una Transferencia');
+});
+
+check('asociar una plataforma a Mercado Pago se rechaza', () => {
+  const cuentas = { ...localPlataformas('cta-1', 'cta-1'), 'cta-mp': { nombre: 'Mercado Pago', imprimeFactura: true } };
+  const v = validarAsociacionPlataforma({ plataformaId: 'cta-py', asociadaId: 'cta-mp', cuentas });
+  assert.strictEqual(v.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nFacturación 2 (alias destacado): acepta cualquier cuenta fiscal 1..9:');
+
+for (const [nombre, cola] of TABLA) {
+  check(`alias de "${nombre}" → ${cola}`, () => {
+    const cuentas = { 'cta-x': { nombre, alias: 'MI.ALIAS', imprimeFactura: true } };
+    const r = resolverCuentaDeAliasFavorito({ alias: 'MI.ALIAS', cuentas });
+    assert.strictEqual(r.estado, 'ok', r.motivo);
+    assert.strictEqual(r.cola, cola);
+  });
+}
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

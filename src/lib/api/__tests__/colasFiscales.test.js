@@ -78,15 +78,16 @@ check('la tabla cuenta de cobro ↔ cola es exactamente la acordada', () => {
     'TRANSFERENCIA': 'FACTURACION_1',
     'TRANSFERENCIA 2': 'FACTURACION_2',
     'TRANSFERENCIA 3': 'FACTURACION_3',
-    'MERCADO PAGO': 'FACTURACION_4',
-    'CUENTA DNI': 'FACTURACION_5',
-    'BANCO 1': 'FACTURACION_6',
-    'BANCO 2': 'FACTURACION_7',
-    'PREPAGO PEDIDOSYA': 'FACTURACION_1',
-    'PREPAGO RAPPI': 'FACTURACION_9',
+    'TRANSFERENCIA 4': 'FACTURACION_4',
+    'TRANSFERENCIA 5': 'FACTURACION_5',
+    'MERCADO PAGO': 'FACTURACION_6',
+    'CUENTA DNI': 'FACTURACION_7',
+    'BANCO 1': 'FACTURACION_8',
+    'BANCO 2': 'FACTURACION_9',
   });
   assert.strictEqual(CUENTA_COBRO_POR_COLA.FACTURACION_2, 'TRANSFERENCIA 2');
-  assert.strictEqual(CUENTA_COBRO_POR_COLA.FACTURACION_9, 'PREPAGO RAPPI');
+  assert.strictEqual(CUENTA_COBRO_POR_COLA.FACTURACION_4, 'TRANSFERENCIA 4');
+  assert.strictEqual(CUENTA_COBRO_POR_COLA.FACTURACION_9, 'BANCO 2');
 });
 check('la coincidencia es EXACTA: "Transferencia 2" nunca cae en la de "Transferencia"', () => {
   assert.ok(cuentaCobroAlimentaCola('Transferencia', 'FACTURACION_1'));
@@ -260,7 +261,7 @@ check('imprimeFactura:true factura en SU cola', () => {
   const d = decidirComprobante({ venta: venta([{ method: 'Banco 2', amount: 1000 }]), cuentas: CUENTAS_COBRO });
   const e = resolverEncolado(d, CUENTAS_COBRO);
   assert.strictEqual(e.estado, 'encolar');
-  assert.strictEqual(e.cola, 'FACTURACION_7');
+  assert.strictEqual(e.cola, 'FACTURACION_9');
   assert.strictEqual(e.total, 1000);
 });
 check('tilde manual usa una cuenta FISCAL, no la favorita de cobro', () => {
@@ -274,7 +275,7 @@ check('tilde manual usa una cuenta FISCAL, no la favorita de cobro', () => {
   const e = resolverEncolado(d, CUENTAS_COBRO);
   assert.strictEqual(d.comprobante, 'FACTURA');
   assert.strictEqual(e.cuenta, 'Banco 2');
-  assert.strictEqual(e.cola, 'FACTURACION_7');
+  assert.strictEqual(e.cola, 'FACTURACION_9');
   assert.strictEqual(e.criterio, 'unica-cuenta-fiscal-habilitada');
 });
 check('pago combinado con una sola cuenta encendida: UNA factura por el TOTAL', () => {
@@ -284,7 +285,7 @@ check('pago combinado con una sola cuenta encendida: UNA factura por el TOTAL', 
   });
   const e = resolverEncolado(d, CUENTAS_COBRO);
   assert.strictEqual(d.comprobante, 'FACTURA');
-  assert.strictEqual(e.cola, 'FACTURACION_7');
+  assert.strictEqual(e.cola, 'FACTURACION_9');
   assert.strictEqual(e.total, 1000, 'se factura el total completo, no la parte de esa cuenta');
 });
 check('todas las cuentas apagadas: UN solo FCX por el total', () => {
@@ -321,10 +322,11 @@ const CUENTAS_NO_FISCAL = [
   { id: 'cta-1', nombre: 'Banco 1', imprimeFactura: true },
   { id: 'cta-2', nombre: 'Mercado Pago', imprimeFactura: false, isFavorite: true },
 ];
-// El local NO tiene ningún contribuyente en FACTURACION_4 (Mercado Pago), y está bien así.
+// El local NO tiene ningún contribuyente en FACTURACION_6 (Mercado Pago), y está bien así.
 const CONFIG_SIN_F4 = {
   tipo: 'monotributo',
-  monotributo: { cuentas: [cuentaCompleta({ id: 'unica', razonSocial: 'LA QUE FACTURA', firebasePath: '77777777/FACTURACION_6' })] },
+  // El contribuyente configurado es el de Banco 1, que ahora vive en la 8.
+  monotributo: { cuentas: [cuentaCompleta({ id: 'unica', razonSocial: 'LA QUE FACTURA', firebasePath: '77777777/FACTURACION_8' })] },
 };
 const SWITCHES_NO_FISCAL = switchesDeCuentasCobro(CUENTAS_NO_FISCAL);
 
@@ -350,7 +352,7 @@ check('sin regla por nombre, el switch sigue decidiendo en los dos sentidos', ()
   assert.strictEqual(decidirComprobante({ venta: v, cuentas: apagada }).comprobante, 'REMITO');
 });
 check('una cuenta apagada NO exige CUIT, certificado ni runtime', () => {
-  const v = validarCuentaFiscal(cuentaFiscalDeCola(CONFIG_SIN_F4, 'FACTURACION_4'), { imprimeFactura: false });
+  const v = validarCuentaFiscal(cuentaFiscalDeCola(CONFIG_SIN_F4, 'FACTURACION_6'), { imprimeFactura: false });
   assert.strictEqual(v.estado, ESTADO.NO_FACTURA);
   assert.strictEqual(v.esError, false, 'no es un error de configuración');
   assert.strictEqual(v.noFactura, true);
@@ -359,7 +361,7 @@ check('una cuenta apagada NO exige CUIT, certificado ni runtime', () => {
 });
 check('el panel la muestra como "No factura — genera remito"', () => {
   const r = radiografiaDeColas({ config: CONFIG_SIN_F4, localId: '77777777', switchesCuentaCobro: SWITCHES_NO_FISCAL });
-  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_4');
+  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_6');
   assert.strictEqual(f2.estado, ESTADO.NO_FACTURA);
   assert.strictEqual(ETIQUETA_ESTADO[f2.estado], 'No factura — genera remito');
   assert.strictEqual(f2.esError, false);
@@ -368,20 +370,20 @@ check('el panel la muestra como "No factura — genera remito"', () => {
 });
 check('NO aparece como cola huérfana aunque tenga pendientes históricos', () => {
   const viejo = Date.now() - 78 * 86400000;
-  const pend = { FACTURACION_4: { n: 584, masViejoMs: viejo, masNuevoMs: viejo } };
+  const pend = { FACTURACION_6: { n: 584, masViejoMs: viejo, masNuevoMs: viejo } };
   assert.deepStrictEqual(
     detectarColasHuerfanas({ config: CONFIG_SIN_F4, pendientesPorCola: pend, switchesCuentaCobro: SWITCHES_NO_FISCAL }),
     []
   );
   const r = radiografiaDeColas({ config: CONFIG_SIN_F4, pendientesPorCola: pend, switchesCuentaCobro: SWITCHES_NO_FISCAL });
-  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_4');
+  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_6');
   assert.strictEqual(f2.huerfana, false);
   assert.strictEqual(f2.pendientesHistoricos, 584, 'se informan, pero como históricos');
   assert.strictEqual(r.huerfanas.length, 0);
 });
 check('SÍ se reporta si una cola apagada sigue recibiendo ventas nuevas', () => {
   // Eso ya no es histórico: es un error real de código enviándolas ahí.
-  const pend = { FACTURACION_4: { n: 585, masViejoMs: Date.now() - 78 * 86400000, masNuevoMs: Date.now() } };
+  const pend = { FACTURACION_6: { n: 585, masViejoMs: Date.now() - 78 * 86400000, masNuevoMs: Date.now() } };
   const h = detectarColasHuerfanas({ config: CONFIG_SIN_F4, pendientesPorCola: pend, switchesCuentaCobro: SWITCHES_NO_FISCAL });
   assert.strictEqual(h.length, 1);
   assert.strictEqual(h[0].recibiendoNuevas, true);
@@ -391,7 +393,7 @@ check('SÍ se reporta si una cola apagada sigue recibiendo ventas nuevas', () =>
 check('una cuenta con imprimeFactura:true SÍ exige configuración fiscal', () => {
   const switches = switchesDeCuentasCobro([{ nombre: 'Mercado Pago', imprimeFactura: true }]);
   const r = radiografiaDeColas({ config: CONFIG_SIN_F4, localId: '77777777', switchesCuentaCobro: switches });
-  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_4');
+  const f2 = r.colas.find((c) => c.cola === 'FACTURACION_6');
   assert.strictEqual(f2.estado, ESTADO.NO_CONFIGURADA);
   assert.strictEqual(f2.esError, true);
   assert.strictEqual(f2.listo, false);
@@ -405,8 +407,8 @@ check('con la favorita apagada, el tilde manual usa otra cuenta FISCAL', () => {
   assert.strictEqual(d.comprobante, 'FACTURA', 'el usuario pidió factura: no puede salir un remito');
   assert.strictEqual(e.estado, 'encolar');
   assert.strictEqual(e.cuenta, 'Banco 1', 'la única con el switch encendido');
-  assert.strictEqual(e.cola, 'FACTURACION_6');
-  assert.notStrictEqual(e.cola, 'FACTURACION_4', 'jamás a la cola de la cuenta que no factura');
+  assert.strictEqual(e.cola, 'FACTURACION_8');
+  assert.notStrictEqual(e.cola, 'FACTURACION_6', 'jamás a la cola de la cuenta que no factura');
   assert.strictEqual(e.criterio, 'unica-cuenta-fiscal-habilitada');
 });
 check('la favorita se usa sólo si además es fiscal', () => {
@@ -458,7 +460,7 @@ check('cola con pendientes y SIN cuenta fiscal es huérfana', () => {
   assert.strictEqual(h.length, 1);
   assert.strictEqual(h[0].cola, 'FACTURACION_7');
   assert.strictEqual(h[0].pendientes, 238);
-  assert.strictEqual(h[0].cuentaCobro, 'BANCO 2');
+  assert.strictEqual(h[0].cuentaCobro, 'CUENTA DNI');
   assert.ok(h[0].antiguedadDias >= 89);
 });
 check('cola con pendientes y cuenta COMPLETA no es huérfana', () => {
@@ -526,7 +528,7 @@ check('un local que nadie conoce funciona igual con sólo cargar su configuraci�
   const c = cuentaFiscalDeCola(LOCAL_NUEVO, 'FACTURACION_4');
   assert.strictEqual(c.razonSocial, 'HELADERIA NUEVA SRL');
   assert.strictEqual(c.puntoVenta, '0006');
-  assert.strictEqual(c.cuentaCobro, 'MERCADO PAGO', 'la cola 4 se alimenta de Mercado Pago');
+  assert.strictEqual(c.cuentaCobro, 'TRANSFERENCIA 4', 'la cola 4 se alimenta de Transferencia 4');
   assert.strictEqual(c.localIdDeclarado, '12345678');
   const v = validarCuentaFiscal(c, { localId: '12345678' });
   assert.strictEqual(v.listo, true, v.faltantes.join(', '));

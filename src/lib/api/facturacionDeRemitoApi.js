@@ -74,7 +74,7 @@ const dbDelMismoLocal = (raiz) => {
  * ALIAS DESTACADO del local (/{localId}/ALIAS).
  *
  *   /{localId}/ALIAS  →  la ÚNICA cuenta cuyo campo `alias` coincide
- *                     →  la cola fiscal de ESA cuenta (FACTURACION_1, 2 o 3)
+ *                     →  la cola fiscal de ESA cuenta (FACTURACION_1 a 9)
  *
  * La cola NO sale del texto del alias ni de `isFavorite`: sale de la cuenta a la
  * que el alias pertenece. Es la misma resolución —y el mismo módulo puro— que

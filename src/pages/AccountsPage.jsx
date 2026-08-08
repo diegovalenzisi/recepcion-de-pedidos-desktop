@@ -22,10 +22,15 @@ import {
   validarAsociacionPlataforma,
 } from '@/lib/api/facturaORemito';
 
+// El orden refleja el esquema de colas: transferencias 1–5, medios
+// bancarios/digitales 6–9, y al final las plataformas, que no ocupan cola
+// propia (facturan por la Transferencia que se les asocia).
 const ACCOUNT_NAMES = [
   "Transferencia",
   "Transferencia 2",
   "Transferencia 3",
+  "Transferencia 4",
+  "Transferencia 5",
   "Mercado Pago",
   "Cuenta DNI",
   "Banco 1",
@@ -69,7 +74,7 @@ function AccountsPageContent() {
     [accountData.nombre]
   );
 
-  // Opciones del desplegable: SOLO cuentas que resuelven FACTURACION_1, 2 o 3.
+  // Opciones del desplegable: SOLO Transferencias (FACTURACION_1 a 5).
   // Sin remitos y sin otras plataformas. La cantidad depende de este local.
   const opcionesAsociables = useMemo(
     () => cuentasAsociablesParaFacturacion(accounts || []),
@@ -413,8 +418,8 @@ function AccountsPageContent() {
                   </Label>
                   {opcionesAsociables.length === 0 ? (
                     <p className="text-sm text-red-600">
-                      Este local no tiene ninguna cuenta que resuelva FACTURACION_1, 2 o 3.
-                      Cargá una Transferencia, Transferencia 2 o Transferencia 3 antes de configurar esta cuenta.
+                      Este local no tiene ninguna Transferencia cargada.
+                      Cargá una Transferencia (1 a 5) antes de configurar esta cuenta.
                     </p>
                   ) : (
                     <>

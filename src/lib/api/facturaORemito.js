@@ -71,19 +71,29 @@ export const COMPROBANTE_REMITO = 'REMITO';
  * en la cola de "Transferencia".
  */
 export const COLAS_POR_CUENTA = Object.freeze({
+  // Las transferencias ocupan 1–5…
   'TRANSFERENCIA': 'FACTURACION_1',
   'TRANSFERENCIA 2': 'FACTURACION_2',
   'TRANSFERENCIA 3': 'FACTURACION_3',
-  'MERCADO PAGO': 'FACTURACION_4',
-  'CUENTA DNI': 'FACTURACION_5',
-  'BANCO 1': 'FACTURACION_6',
-  'BANCO 2': 'FACTURACION_7',
-  // PedidosYa prepago factura por la MISMA cola que Transferencia (decisión
-  // explícita del negocio). Antes iba a FACTURACION_8, que no existe como
-  // contribuyente configurado, así que en la práctica no se facturaba.
-  'PREPAGO PEDIDOSYA': 'FACTURACION_1',
-  'PREPAGO RAPPI': 'FACTURACION_9',
+  'TRANSFERENCIA 4': 'FACTURACION_4',
+  'TRANSFERENCIA 5': 'FACTURACION_5',
+  // …y los medios bancarios/digitales 6–9.
+  'MERCADO PAGO': 'FACTURACION_6',
+  'CUENTA DNI': 'FACTURACION_7',
+  'BANCO 1': 'FACTURACION_8',
+  'BANCO 2': 'FACTURACION_9',
+  // PEDIDOSYA y RAPPI NO figuran acá a propósito: no tienen cola propia. Su
+  // cola sale de la Transferencia que se les configura como cuenta asociada
+  // (`cuentaFacturacionAsociadaId`). Los mapeos viejos —PedidosYa a
+  // FACTURACION_1 y Rappi a FACTURACION_9— quedaron eliminados: mandaban a una
+  // cola fija sin mirar la asociación, que es justo lo que no debe pasar.
 });
+
+/** Tope deliberado: nueve colas fiscales por local, ni una más. */
+export const COLA_FISCAL_VALIDA = /^FACTURACION_[1-9]$/;
+
+/** ¿Es un nombre de cola fiscal válido en este esquema (1..9)? */
+export const esColaFiscalValida = (cola) => COLA_FISCAL_VALIDA.test(String(cola ?? ''));
 
 // ---------------------------------------------------------------------------
 // REGLA DEFINITIVA POR MEDIO DE PAGO — FUENTE ÚNICA
@@ -92,13 +102,22 @@ export const COLAS_POR_CUENTA = Object.freeze({
 // `imprimeFactura` encendido. Un interruptor mal configurado ya cortó la
 // facturación de Achaval en silencio; esta regla es la que lo impide.
 //
-//   Transferencia 3    → FACTURACION_3
-//   Transferencia 2    → FACTURACION_2
 //   Transferencia      → FACTURACION_1
-//   Prepago PedidosYa  → FACTURACION_1
-//   Efectivo           → sin cola (REMITO)
+//   Transferencia 2    → FACTURACION_2
+//   Transferencia 3    → FACTURACION_3
+//   Transferencia 4    → FACTURACION_4
+//   Transferencia 5    → FACTURACION_5
+//   Mercado Pago       → FACTURACION_6
+//   Cuenta DNI         → FACTURACION_7
+//   Banco 1            → FACTURACION_8
+//   Banco 2            → FACTURACION_9
+//   Efectivo           → sin cola (REMITO / Facturación 2)
+//   Prepago PedidosYa  → la cola de su CUENTA ASOCIADA (una Transferencia)
+//   Prepago Rappi      → la cola de su CUENTA ASOCIADA (una Transferencia)
 //
-// El ORDEN importa: "Transferencia 3" y "Transferencia 2" se evalúan ANTES que
+// Nueve colas por local y punto: no existe FACTURACION_10 ni superior.
+//
+// El ORDEN importa: "Transferencia 5" y "Transferencia 4" se evalúan ANTES que
 // la genérica, para que no terminen todas en FACTURACION_1. Además los patrones
 // están ANCLADOS (^...$): se compara el nombre COMPLETO ya normalizado, nunca
 // por "contiene". Así "Transferencia Mercado Pago" no cae por accidente en la
@@ -150,6 +169,8 @@ export function puedeEntrarAFacturacion(venta, contexto = {}) {
 
 /** Etiquetas de regla, para el log y para las pruebas. */
 export const REGLA = Object.freeze({
+  TRANSFERENCIA_5: 'TRANSFERENCIA_5',
+  TRANSFERENCIA_4: 'TRANSFERENCIA_4',
   TRANSFERENCIA_3: 'TRANSFERENCIA_3',
   TRANSFERENCIA_2: 'TRANSFERENCIA_2',
   TRANSFERENCIA_1: 'TRANSFERENCIA_1',
@@ -162,8 +183,16 @@ export const REGLA = Object.freeze({
 /** Campo donde la cuenta de plataforma guarda con qué cuenta fiscal factura. */
 export const CAMPO_CUENTA_ASOCIADA = 'cuentaFacturacionAsociadaId';
 
-/** Colas fiscales que una cuenta asociada puede resolver. */
-export const COLAS_ASOCIABLES = Object.freeze(['FACTURACION_1', 'FACTURACION_2', 'FACTURACION_3']);
+/**
+ * Colas que puede resolver la cuenta asociada de una plataforma.
+ *
+ * SOLO las cinco transferencias. PedidosYa y Rappi se asocian exclusivamente a
+ * una Transferencia: no se ofrecen Mercado Pago, Cuenta DNI ni los bancos, que
+ * son cuentas de cobro propias y viven en las colas 6–9.
+ */
+export const COLAS_ASOCIABLES = Object.freeze([
+  'FACTURACION_1', 'FACTURACION_2', 'FACTURACION_3', 'FACTURACION_4', 'FACTURACION_5',
+]);
 
 /**
  * Clave compacta de un medio de pago: mayúsculas, sin acentos, sin espacios ni
@@ -200,6 +229,12 @@ const CLAVES_RAPPI = Object.freeze([
  * y las resuelve `resolverCuentaAsociadaDePlataforma`, acá mismo, sin Firebase.
  */
 const REGLAS_MEDIO_PAGO = Object.freeze([
+  // De la más específica a la genérica: "Transferencia 5" tiene que resolverse
+  // ANTES que "Transferencia", o caerían todas en FACTURACION_1. Los patrones
+  // además están anclados (^…$), así que la comparación es contra el nombre
+  // completo y no por "contiene".
+  { regla: REGLA.TRANSFERENCIA_5, cola: 'FACTURACION_5', prueba: (k) => /^TRANSFERENCIA5$/.test(k) },
+  { regla: REGLA.TRANSFERENCIA_4, cola: 'FACTURACION_4', prueba: (k) => /^TRANSFERENCIA4$/.test(k) },
   { regla: REGLA.TRANSFERENCIA_3, cola: 'FACTURACION_3', prueba: (k) => /^TRANSFERENCIA3$/.test(k) },
   { regla: REGLA.TRANSFERENCIA_2, cola: 'FACTURACION_2', prueba: (k) => /^TRANSFERENCIA2$/.test(k) },
   { regla: REGLA.TRANSFERENCIA_1, cola: 'FACTURACION_1', prueba: (k) => /^TRANSFERENCIA1?$/.test(k) },
@@ -284,7 +319,7 @@ const entradasDeCuentas = (cuentas) => (
 
 /**
  * Cuentas que pueden ELEGIRSE en el desplegable "Cuenta asociada para
- * facturación": las que resuelven FACTURACION_1, 2 o 3. Se excluyen las cuentas
+ * facturación": las Transferencias (FACTURACION_1 a 5). Se excluyen las cuentas
  * de plataforma (no pueden apuntarse entre ellas ni a sí mismas) y cualquier
  * cuenta que genere remito o no tenga cola.
  *
@@ -322,7 +357,7 @@ export function validarAsociacionPlataforma({ plataformaId, asociadaId, cuentas 
 
   const cola = colaFiscalDeCuenta(cuenta.nombre);
   if (!cola || !COLAS_ASOCIABLES.includes(cola)) {
-    return { ok: false, motivo: `"${cuenta.nombre}" no resuelve FACTURACION_1, 2 ni 3.` };
+    return { ok: false, motivo: `"${cuenta.nombre}" no es una Transferencia: las plataformas solo se asocian a Transferencia 1 a 5.` };
   }
   return { ok: true, cuentaId, cuenta: cuenta.nombre, cola };
 }
@@ -359,8 +394,11 @@ export function resolverCuentaAsociadaDePlataforma({ plataformaId, cuentas } = {
 // es "Transferencia 2" — el texto no dice nada de eso, y está bien así.
 // ---------------------------------------------------------------------------
 
-/** Colas fiscales aceptadas como destino de PedidosYa prepago. */
-const COLAS_VALIDAS_ALIAS = Object.freeze(['FACTURACION_1', 'FACTURACION_2', 'FACTURACION_3']);
+// El alias destacado puede apuntar a CUALQUIER cuenta fiscal del esquema (1..9),
+// no solo a una Transferencia: es la cuenta con la que el local factura una
+// conversión manual desde Facturación 2. Distinto de COLAS_ASOCIABLES, que es
+// más restrictivo a propósito porque las plataformas solo se asocian a una
+// Transferencia.
 
 /**
  * @param {object} params
@@ -394,10 +432,10 @@ export function resolverCuentaDeAliasFavorito({ alias, cuentas } = {}) {
 
   const [cuentaId, cuenta] = coinciden[0];
   const cola = colaFiscalDeCuenta(cuenta.nombre);
-  if (!cola || !COLAS_VALIDAS_ALIAS.includes(cola)) {
+  if (!esColaFiscalValida(cola)) {
     return {
       estado: 'cuenta-sin-cola', alias, cuentaId, cuenta: cuenta.nombre, cola: cola || null,
-      motivo: `El alias "${alias}" corresponde a la cuenta "${cuenta.nombre}", que no resuelve a FACTURACION_1, 2 ni 3.`,
+      motivo: `El alias "${alias}" corresponde a la cuenta "${cuenta.nombre}", que no resuelve ninguna cola fiscal (FACTURACION_1 a 9).`,
     };
   }
 
