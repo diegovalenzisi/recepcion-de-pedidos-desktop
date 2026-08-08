@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.87",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.87%2FRecepcion-de-Pedidos-Setup-1.3.87.exe?alt=media",
-  "sha256": "4a2aecd7a5cd8c4582bf539e9d75774cccf8824b648ea27148dc1fa659f9412e",
-  "size": 125270938,
+  "latest": "1.3.88",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.88%2FRecepcion-de-Pedidos-Setup-1.3.88.exe?alt=media",
+  "sha256": "594d56fb43fdefd0347bf4774b9211337d1e1223c7b9de846a00ddd127d8c6ab",
+  "size": 125271304,
   "mandatory": true,
-  "releaseDate": "2026-08-07",
-  "notes": "Version 1.3.87. Una sola instancia de la aplicacion por computadora. Antes, con el sistema ya abierto, un doble clic en el icono arrancaba un segundo proceso que volvia a mostrar la configuracion inicial y podia duplicar los listeners de Firebase, el motor de facturacion y la impresion. Ahora el segundo intento no abre nada nuevo: trae al frente la ventana que ya estaba abierta, la restaura si estaba minimizada y la maximiza, dejando exactamente la pantalla donde se estaba trabajando, y avisa que el programa ya se encuentra abierto. La proteccion se toma antes de inicializar cualquier servicio, asi que la segunda instancia no llega a ejecutar la configuracion inicial ni a levantar nada por duplicado. No cambia ningun otro flujo: la facturacion, el stock, las ventas y la impresion siguen igual que en la 1.3.86."
+  "releaseDate": "2026-08-08",
+  "notes": "Version 1.3.88. Se agregan las cuentas Transferencia 4 y Transferencia 5, que ya se pueden elegir al crear una cuenta nueva. El esquema de colas de facturacion queda ordenado: las transferencias ocupan las colas 1 a 5 y los medios bancarios y digitales las 6 a 9, es decir Mercado Pago pasa a la 6, Cuenta DNI a la 7, Banco 1 a la 8 y Banco 2 a la 9. Prepago PedidosYa y Prepago Rappi dejan de tener una cola propia: facturan unicamente por la cuenta asociada que se les configura, que ahora puede ser cualquiera de las cinco transferencias. En una venta combinada con efectivo sigue mandando la transferencia utilizada y se factura el total completo en una sola entrada. Al crear una Transferencia 4 o 5 hay que cargar el contribuyente correspondiente en el manager de facturacion, igual que con las demas colas."
 }
