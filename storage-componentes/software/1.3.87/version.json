@@ -1,0 +1,7 @@
+{
+  "version": "1.3.87",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.87.exe",
+  "releaseDate": "2026-08-07",
+  "sha256": "4a2aecd7a5cd8c4582bf539e9d75774cccf8824b648ea27148dc1fa659f9412e",
+  "notes": "Una sola instancia de la aplicacion por computadora. Antes, con el sistema ya abierto, un doble clic en el icono arrancaba un segundo proceso que volvia a mostrar la configuracion inicial y podia duplicar los listeners de Firebase, el motor de facturacion y la impresion. Ahora el segundo intento no abre nada nuevo: trae al frente la ventana que ya estaba abierta, la restaura si estaba minimizada y la maximiza, dejando exactamente la pantalla donde se estaba trabajando, y avisa que el programa ya se encuentra abierto. La proteccion se toma antes de inicializar cualquier servicio, asi que la segunda instancia no llega a ejecutar la configuracion inicial ni a levantar nada por duplicado. No cambia ningun otro flujo: la facturacion, el stock, las ventas y la impresion siguen igual que en la 1.3.86."
+}

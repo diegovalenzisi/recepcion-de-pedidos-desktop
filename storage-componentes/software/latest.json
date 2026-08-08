@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.86",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.86%2FRecepcion-de-Pedidos-Setup-1.3.86.exe?alt=media",
-  "sha256": "8a1c1cf5eee2a47d384b43c4bc15d89ce639c59aadafee659e67413da78fff8c",
-  "size": 125271275,
+  "latest": "1.3.87",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.87%2FRecepcion-de-Pedidos-Setup-1.3.87.exe?alt=media",
+  "sha256": "4a2aecd7a5cd8c4582bf539e9d75774cccf8824b648ea27148dc1fa659f9412e",
+  "size": 125270938,
   "mandatory": true,
   "releaseDate": "2026-08-07",
-  "notes": "Version 1.3.86. Correccion urgente sobre la 1.3.85. En algunas PCs el motor de facturacion no podia arrancar: la cuenta quedaba con el index.mjs nuevo pero sin el modulo claimPedido.mjs que ese index necesita, y el motor reintentaba en bucle sin poder iniciar nunca. La proteccion se movio al unico punto por el que pasan todos los caminos que arrancan un motor, asi que ya no se puede arrancar con el runtime incompleto. Ademas la sincronizacion ahora verifica todos los archivos de origen ANTES de copiar cualquier cosa y comprueba los destinos despues de copiar, de modo que una cuenta no puede quedar a medias, y la carpeta de origen solo se acepta si esta completa. Como la sincronizacion corre en cada arranque, las cuentas ya instaladas se reparan solas: no hay que recrearlas ni entrar a Configuracion. La logica fiscal de la 1.3.85 no cambio: facturacion automatica por defecto, switch por PC, proteccion entre varias computadoras, consulta a ARCA y reconciliacion de comprobantes siguen igual."
+  "notes": "Version 1.3.87. Una sola instancia de la aplicacion por computadora. Antes, con el sistema ya abierto, un doble clic en el icono arrancaba un segundo proceso que volvia a mostrar la configuracion inicial y podia duplicar los listeners de Firebase, el motor de facturacion y la impresion. Ahora el segundo intento no abre nada nuevo: trae al frente la ventana que ya estaba abierta, la restaura si estaba minimizada y la maximiza, dejando exactamente la pantalla donde se estaba trabajando, y avisa que el programa ya se encuentra abierto. La proteccion se toma antes de inicializar cualquier servicio, asi que la segunda instancia no llega a ejecutar la configuracion inicial ni a levantar nada por duplicado. No cambia ningun otro flujo: la facturacion, el stock, las ventas y la impresion siguen igual que en la 1.3.86."
 }
