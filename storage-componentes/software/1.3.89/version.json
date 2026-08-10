@@ -1,0 +1,7 @@
+{
+  "version": "1.3.89",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.89.exe",
+  "releaseDate": "2026-08-09",
+  "sha256": "988f33c1d05f89d10a1ac283d02933151dd163d2f8a6bc24f3ed94b98696677b",
+  "notes": "Corrige la cantidad impresa en la comanda. Cuando un pedido llegaba con dos unidades del mismo producto y la misma seleccion de sabores en una sola linea, la comanda salia 1x aunque el total cobrara las dos. Ahora se respeta siempre la cantidad que trae el pedido: sale 2x con los sabores y las salsas impresos una sola vez, sin repetir el bloque. Las unidades que se piden por separado, con configuraciones distintas, se siguen imprimiendo como bloques independientes, cada uno con su propia seleccion, porque se preparan por separado. No cambia precios, totales, opcionales ni ninguna otra parte del sistema."
+}
