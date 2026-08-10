@@ -353,4 +353,96 @@ check('el modelo tampoco expone numeración de unidad', () => {
   assert.ok(!/unidadIndice|unidadTotal/.test(soloCodigo(fuenteModelo)), 'el modelo no debe leer la numeración');
 });
 
+// ---------------------------------------------------------------------------
+// UNA LÍNEA CONFIGURADA CON quantity > 1
+//
+// DLV Pedidos Web manda UNA sola línea con quantity: 2 cuando las dos unidades
+// llevan la misma selección. Antes la comanda forzaba esas líneas a 1 y salía
+// "1x" mientras el total cobraba dos. La cantidad tiene que salir del `quantity`
+// de la línea, siempre.
+// ---------------------------------------------------------------------------
+console.log('\nCantidad de una línea configurada:');
+
+for (const q of [1, 2, 5]) {
+  check(`configurado + quantity ${q} → ${q}x, en UN solo bloque`, () => {
+    const b = bloquesDeComanda([unidadDlv(['Dulce Granizado'], 'Frutilla', { quantity: q })]);
+    assert.strictEqual(b.length, 1, 'una línea es un bloque: la selección se imprime una sola vez');
+    assert.strictEqual(b[0].cantidad, q);
+    assert.strictEqual(b[0].esUnidad, true, 'sigue siendo una unidad configurada');
+  });
+}
+
+check('sin quantity válido, cae a 1', () => {
+  for (const q of [undefined, null, 0, -3, 'dos', NaN]) {
+    const b = bloquesDeComanda([unidadDlv(['Chocolate'], null, { quantity: q })]);
+    assert.strictEqual(b[0].cantidad, 1, `quantity=${JSON.stringify(q)} debería caer a 1`);
+  }
+});
+
+check('una línea SIN configuración sigue respetando su quantity', () => {
+  const b = bloquesDeComanda([{ id: '9', nombre: 'GASEOSA', quantity: 3 }]);
+  assert.strictEqual(b[0].cantidad, 3);
+  assert.strictEqual(b[0].esUnidad, false);
+});
+
+check('respetar quantity NO agrupa líneas distintas', () => {
+  // Dos líneas configuradas de a 1 siguen siendo dos bloques: pueden tener
+  // selecciones distintas y se preparan por separado.
+  const b = bloquesDeComanda([
+    unidadDlv(['Chocolate'], 'Frutilla', { quantity: 1 }),
+    unidadDlv(['Pistacho'], 'Dulce de leche', { quantity: 1 }),
+  ]);
+  assert.strictEqual(b.length, 2);
+  assert.deepStrictEqual(b.map((x) => x.cantidad), [1, 1]);
+});
+
+check('líneas con configuraciones distintas nunca se juntan, ni con quantity > 1', () => {
+  const b = bloquesDeComanda([
+    unidadDlv(['Chocolate'], 'Frutilla', { quantity: 2 }),
+    unidadDlv(['Pistacho'], 'Frutilla', { quantity: 3 }),
+  ]);
+  assert.strictEqual(b.length, 2, 'cada línea conserva su bloque');
+  assert.deepStrictEqual(b.map((x) => x.cantidad), [2, 3], 'cada una con SU cantidad');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nPedido REAL 7785 (Centenario, 09/08/2026):');
+
+// Payload tal cual quedó en /51501748/PEDIDOS/7785. Total $11.000 = 5500 × 2.
+const PEDIDO_7785 = [{
+  id: '85',
+  nombre: '1/4 KILO DE HELADO',
+  quantity: 2,
+  valor: 5500,
+  selectedOptionals: {
+    '1G': [
+      { nombre: 'Dulce Granizado', quantity: 1 },
+      { nombre: 'Mantecol', quantity: 1 },
+      { nombre: 'Bananita Dolca', quantity: 1 },
+    ],
+    '2G': [{ nombre: 'Frutilla', quantity: 1 }],
+  },
+}];
+
+check('sale 2x 1/4 KILO DE HELADO, no 1x', () => {
+  const b = bloquesDeComanda(PEDIDO_7785);
+  assert.strictEqual(b.length, 1, 'un solo bloque');
+  assert.strictEqual(b[0].cantidad, 2, 'era el bug: salía 1x mientras se cobraban 2');
+  assert.strictEqual(b[0].item.nombre, '1/4 KILO DE HELADO');
+});
+
+check('la cantidad coincide con lo que se cobró', () => {
+  const it = PEDIDO_7785[0];
+  const b = bloquesDeComanda(PEDIDO_7785);
+  assert.strictEqual(it.valor * b[0].cantidad, 11000, 'la comanda tiene que cuadrar con el total del pedido');
+});
+
+check('los sabores y la salsa se imprimen UNA sola vez', () => {
+  const b = bloquesDeComanda(PEDIDO_7785);
+  const grupos = gruposDeOpcionales(b[0].item.selectedOptionals, CATALOGO);
+  const nombres = grupos.flatMap((g) => g.opciones.map((o) => o.nombre));
+  assert.deepStrictEqual(nombres, ['Dulce Granizado', 'Mantecol', 'Bananita Dolca', 'Frutilla']);
+  assert.strictEqual(nombres.length, new Set(nombres).size, 'no se duplica ningún opcional por la cantidad');
+});
+
 console.log(`\n${passed} verificaciones OK`);

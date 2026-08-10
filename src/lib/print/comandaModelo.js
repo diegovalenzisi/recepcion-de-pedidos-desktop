@@ -199,10 +199,15 @@ export function esUnidadConfigurada(item) {
 /**
  * Bloques de la comanda, en el mismo orden en que se pidieron.
  *
- * - Unidad configurada → UN bloque propio, con el nombre del artículo repetido
- *   y su selección. NUNCA se junta con otra, ni aunque la selección sea
+ * - Unidad configurada → UN bloque propio, con el nombre del artículo y su
+ *   selección. NUNCA se junta con otra línea, ni aunque la selección sea
  *   idéntica: se pidieron por separado y se preparan por separado.
  * - Cantidad simple    → un bloque con "N x ARTÍCULO", como siempre.
+ *
+ * En los dos casos la cantidad del bloque es el `quantity` de ESA línea. Una
+ * línea configurada con quantity 2 —como las que manda DLV Pedidos Web cuando
+ * las dos unidades llevan lo mismo— sale como "2x" con la selección impresa UNA
+ * sola vez, no como dos bloques repetidos.
  *
  * No se numera nada: los bloques se distinguen por la separación visual que
  * agrega la comanda. No cambia precios, ni cantidades, ni el orden.
@@ -219,8 +224,18 @@ export function bloquesDeComanda(items) {
     const cantidadLinea = Number(it.quantity);
     salida.push({
       item: it,
-      // Una unidad configurada vale 1: su cantidad ya está en que existe la línea.
-      cantidad: esUnidad ? 1 : (Number.isFinite(cantidadLinea) && cantidadLinea > 0 ? cantidadLinea : 1),
+      // SIEMPRE manda el `quantity` de la línea, tenga configuración o no.
+      //
+      // Antes una línea configurada se forzaba a 1, dando por sentado que dos
+      // unidades siempre llegaban como dos líneas. Eso vale para el carrito de
+      // Desktop, pero DLV Pedidos Web manda UNA línea con quantity: 2 cuando las
+      // dos unidades comparten la misma selección — y la comanda salía "1x"
+      // mientras el total cobraba dos (pedido 7785 de Centenario, 09/08/2026).
+      //
+      // Respetar `quantity` no junta líneas distintas: cada una sigue siendo su
+      // propio bloque, así que dos líneas configuradas de a 1 se siguen
+      // imprimiendo por separado.
+      cantidad: Number.isFinite(cantidadLinea) && cantidadLinea > 0 ? cantidadLinea : 1,
       esUnidad,
     });
   }
