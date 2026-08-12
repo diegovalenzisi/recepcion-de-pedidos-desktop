@@ -819,6 +819,95 @@ check('la cancelación gana sobre el total: se informa cancelación, no total', 
   assert.strictEqual(r.motivo, 'cancelacion');
 });
 
+// ---------------------------------------------------------------------------
+// DELIVERY: EL IMPORTE VIVE EN payment.total, NO EN LA RAÍZ
+//
+// La barrera de "total inválido" leía sólo `TOTAL`/`total` de la raíz. Un pedido
+// de delivery no los tiene: su importe está en `payment.total`. Resultado: TODA
+// venta de delivery se degradaba a remito y jamás llegaba a la cola fiscal.
+//
+// Los payloads de acá son pedidos REALES de producción (agosto 2026), copiados
+// tal cual estaban en Firebase.
+// ---------------------------------------------------------------------------
+console.log('\nDelivery: el importe está en payment.total (regresión 1.3.83):');
+
+/** Pedido 4693 de Achaval, 09/08/2026 — $11.000 por Transferencia. */
+const delivery4693 = {
+  id: '4693',
+  status: { main: 'ENTREGADO' },
+  type: 'ENVIO',
+  emiteFactura: false,
+  payment: { method: 'Transferencia', total: 11000, amount: 11000 },
+};
+
+const cuentasConTransferencia = {
+  'cta-1': { nombre: 'Transferencia', imprimeFactura: true, isFavorite: true },
+  'cta-2': { nombre: 'Transferencia 2', imprimeFactura: true },
+};
+
+check('el pedido real 4693 pasa la barrera (antes la bloqueaba)', () => {
+  const r = puedeEntrarAFacturacion(delivery4693);
+  assert.strictEqual(r.ok, true, `bloqueado: ${r.detalle || ''}`);
+});
+
+check('el pedido real 4693 se encola en FACTURACION_1 por $11.000', () => {
+  const d = decidirComprobante({ venta: delivery4693, cuentas: cuentasConTransferencia });
+  assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
+  const e = resolverEncolado(d, cuentasConTransferencia);
+  assert.strictEqual(e.estado, 'encolar');
+  assert.strictEqual(e.cola, 'FACTURACION_1');
+  assert.strictEqual(e.total, 11000, 'se factura el total completo del pedido');
+});
+
+check('delivery con Transferencia 2 → FACTURACION_2, por payment.total', () => {
+  const v = { ...delivery4693, payment: { method: 'Transferencia 2', total: 17500, amount: 17500 } };
+  assert.strictEqual(puedeEntrarAFacturacion(v).ok, true);
+  const e = resolverEncolado(decidirComprobante({ venta: v, cuentas: cuentasConTransferencia }), cuentasConTransferencia);
+  assert.strictEqual(e.cola, 'FACTURACION_2');
+  assert.strictEqual(e.total, 17500);
+});
+
+check('delivery en efectivo sigue siendo remito (no lo habilita el fix)', () => {
+  const v = { ...delivery4693, payment: { method: 'Efectivo', total: 29000, amount: 29000 } };
+  assert.strictEqual(puedeEntrarAFacturacion(v).ok, true, 'la barrera ya no lo frena por el importe');
+  const d = decidirComprobante({ venta: v, cuentas: cuentasConTransferencia });
+  assert.strictEqual(d.comprobante, COMPROBANTE_REMITO, 'pero efectivo sigue yendo a remito');
+});
+
+check('delivery con pago combinado: efectivo + transferencia, total completo', () => {
+  const v = {
+    id: '4700', status: { main: 'ENTREGADO' },
+    payment: { method: 'Pago Dividido', total: 20000, payments: [
+      { method: 'Efectivo', amount: 8000 }, { method: 'Transferencia 2', amount: 12000 },
+    ] },
+  };
+  assert.strictEqual(puedeEntrarAFacturacion(v).ok, true);
+  const e = resolverEncolado(decidirComprobante({ venta: v, cuentas: cuentasConTransferencia }), cuentasConTransferencia);
+  assert.strictEqual(e.cola, 'FACTURACION_2');
+  assert.strictEqual(e.total, 20000, 'el total completo, no sólo la parte transferida');
+});
+
+check('un cero REAL en payment.total sigue bloqueando', () => {
+  const v = { ...delivery4693, payment: { method: 'Transferencia', total: 0, amount: 0 } };
+  const r = puedeEntrarAFacturacion(v);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.motivo, 'total-invalido');
+});
+
+check('una cancelación de delivery sigue sin facturar, aunque tenga importe', () => {
+  const v = { ...delivery4693, status: { main: 'CANCELADO' } };
+  const r = puedeEntrarAFacturacion(v);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.motivo, 'cancelacion');
+});
+
+check('mostrador no cambia: sigue leyendo el total de la raíz', () => {
+  assert.strictEqual(puedeEntrarAFacturacion({ total: 14400, payments: [{ method: 'Transferencia', amount: 14400 }] }).ok, true);
+  assert.strictEqual(puedeEntrarAFacturacion({ TOTAL: 9000 }).ok, true);
+  assert.strictEqual(puedeEntrarAFacturacion({ total: 0 }).ok, false, 'el cero de la raíz sigue bloqueando');
+  assert.strictEqual(puedeEntrarAFacturacion({}).ok, false, 'sin ningún importe, no se factura');
+});
+
 console.log('\nEl total de mostrador tiene que llegar a la decisión:');
 check('sin total, la venta no se puede facturar (era el bug del comprobante en $0)', () => {
   // Lo que hacía saveCounterSale: pasar sólo los pagos. `totalDeVenta` no suma

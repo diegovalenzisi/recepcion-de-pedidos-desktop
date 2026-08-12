@@ -155,12 +155,31 @@ export function puedeEntrarAFacturacion(venta, contexto = {}) {
     };
   }
 
-  const total = Number(venta?.TOTAL ?? venta?.total);
+  // DÓNDE VIVE EL IMPORTE SEGÚN EL ORIGEN DE LA VENTA.
+  //
+  // Mostrador y los registros fiscales guardan `total` / `TOTAL` en la raíz,
+  // pero un PEDIDO DE DELIVERY no: su importe está SÓLO en `payment.total`.
+  // Leer únicamente la raíz daba `undefined` para todo delivery, esta barrera lo
+  // tomaba como "total inválido" y la venta se degradaba a remito — con lo cual
+  // NINGUNA venta de delivery llegaba a la cola fiscal, cobrada por
+  // transferencia o no. Verificado en producción: de 613 pedidos de delivery con
+  // transferencia (agosto 2026, los 6 locales con delivery), el 100% no tiene
+  // `total` en la raíz.
+  //
+  // `totalDeVenta` ya resuelve esa cascada (total → payment.total →
+  // payment.amount → importe) y es la MISMA que usa el resto del circuito para
+  // decidir el importe del comprobante, así que la barrera no puede volver a
+  // discrepar con lo que después se factura. `TOTAL` en mayúsculas se consulta
+  // aparte porque es la forma de los registros fiscales ya emitidos.
+  //
+  // Un cero REAL sigue bloqueando: `??` sólo cae cuando el campo es null o
+  // undefined, no cuando vale 0.
+  const total = Number(venta?.TOTAL ?? totalDeVenta(venta));
   if (!Number.isFinite(total) || total <= 0) {
     return {
       ok: false,
       motivo: 'total-invalido',
-      detalle: `Facturación omitida: total inválido o menor/igual a cero (${JSON.stringify(venta?.TOTAL ?? venta?.total)}).`,
+      detalle: `Facturación omitida: total inválido o menor/igual a cero (${JSON.stringify(venta?.TOTAL ?? venta?.total ?? venta?.payment?.total)}).`,
     };
   }
 
