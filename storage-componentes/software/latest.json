@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.90",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.90%2FRecepcion-de-Pedidos-Setup-1.3.90.exe?alt=media",
-  "sha256": "6358be426e91eeb2a614e5ba27bbde92bf30cb3e78d6f57bc831dbcfe1341adb",
-  "size": 125269684,
+  "latest": "1.3.91",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.91%2FRecepcion-de-Pedidos-Setup-1.3.91.exe?alt=media",
+  "sha256": "8e73729aa1119186a9b365821aef1a524ad042e1239adf48e9a71ad9ad3305b7",
+  "size": 125270476,
   "mandatory": true,
-  "releaseDate": "2026-08-12",
-  "notes": "Version 1.3.90. Correccion importante de facturacion. Las ventas de DELIVERY no llegaban a facturarse: una barrera interna leia el importe de la venta en un campo que los pedidos de delivery no usan, lo interpretaba como importe invalido y convertia la venta en remito, asi que nunca entraba a la cola fiscal, aunque se hubiera cobrado por transferencia. Ahora el importe se lee con la misma regla que usa el resto del sistema, que contempla el total del pago, y toda venta de delivery cobrada por transferencia se factura por su cuenta fiscal y su cola correspondiente. Mostrador no cambia. El efectivo sigue generando remito, las cancelaciones siguen sin facturar y los pagos combinados se facturan por el total completo de la venta. Esta version no recupera ni reenvia ninguna venta anterior: solo corrige las ventas nuevas de aca en adelante."
+  "releaseDate": "2026-08-13",
+  "notes": "Version 1.3.91. Corrige las opciones que ofrece una promocion. Cuando una promocion permite elegir un articulo de un grupo, ahora solo se ofrecen los que realmente se pueden vender en ese momento: un sabor agotado deja de aparecer dentro de la promocion, igual que ya desaparecia de la grilla, y vuelve a aparecer solo cuando se repone el stock, sin tener que editar la promocion. Antes ese control se aplicaba solo en algunas promociones segun como estuvieran configuradas para descontar stock, asi que en el resto se podian elegir sabores en cero y la venta fallaba recien al descontar. La disponibilidad se toma del mismo catalogo que alimenta la pantalla, de modo que dentro y fuera de la promocion se ve siempre lo mismo. No cambia precios, ni la composicion de las promociones, ni la forma en que se descuenta el stock."
 }

@@ -1,0 +1,7 @@
+{
+  "version": "1.3.91",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.91.exe",
+  "releaseDate": "2026-08-13",
+  "sha256": "8e73729aa1119186a9b365821aef1a524ad042e1239adf48e9a71ad9ad3305b7",
+  "notes": "Corrige las opciones que ofrece una promocion. Cuando una promocion permite elegir un articulo de un grupo, ahora solo se ofrecen los que realmente se pueden vender en ese momento: un sabor agotado deja de aparecer dentro de la promocion, igual que ya desaparecia de la grilla, y vuelve a aparecer solo cuando se repone el stock, sin tener que editar la promocion. Antes ese control se aplicaba solo en algunas promociones segun como estuvieran configuradas para descontar stock, asi que en el resto se podian elegir sabores en cero y la venta fallaba recien al descontar. La disponibilidad se toma del mismo catalogo que alimenta la pantalla, de modo que dentro y fuera de la promocion se ve siempre lo mismo. No cambia precios, ni la composicion de las promociones, ni la forma en que se descuenta el stock."
+}
