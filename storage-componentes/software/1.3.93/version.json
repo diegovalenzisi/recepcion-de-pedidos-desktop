@@ -1,0 +1,7 @@
+{
+  "version": "1.3.93",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.93.exe",
+  "releaseDate": "2026-08-13",
+  "sha256": "b0ef39f0f232e6635a4642dff3e445ba8682444050b652b08af92ac45262501b",
+  "notes": "Corrige un bloqueo al cobrar. Cuando una cuenta de cobro tenia el interruptor de facturacion apagado, el sistema igual intentaba facturarla porque decidia por el NOMBRE de la cuenta y no por el interruptor, y la venta se detenia con un error fiscal en lugar de emitirse como remito. Se notaba sobre todo en Delivery, donde ese error impide pasar el pedido a Entregado. Ahora manda el interruptor: si esta apagado la venta sale como remito, se registra normalmente y no se escribe nada en ninguna cola de facturacion. El nombre de la cuenta sigue definiendo a que cola va una venta que si corresponde facturar. El efectivo sigue generando remito y las cuentas de PedidosYa y Rappi siguen facturando por la cuenta que se les asocia. El interruptor pasa a llamarse Emite factura en pantalla; la configuracion guardada no cambia."
+}

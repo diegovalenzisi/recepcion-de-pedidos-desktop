@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.92",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.92%2FRecepcion-de-Pedidos-Setup-1.3.92.exe?alt=media",
-  "sha256": "0f476e5b9d25e2b015ae8f87d167a65c1776e14fdbaab6306f5bc5a632153544",
-  "size": 125271030,
+  "latest": "1.3.93",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.93%2FRecepcion-de-Pedidos-Setup-1.3.93.exe?alt=media",
+  "sha256": "b0ef39f0f232e6635a4642dff3e445ba8682444050b652b08af92ac45262501b",
+  "size": 125270882,
   "mandatory": true,
   "releaseDate": "2026-08-13",
-  "notes": "Version 1.3.92. Corrige que Heladera no registraba la hora real al pasar EN HELADERA (mostraba No disponible). handleToggleHeladera y el guardado desde Editar Pedido solo guardaban el flag SI/NO, nunca un horario; ahora se guarda times.heladera igual que times.assignment y times.delivered, sin tocar el registro anterior al retirar de la heladera. No inventa horarios para pedidos viejos que nunca tuvieron el registro."
+  "notes": "Version 1.3.93. Corrige un bloqueo al cobrar. Cuando una cuenta de cobro tenia el interruptor de facturacion apagado, el sistema igual intentaba facturarla porque decidia por el NOMBRE de la cuenta y no por el interruptor, y la venta se detenia con un error fiscal en lugar de emitirse como remito. Se notaba sobre todo en Delivery, donde ese error impide pasar el pedido a Entregado. Ahora manda el interruptor: si esta apagado la venta sale como remito, se registra normalmente y no se escribe nada en ninguna cola de facturacion. El nombre de la cuenta sigue definiendo a que cola va una venta que si corresponde facturar. El efectivo sigue generando remito y las cuentas de PedidosYa y Rappi siguen facturando por la cuenta que se les asocia. El interruptor pasa a llamarse Emite factura en pantalla; la configuracion guardada no cambia."
 }
