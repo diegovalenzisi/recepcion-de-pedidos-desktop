@@ -296,13 +296,24 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
       const payload = {
         client: updatedData.client,
         payment: {
-          ...orderToEditClient.payment, 
-          ...updatedData.payment,     
+          ...orderToEditClient.payment,
+          ...updatedData.payment,
         },
         observation: updatedData.observation,
         type: updatedData.type,
         heladera: updatedData.heladera
       };
+
+      // Igual que en el toggle rápido de heladera: si este guardado hace pasar
+      // el pedido de "no en heladera" a "en heladera", registrar la hora real.
+      // Si ya estaba en SI y sigue en SI, no se pisa la hora ya guardada.
+      const wasHeladera = orderToEditClient.heladera === 'SI' || orderToEditClient.heladera === true || orderToEditClient.heladera === 'YES';
+      const isHeladera = updatedData.heladera === 'SI' || updatedData.heladera === true || updatedData.heladera === 'YES';
+      if (!wasHeladera && isHeladera) {
+        const now = new Date();
+        const heladeraTime = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        payload.times = { ...(orderToEditClient.times || {}), heladera: heladeraTime };
+      }
 
       if (updatedData.status) {
           payload.status = updatedData.status;
@@ -386,11 +397,23 @@ function DeliveryTab({ settings, context, currentShift, alarmingOrderIds = [], a
     
     const currentHeladera = order.heladera || 'NO';
     const newHeladera = currentHeladera === 'SI' || currentHeladera === true ? 'NO' : 'SI';
-    
+
+    // Al pasar a SI se registra la hora real de ingreso a heladera, igual que
+    // 'times/assignment' y 'times/delivered'. Al pasar a NO no se toca el
+    // registro anterior (no se borra el historial de cuándo entró).
+    const dataToUpdate = { heladera: newHeladera };
+    const cacheUpdate = { heladera: newHeladera };
+    if (newHeladera === 'SI') {
+      const now = new Date();
+      const heladeraTime = now.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      dataToUpdate['times/heladera'] = heladeraTime;
+      cacheUpdate.times = { ...(order.times || {}), heladera: heladeraTime };
+    }
+
     try {
-      optimisticUpdate(orderId, { heladera: newHeladera });
-      await updateOrder(orderId, { heladera: newHeladera }, currentShift);
-      toast({ 
+      optimisticUpdate(orderId, cacheUpdate);
+      await updateOrder(orderId, dataToUpdate, currentShift);
+      toast({
         title: "Estado actualizado", 
         description: `El pedido ${newHeladera === 'SI' ? 'ha sido guardado en la heladera' : 'ha sido retirado de la heladera'}.`,
         variant: "default"
