@@ -594,11 +594,10 @@ export function decidirComprobante({ venta, cuentas, emiteFacturaManual = false 
     // Contradicción entre la regla y la configuración. No se silencia: viaja en
     // la decisión para que la capa que escribe la registre en el log.
     let contradiccion = null;
-    if ((colaPorNombre || requiereCuentaAsociada) && interruptor === false) {
-      const destino = colaPorNombre || 'la cola de su cuenta asociada';
+    if (colaPorNombre && interruptor === false) {
       contradiccion = {
         metodo, regla, cuenta: cuenta?.nombre ?? null,
-        detalle: `El medio "${metodo}" debe facturar por regla (${regla} → ${destino}) pero su cuenta tiene imprimeFactura=false. Manda la regla: se factura igual.`,
+        detalle: `El medio "${metodo}" corresponde a ${colaPorNombre} por su nombre, pero su cuenta tiene "Emite factura" apagado. Manda el switch: la venta va a remito.`,
       };
     } else if (regla === REGLA.EFECTIVO_REMITO && interruptor === true) {
       contradiccion = {
@@ -612,8 +611,25 @@ export function decidirComprobante({ venta, cuentas, emiteFacturaManual = false 
       importe,
       cuenta: cuenta?.nombre ?? null,
       campoPresente: crudo !== null,
-      // Factura si lo dice la REGLA o, donde no hay regla, el interruptor.
-      imprimeFactura: (colaPorNombre !== null || requiereCuentaAsociada)
+      // ¿ESTE MEDIO FACTURA? MANDA EL INTERRUPTOR DE LA CUENTA.
+      //
+      // Antes la regla por NOMBRE forzaba `true`: una cuenta llamada
+      // "Transferencia 2" facturaba en FACTURACION_2 aunque su switch estuviera
+      // apagado. Se hizo así para que apagarlo por accidente no cortara la
+      // facturación en silencio, pero convierte el switch en decorativo: el
+      // dueño no podía decidir que una cuenta NO facture, y la venta se
+      // detenía con un error fiscal en vez de emitirse como remito.
+      //
+      // Ahora el nombre sólo dice A QUÉ COLA va una venta que YA se decidió
+      // facturar (ver `colaPorNombre` y `resolverEncolado`); no decide SI se
+      // factura. La contradicción se sigue registrando abajo para que apagar el
+      // switch de una cuenta que corresponde a una cola quede en el log.
+      //
+      // Dos excepciones que no cambian:
+      //  · EFECTIVO nunca factura, aunque el switch esté encendido;
+      //  · PedidosYa/Rappi facturan por su CUENTA ASOCIADA — su switch ni se
+      //    muestra en el formulario, así que no puede decidir por ellas.
+      imprimeFactura: requiereCuentaAsociada
         ? true
         : (regla === REGLA.EFECTIVO_REMITO ? false : interruptor),
       interruptor,
@@ -662,7 +678,11 @@ export function decidirComprobante({ venta, cuentas, emiteFacturaManual = false 
     // Colas resueltas POR NOMBRE entre los medios cobrados, sin repetir. En una
     // venta combinada el efectivo no aporta ninguna, así que queda la del medio
     // no efectivo — que es exactamente la que hay que usar.
-    colasPorNombre: [...new Set(metodos.map((m) => m.colaPorNombre).filter(Boolean))],
+    //
+    // SÓLO de los medios que efectivamente FACTURAN: el nombre dice a qué cola
+    // va una venta que ya se decidió facturar, no si se factura. Una cuenta con
+    // el switch apagado no aporta cola, aunque su nombre corresponda a una.
+    colasPorNombre: [...new Set(metodos.filter((m) => m.imprimeFactura).map((m) => m.colaPorNombre).filter(Boolean))],
     cuentasQueFacturan: [...new Set(facturan.map((m) => m.cuenta || m.metodo))],
     metodosSinCampo: [...new Set(metodos.filter((m) => !m.campoPresente).map((m) => m.metodo))],
   };
@@ -792,7 +812,7 @@ export function resolverEncolado(decision, cuentas) {
         estado: 'sin-cola',
         motivo:
           'No hay una cuenta fiscal habilitada para emitir esta factura: ninguna cuenta del local tiene ' +
-          '"Imprime Factura" encendido' +
+          '"Emite factura" encendido' +
           (nombreFavorita ? ` (la favorita, "${nombreFavorita}", tampoco).` : '.'),
       };
     }
@@ -835,7 +855,7 @@ export function mensajeDeBloqueo(encolado) {
   if (!encoladoBloqueado(encolado)) return null;
   return (
     `No se puede facturar esta venta: ${encolado.motivo} ` +
-    'Revisá el interruptor "Imprime Factura" y la cuenta favorita en Gestión de Cuentas. ' +
+    'Revisá el interruptor "Emite factura" y la cuenta favorita en Gestión de Cuentas. ' +
     'La venta NO se emitió como remito: el comprobante que corresponde es una factura.'
   );
 }

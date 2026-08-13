@@ -134,6 +134,29 @@ export const resolverComprobanteDeVenta = async (venta, { emiteFacturaManual = f
   if (encolado.estado === 'encolar') {
     const config = await leerConfigFiscal();
     const validacion = await validarColaAntesDeFacturar(encolado.cola, { config });
+
+    // "NO FACTURA" NO ES UN ERROR.
+    //
+    // Si la cuenta de cobro de esta cola tiene el switch apagado, la venta va a
+    // REMITO por decisión del dueño: no falta configuración, no hay nada que
+    // reportar y la venta tiene que seguir su curso normal.
+    //
+    // Antes acá sólo se miraba `listo`, que también es `false` en ese caso —una
+    // cuenta que no factura no está "lista para facturar"—, así que se lanzaba
+    // un error fiscal y la venta quedaba trabada. `esError` y `noFactura` son
+    // justamente los campos que distinguen "no puede" de "no debe".
+    if (validacion.noFactura || validacion.esError === false && !validacion.listo && validacion.mensaje === null) {
+      console.log(`[COMPROBANTE] ${encolado.cola}: su cuenta de cobro no emite factura — la venta se emite como remito.`);
+      return {
+        ...decision,
+        comprobante: COMPROBANTE_REMITO,
+        debeFacturarse: false,
+        motivo: 'cuenta-no-factura',
+        encolado: { estado: 'sin-factura', motivo: 'cuenta-no-factura' },
+        emisor: null,
+      };
+    }
+
     if (!validacion.listo) {
       const mensaje =
         `No se puede facturar esta venta: ${validacion.mensaje} ` +

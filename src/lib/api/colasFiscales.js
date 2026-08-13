@@ -466,7 +466,7 @@ export function detectarColasHuerfanas({
       runtimeEsperada: cuenta?.runtime || null,
       estado: validacion.noFactura ? ESTADO.NO_FACTURA : cuenta ? validacion.estado : ESTADO.HUERFANA,
       motivo: validacion.noFactura
-        ? `La cuenta "${CUENTA_COBRO_POR_COLA[cola]}" tiene "Imprime Factura" apagado —sus ventas deben ser remitos— ` +
+        ? `La cuenta "${CUENTA_COBRO_POR_COLA[cola]}" tiene "Emite factura" apagado —sus ventas deben ser remitos— ` +
           `pero ${cola} SIGUE recibiendo ventas nuevas. Algún equipo está enviándolas ahí: casi siempre es una PC ` +
           'con una versión anterior a esta regla. Hasta que se actualice, esas ventas se siguen acumulando sin facturarse.'
         : cuenta ? validacion.mensaje : mensajeDeEstado(ESTADO.HUERFANA, { cola }),

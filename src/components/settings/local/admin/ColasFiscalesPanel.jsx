@@ -72,7 +72,7 @@ function FilaCola({ fila }) {
 
           {fila.noFactura && (
             <p className="text-xs text-slate-500 mt-0.5">
-              La cuenta “{fila.cuentaCobro}” tiene “Imprime Factura” apagado: sus ventas generan remito.
+              La cuenta “{fila.cuentaCobro}” tiene “Emite factura” apagado: sus ventas generan remito.
               No necesita CUIT, punto de venta, certificado ni motor de facturación.
             </p>
           )}

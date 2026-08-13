@@ -16,6 +16,7 @@
 import { getDatabase, ref, get, query, orderByKey, limitToFirst } from 'firebase/database';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import { construirRutaLocal, normalizarLocalId } from '@/lib/api/rutasLocales';
+import { normalizarNombreCuenta } from '@/lib/api/facturaORemito';
 import {
   COLAS_FISCALES,
   COLA_LEGADA,
@@ -155,6 +156,25 @@ export const validarColaAntesDeFacturar = async (cola, { localId = null, config 
   if (!raiz) throw new Error('LOCAL_ID_REQUIRED: no hay local configurado.');
   const cfg = config || await leerConfigFiscal(raiz);
   const cuenta = cuentaFiscalDeCola(cfg, cola);
-  const validacion = validarCuentaFiscal(cuenta, { localId: raiz });
+
+  // EL SWITCH DE LA CUENTA DE COBRO TIENE QUE LLEGAR HASTA ACÁ.
+  //
+  // `validarCuentaFiscal` ya sabe qué hacer con una cola cuya cuenta de cobro
+  // NO factura: devuelve `noFactura:true` / `esError:false` y no pide CUIT,
+  // certificado ni runtime. Pero nunca se le pasaba el dato, así que ese camino
+  // no se ejecutaba nunca: la cola caía en "no configurada" y la venta se
+  // detenía con un error fiscal (`mensaje: null`) por una cuenta que
+  // deliberadamente no factura.
+  const nombreCobro = cuenta?.cuentaCobro ?? null;
+  let imprimeFactura = null;
+  if (nombreCobro) {
+    const switches = await leerSwitchesCuentaCobro(raiz);
+    const clave = normalizarNombreCuenta(nombreCobro);
+    // `undefined` = esa cuenta de cobro ya no existe en el local → se deja en
+    // null y decide el resto de la validación, como antes.
+    if (Object.prototype.hasOwnProperty.call(switches, clave)) imprimeFactura = switches[clave];
+  }
+
+  const validacion = validarCuentaFiscal(cuenta, { localId: raiz, imprimeFactura });
   return { ...validacion, cuenta };
 };

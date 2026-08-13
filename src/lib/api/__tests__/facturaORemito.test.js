@@ -180,19 +180,26 @@ for (const nombre of APAGADAS) {
   });
 }
 
-console.log('\nCon regla por nombre, el interruptor apagado YA NO corta la facturación:');
-for (const nombre of ['Transferencia', 'Transferencia 2', 'Transferencia 3', 'PREPAGO PEDIDOSYA']) {
-  check(`"${nombre}" apagada → se factura IGUAL, por regla`, () => {
+// EL SWITCH MANDA. El nombre dice a qué cola va una venta que YA se decidió
+// facturar; no decide SI se factura. Apagar "Emite factura" es una decisión
+// del dueño y tiene que poder tomarse.
+console.log('\nEl interruptor apagado manda sobre la regla por nombre:');
+for (const nombre of ['Transferencia', 'Transferencia 2', 'Transferencia 3']) {
+  check(`"${nombre}" apagada → REMITO, sin tocar ninguna cola`, () => {
     const d = resolver(venta([nombre, 8000]), [cuenta(nombre, false)]);
-    assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
-    // Una plataforma sin cuenta asociada configurada NO encola: se detiene con
-    // el error a la vista, nunca cae a FACTURACION_1 ni degrada a remito.
-    const esperado = resolverReglaMedioPago(nombre).requiereCuentaAsociada ? 'sin-cola' : 'encolar';
-    assert.strictEqual(d.encolado.estado, esperado);
-    if (d.encolado.estado === 'encolar') assert.strictEqual(d.encolado.total, 8000);
-    assert.strictEqual(d.contradicciones.length, 1, 'la contradicción tiene que quedar registrada');
+    assert.strictEqual(d.comprobante, COMPROBANTE_REMITO, 'el switch apagado manda');
+    assert.strictEqual(d.encolado.estado, 'sin-factura');
+    assert.strictEqual(d.encolado.cola, undefined, 'no se elige ninguna FACTURACION_*');
+    assert.strictEqual(d.contradicciones.length, 1, 'queda registrado que el nombre decía otra cosa');
+    assert.match(d.contradicciones[0].detalle, /Manda el switch/);
   });
 }
+check('las plataformas NO dependen del switch: facturan por su cuenta asociada', () => {
+  // Su switch ni se muestra en el formulario; lo que habilita es la asociación.
+  const d = resolver(venta(['PREPAGO PEDIDOSYA', 8000]), [cuenta('PREPAGO PEDIDOSYA', false)]);
+  assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
+  assert.strictEqual(d.encolado.estado, 'sin-cola', 'sin cuenta asociada se detiene, no degrada a remito');
+});
 check('"Efectivo" apagado → FCX, como corresponde', () => {
   const d = resolver(venta(['Efectivo', 8000]), [cuenta('Efectivo', false)]);
   assert.strictEqual(d.comprobante, COMPROBANTE_REMITO);
@@ -208,11 +215,10 @@ check('la cuenta existe pero nunca guardó el campo: sin regla → FCX y queda a
   assert.strictEqual(d.comprobante, COMPROBANTE_REMITO);
   assert.deepStrictEqual(d.metodosSinCampo, ['Mercado Pago']);
 });
-check('la cuenta nunca guardó el campo pero SÍ tiene regla → factura igual', () => {
+check('la cuenta nunca guardó el campo → NO factura (el default sigue siendo false)', () => {
   const d = resolver(venta(['Transferencia', 5000]), [cuenta('Transferencia')]);
-  assert.strictEqual(d.comprobante, COMPROBANTE_FACTURA);
-  assert.strictEqual(d.encolado.cola, 'FACTURACION_1');
-  assert.deepStrictEqual(d.metodosSinCampo, ['Transferencia'], 'igual queda avisado que falta el campo');
+  assert.strictEqual(d.comprobante, COMPROBANTE_REMITO, 'sin el campo se asume apagado, como siempre');
+  assert.deepStrictEqual(d.metodosSinCampo, ['Transferencia'], 'y queda avisado que falta el campo');
 });
 
 console.log('\nUna cuenta encendida → UNA factura por el TOTAL, en SU cola:');
@@ -625,14 +631,14 @@ check('cambiar el alias favorito cambia la cola, sin tocar el código', () => {
   assert.strictEqual(resolverCuentaDeAliasFavorito({ alias: 'MONICA.MP', cuentas: c }).cola, 'FACTURACION_3');
 });
 
-console.log('\nLa regla protege contra una configuración accidental:');
-check('Transferencia con imprimeFactura=false SIGUE facturando, y se registra la contradicción', () => {
+console.log('\nContradicciones entre el nombre y el switch: se registran, no se pisan:');
+check('Transferencia apagada NO factura, y la contradicción queda registrada', () => {
   const rotas = [{ nombre: 'Transferencia', imprimeFactura: false, isFavorite: true }];
   const { decision, encolado } = resolverCaso([{ method: 'Transferencia', amount: 7000 }], rotas);
-  assert.strictEqual(decision.comprobante, COMPROBANTE_FACTURA, 'el interruptor apagado no puede cortar la facturación');
-  assert.strictEqual(encolado.cola, 'FACTURACION_1');
+  assert.strictEqual(decision.comprobante, COMPROBANTE_REMITO, 'el switch del dueño manda');
+  assert.strictEqual(encolado.estado, 'sin-factura');
   assert.strictEqual(decision.contradicciones.length, 1);
-  assert.match(decision.contradicciones[0].detalle, /imprimeFactura=false/);
+  assert.match(decision.contradicciones[0].detalle, /Emite factura/);
 });
 
 check('Efectivo con imprimeFactura=true NO factura, pero avisa la contradicción', () => {

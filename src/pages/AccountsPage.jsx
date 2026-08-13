@@ -404,7 +404,7 @@ function AccountsPageContent() {
                     checked={accountData.imprimeFactura}
                     onCheckedChange={handleSwitchChange}
                   />
-                  <Label htmlFor="imprimeFactura" className="cursor-pointer">Imprime Factura</Label>
+                  <Label htmlFor="imprimeFactura" className="cursor-pointer">Emite factura</Label>
                 </div>
               )}
 
