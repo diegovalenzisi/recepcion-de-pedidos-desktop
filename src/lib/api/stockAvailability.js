@@ -197,6 +197,36 @@ export const getGroupOptionIds = (promoItem, productGroups = []) => {
 };
 
 /**
+ * Opciones que se le pueden OFRECER al operador para un ítem de grupo de una
+ * promoción: las del grupo (o su lista `permitidos`) que además estén
+ * disponibles AHORA en el canal actual.
+ *
+ * `idsDisponibles` viene del catálogo ya verificado por `useStockVerification`
+ * —la misma lista que alimenta la grilla—, así que lo que se puede elegir
+ * dentro de una promo es exactamente lo que se puede elegir fuera de ella. No
+ * se reimplementa ninguna regla de stock acá.
+ *
+ * Si `idsDisponibles` viene vacío se devuelven todas las opciones SIN filtrar:
+ * el catálogo verificado todavía no cargó, y "no sé nada" no es lo mismo que
+ * "no hay nada" — filtrar ahí cancelaría la promo por error.
+ *
+ * @param {object} promoItem       ítem de promo con `grupoId` y opcional `permitidos`
+ * @param {Array}  productGroups   grupos de productos del local
+ * @param {Array}  articulos       catálogo completo (para resolver id → artículo)
+ * @param {Set<string>} idsDisponibles ids que hoy se pueden vender en este canal
+ * @returns {Array<object>} artículos ofrecibles, en el orden del grupo
+ */
+export const opcionesDisponiblesDeGrupo = (promoItem, productGroups = [], articulos = [], idsDisponibles = new Set()) => {
+    const permitidos = getGroupOptionIds(promoItem, productGroups);
+    const opciones = permitidos
+        .map((id) => (articulos || []).find((a) => a && a.id === id))
+        .filter(Boolean);
+
+    if (!idsDisponibles || idsDisponibles.size === 0) return opciones;
+    return opciones.filter((o) => idsDisponibles.has(o.id));
+};
+
+/**
  * Determines whether a promotion is sellable based on the real availability
  * of its components: every fixed item must be available, and for each group
  * item at least one of its allowed options must be available.

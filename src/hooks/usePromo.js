@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { calcularCostoProducto } from '@/lib/utils/promoCosting';
+import { getGroupOptionIds, opcionesDisponiblesDeGrupo } from '@/lib/api/stockAvailability';
 
 const initialPromoConfig = {
   isConfiguring: false,
@@ -156,7 +157,7 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
 
       const group = (allProductGroups || []).find(g => g.id === promoItem.grupoId);
       const groupArticleIds = group?.articulos || [];
-      const allowedIds = (promoItem.permitidos && promoItem.permitidos.length > 0) ? promoItem.permitidos : groupArticleIds;
+      const allowedIds = getGroupOptionIds(promoItem, allProductGroups);
       let options = allowedIds
         .map(id => allArticles.find(art => art.id === id))
         .filter(Boolean);
@@ -175,21 +176,30 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
         maxSeleccion: promoItem.maxSeleccion,
       });
 
-      // When the promo discounts stock from its real components, only offer
-      // options that currently have stock available.
-      if (descuentaPorArticulo) {
-        const inStockOptions = options.filter(opt => availableIds.has(opt.id));
-        // [DIAG] Log de opciones con stock disponible
-        console.log('[PROMO DIAG] startPromo - con descuentaPorArticulo:', {
-          grupoId: promoItem.grupoId,
-          totalOpciones: options.length,
-          opcionesConStock: inStockOptions.length,
-          idsDisponibles: Array.from(availableIds),
-        });
-        if (inStockOptions.length > 0) {
-          options = inStockOptions;
-        } else {
-          console.warn('[PROMO DIAG] startPromo - GRUPO VACÍO (sin stock o sin artículos):', promoItem.grupoId, '- promoItems guardado:', JSON.stringify(promoItem));
+      // LO QUE SE OFRECE DENTRO DE UNA PROMO = LO QUE SE OFRECE FUERA DE ELLA.
+      //
+      // `verifiedArticles` es el catálogo ya filtrado por `useStockVerification`
+      // para el canal actual: la MISMA fuente que decide qué ve el operador en
+      // la grilla. Reutilizarla acá garantiza que un artículo agotado o apagado
+      // a mano no se pueda elegir dentro de una promoción, sin duplicar reglas.
+      //
+      // Antes este filtro corría SOLO si la promo tenía
+      // `stock.descuentaPorArticulo === true`. Las promos sin esa marca —que
+      // son la mayoría— ofrecían todos los artículos del grupo, incluidos los
+      // que estaban en cero, y recién fallaban al descontar. La disponibilidad
+      // de una opción no depende de CÓMO descuenta la promo, así que la
+      // condición no correspondía.
+      //
+      // Si `availableIds` está vacío el catálogo verificado todavía no cargó:
+      // en ese caso NO se filtra, porque "no sé nada" no es lo mismo que "no
+      // hay nada" y vaciar el grupo cancelaría la promo por error.
+      {
+        const disponibles = opcionesDisponiblesDeGrupo(promoItem, allProductGroups, allArticles, availableIds);
+        if (disponibles.length > 0) {
+          options = disponibles;
+        } else if (availableIds.size > 0) {
+          // Ninguna opción del grupo se puede vender: la promo no se puede armar.
+          console.warn('[PROMO] grupo sin opciones disponibles:', promoItem.grupoId, promoItem.nombre);
           hasEmptyGroup = true;
         }
       }
