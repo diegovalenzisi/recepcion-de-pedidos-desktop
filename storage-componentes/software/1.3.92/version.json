@@ -1,0 +1,7 @@
+{
+  "version": "1.3.92",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.92.exe",
+  "releaseDate": "2026-08-13",
+  "sha256": "0f476e5b9d25e2b015ae8f87d167a65c1776e14fdbaab6306f5bc5a632153544",
+  "notes": "Corrige que Heladera no registraba la hora real al pasar EN HELADERA (mostraba No disponible). handleToggleHeladera y el guardado desde Editar Pedido solo guardaban el flag SI/NO, nunca un horario; ahora se guarda times.heladera igual que times.assignment y times.delivered, sin tocar el registro anterior al retirar de la heladera. No inventa horarios para pedidos viejos que nunca tuvieron el registro."
+}
