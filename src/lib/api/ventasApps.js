@@ -20,9 +20,9 @@
 // ---------------------------------------------------------------------------
 
 /** Plataformas soportadas. El orden es el de las pestañas. */
-export const PLATAFORMAS = Object.freeze(['PEDIDOSYA', 'RAPPI']);
+export const PLATAFORMAS = Object.freeze(['PEDIDOSYA', 'RAPPI', 'MPAGO']);
 
-export const ETIQUETA_PLATAFORMA = Object.freeze({ PEDIDOSYA: 'PedidosYa', RAPPI: 'Rappi' });
+export const ETIQUETA_PLATAFORMA = Object.freeze({ PEDIDOSYA: 'PedidosYa', RAPPI: 'Rappi', MPAGO: 'M.PAGO' });
 
 /** Estados que NO son una venta cobrada: no suman ni se listan. */
 const ESTADOS_ANULADOS = new Set(['CANCELADO', 'CANCELADOS', 'ANULADO', 'RECHAZADO']);
@@ -44,6 +44,10 @@ export function normalizarPlataforma(valor) {
   if (!s) return null;
   if (s.includes('PEDIDOSYA') || s.includes('PEDIDOYA') || s.includes('PEYA')) return 'PEDIDOSYA';
   if (s.includes('RAPPI')) return 'RAPPI';
+  // "PREPAGO M.PAGO" normaliza a PREPAGOMPAGO (el punto ya se saca arriba).
+  // No colisiona con la cuenta "Mercado Pago" (MERCADOPAGO), que no contiene
+  // la secuencia MPAGO y sigue sin ser una app.
+  if (s.includes('MPAGO')) return 'MPAGO';
   return null;
 }
 

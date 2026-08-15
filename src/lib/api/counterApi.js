@@ -244,6 +244,8 @@ export const saveCounterSale = async (saleData, shift) => {
               await savePrepaymentForApp('PEDIDOSYA', payment.amount, fechaCaja);
             } else if (methodUpper.includes('PREPAGO RAPPI') || methodUpper === 'PREPAGO_RAPPI') {
               await savePrepaymentForApp('RAPPI', payment.amount, fechaCaja);
+            } else if (methodUpper.includes('PREPAGO M.PAGO') || methodUpper === 'PREPAGO_MPAGO') {
+              await savePrepaymentForApp('MPAGO', payment.amount, fechaCaja);
             }
           } catch (prepError) {
             console.error('[VENTA MOSTRADOR] error prepago:', prepError);

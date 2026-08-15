@@ -195,6 +195,7 @@ export const REGLA = Object.freeze({
   TRANSFERENCIA_1: 'TRANSFERENCIA_1',
   PEDIDOSYA_PREPAGO: 'PEDIDOSYA_PREPAGO',
   RAPPI_PREPAGO: 'RAPPI_PREPAGO',
+  MPAGO_PREPAGO: 'MPAGO_PREPAGO',
   EFECTIVO_REMITO: 'EFECTIVO_REMITO',
   SIN_REGLA: 'SIN_REGLA',
 });
@@ -240,6 +241,15 @@ const CLAVES_RAPPI = Object.freeze([
 ]);
 
 /**
+ * Nombres aceptados para M.PAGO prepago. Lista CERRADA, igual que las otras dos.
+ * OJO: "PREPAGO M.PAGO" normaliza a PREPAGOMPAGO y NO colisiona con la cuenta
+ * "Mercado Pago" (MERCADOPAGO), que sigue teniendo su cola fija FACTURACION_6.
+ */
+const CLAVES_MPAGO = Object.freeze([
+  'PREPAGOMPAGO', 'MPAGO',
+]);
+
+/**
  * Reglas EN ORDEN. La primera que coincide gana.
  *
  * PedidosYa y Rappi prepago NO tienen cola fija ni la sacan del alias del local:
@@ -259,6 +269,7 @@ const REGLAS_MEDIO_PAGO = Object.freeze([
   { regla: REGLA.TRANSFERENCIA_1, cola: 'FACTURACION_1', prueba: (k) => /^TRANSFERENCIA1?$/.test(k) },
   { regla: REGLA.PEDIDOSYA_PREPAGO, cola: null, requiereCuentaAsociada: true, prueba: (k) => CLAVES_PEDIDOSYA.includes(k) },
   { regla: REGLA.RAPPI_PREPAGO, cola: null, requiereCuentaAsociada: true, prueba: (k) => CLAVES_RAPPI.includes(k) },
+  { regla: REGLA.MPAGO_PREPAGO, cola: null, requiereCuentaAsociada: true, prueba: (k) => CLAVES_MPAGO.includes(k) },
   { regla: REGLA.EFECTIVO_REMITO, cola: null, prueba: (k) => /^EFECTIVO$/.test(k) },
 ]);
 
@@ -270,6 +281,7 @@ export function plataformaDeCuenta(nombre) {
   const clave = normalizarClaveMedioPago(nombre);
   if (CLAVES_PEDIDOSYA.includes(clave)) return REGLA.PEDIDOSYA_PREPAGO;
   if (CLAVES_RAPPI.includes(clave)) return REGLA.RAPPI_PREPAGO;
+  if (CLAVES_MPAGO.includes(clave)) return REGLA.MPAGO_PREPAGO;
   return null;
 }
 
@@ -277,6 +289,7 @@ export function plataformaDeCuenta(nombre) {
 export function nombreDePlataforma(regla) {
   if (regla === REGLA.PEDIDOSYA_PREPAGO) return 'PedidosYa';
   if (regla === REGLA.RAPPI_PREPAGO) return 'Rappi';
+  if (regla === REGLA.MPAGO_PREPAGO) return 'M.PAGO';
   return 'la plataforma';
 }
 

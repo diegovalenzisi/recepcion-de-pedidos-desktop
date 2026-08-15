@@ -10,7 +10,7 @@ export const savePrepayment = async (type, amount) => {
   if (!LOCAL_ID) throw new Error("Local ID no configurado");
 
   const db = getDatabase();
-  const dbType = type.replace(' ', '_'); 
+  const dbType = claveDePrepago(type.replace(' ', '_')); 
   const prepaymentsRef = ref(db, `${LOCAL_ID}/${dbType}`);
   const newRef = push(prepaymentsRef);
   
@@ -28,6 +28,19 @@ export const savePrepayment = async (type, amount) => {
   return record;
 };
 
+/**
+ * Nombre del nodo de un prepago, apto para Firebase.
+ *
+ * Realtime Database NO admite `.` `$` `#` `[` `]` `/` en una clave, y el tercer
+ * prepago se llama "PREPAGO M.PAGO": derivar la clave de su nombre visible daría
+ * `PREPAGO_M.PAGO`, una ruta inválida. Se saca el punto y queda `PREPAGO_MPAGO`,
+ * que es exactamente lo que escriben mostrador y delivery.
+ *
+ * Para PEDIDOSYA y RAPPI es un NO-OP: sus nombres no tienen puntos, así que
+ * siguen produciendo `PREPAGO_PEDIDOSYA` y `PREPAGO_RAPPI` byte a byte.
+ */
+const claveDePrepago = (nombre) => String(nombre ?? '').replace(/[.$#[\]/]/g, '');
+
 export const savePrepaymentForApp = async (appType, amount, currentShiftDate) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
@@ -35,7 +48,7 @@ export const savePrepaymentForApp = async (appType, amount, currentShiftDate) =>
 
   const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
-  const dbType = `PREPAGO_${appType.toUpperCase()}`;
+  const dbType = claveDePrepago(`PREPAGO_${appType.toUpperCase()}`);
 
   if (!currentShiftDate) throw new Error("currentShiftDate (DDMMAAAA) es requerido");
 
@@ -74,7 +87,7 @@ export const fetchPrepayments = async (type) => {
   if (!LOCAL_ID) return [];
 
   const db = getDatabase();
-  const dbType = type.replace(' ', '_');
+  const dbType = claveDePrepago(type.replace(' ', '_'));
   const prepaymentsRef = ref(db, `${LOCAL_ID}/${dbType}`);
   
   const snapshot = await get(prepaymentsRef);

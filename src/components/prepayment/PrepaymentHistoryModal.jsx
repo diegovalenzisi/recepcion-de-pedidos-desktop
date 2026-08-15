@@ -58,9 +58,10 @@ const PrepaymentHistoryModal = ({ isOpen, onClose }) => {
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="PREPAGO PEDIDOSYA">PedidosYa</TabsTrigger>
             <TabsTrigger value="PREPAGO RAPPI">Rappi</TabsTrigger>
+            <TabsTrigger value="PREPAGO M.PAGO">M.PAGO</TabsTrigger>
           </TabsList>
           
           <div className="flex justify-end mt-4">

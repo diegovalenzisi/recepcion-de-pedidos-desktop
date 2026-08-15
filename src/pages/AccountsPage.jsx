@@ -36,7 +36,8 @@ const ACCOUNT_NAMES = [
   "Banco 1",
   "Banco 2",
   "PREPAGO PEDIDOSYA",
-  "PREPAGO RAPPI"
+  "PREPAGO RAPPI",
+  "PREPAGO M.PAGO"
 ];
 
 const defaultAccountData = { nombre: '', aNombreDe: '', alias: '', imprimeFactura: false, isFavorite: false, cuentaFacturacionAsociadaId: '' };
@@ -144,7 +145,7 @@ function AccountsPageContent() {
 
   const handleSelectChange = useCallback((value) => {
     setAccountData(prev => ({ ...prev, nombre: value }));
-    if (value === 'PREPAGO PEDIDOSYA' || value === 'PREPAGO RAPPI') {
+    if (value === 'PREPAGO PEDIDOSYA' || value === 'PREPAGO RAPPI' || value === 'PREPAGO M.PAGO') {
       setSelectedPrepaymentType(value);
       setPrepaymentAmount('');
       setIsPrepaymentModalOpen(true);

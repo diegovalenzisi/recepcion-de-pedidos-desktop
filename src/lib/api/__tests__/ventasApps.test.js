@@ -62,10 +62,24 @@ check('los demás medios de pago NO son plataforma', () => {
   assert.strictEqual(esMedioDeApp('Efectivo'), false);
   assert.strictEqual(esMedioDeApp('PREPAGO RAPPI'), true);
 });
-check('las dos plataformas tienen etiqueta para la UI', () => {
-  assert.deepStrictEqual(PLATAFORMAS, ['PEDIDOSYA', 'RAPPI']);
+check('las tres plataformas tienen etiqueta para la UI', () => {
+  assert.deepStrictEqual(PLATAFORMAS, ['PEDIDOSYA', 'RAPPI', 'MPAGO']);
   assert.strictEqual(ETIQUETA_PLATAFORMA.PEDIDOSYA, 'PedidosYa');
   assert.strictEqual(ETIQUETA_PLATAFORMA.RAPPI, 'Rappi');
+  assert.strictEqual(ETIQUETA_PLATAFORMA.MPAGO, 'M.PAGO');
+});
+
+check('M.PAGO se reconoce y NO se confunde con la cuenta "Mercado Pago"', () => {
+  // "PREPAGO M.PAGO" es un prepago de app; "Mercado Pago" es una cuenta de
+  // cobro con cola fija (FACTURACION_6) y NO debe entrar a Reportes Prepago.
+  assert.strictEqual(normalizarPlataforma('PREPAGO M.PAGO'), 'MPAGO');
+  assert.strictEqual(normalizarPlataforma('PREPAGO_MPAGO'), 'MPAGO');
+  assert.strictEqual(normalizarPlataforma('Mercado Pago'), null);
+  assert.strictEqual(esMedioDeApp('PREPAGO M.PAGO'), true);
+  assert.strictEqual(esMedioDeApp('Mercado Pago'), false);
+  // Y las dos de siempre siguen resolviendo igual.
+  assert.strictEqual(normalizarPlataforma('PREPAGO PEDIDOSYA'), 'PEDIDOSYA');
+  assert.strictEqual(normalizarPlataforma('PREPAGO RAPPI'), 'RAPPI');
 });
 
 console.log('\nNormalización de fecha (formatos históricos):');
