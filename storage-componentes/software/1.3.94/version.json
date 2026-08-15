@@ -1,0 +1,7 @@
+{
+  "version": "1.3.94",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.94.exe",
+  "releaseDate": "2026-08-15",
+  "sha256": "ca06b4e69ca5cb0a66d1a82238d8425fc6a90a386e015ff456a7598bb770548e",
+  "notes": "Se agrega PREPAGO M.PAGO como tercer medio de prepago, junto a Prepago PedidosYa y Prepago Rappi. Funciona igual que los otros dos: aparece al crear una cuenta, se le elige la cuenta con la que factura, y sus ventas se facturan por esa cuenta tanto en mostrador como en delivery. Tambien aparece como una solapa propia en el historial de prepagos y como una categoria propia en Reportes Prepago, contabilizando unicamente sus ventas. Si no se le configura la cuenta con la que factura, la venta se detiene con el aviso a la vista, igual que ocurre con PedidosYa y Rappi. Prepago PedidosYa, Prepago Rappi y la cuenta Mercado Pago no cambian en nada, y los registros anteriores se siguen leyendo igual."
+}
