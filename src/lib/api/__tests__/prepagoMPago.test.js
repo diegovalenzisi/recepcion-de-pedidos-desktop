@@ -10,6 +10,7 @@
 //
 // Correr con: node src/lib/api/__tests__/prepagoMPago.test.js
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import {
   decidirComprobante,
   resolverEncolado,
@@ -199,6 +200,50 @@ check('compatibilidad: los registros históricos se siguen leyendo igual', () =>
   assert.strictEqual(normalizarPlataforma('PEDIDOS_YA'), 'PEDIDOSYA');
   assert.strictEqual(normalizarPlataforma('prepago-rappi'), 'RAPPI');
   assert.strictEqual(normalizarPlataforma('Rappi'), 'RAPPI');
+});
+
+// ---------------------------------------------------------------------------
+// LA PANTALLA REAL.
+//
+// En 1.3.94 se agregó MPAGO a PLATAFORMAS —con lo cual el ledger YA se leía—
+// pero la pantalla `PrepaymentReportPage.jsx` tiene las pestañas ESCRITAS A
+// MANO y no recorre esa constante, así que M.PAGO no aparecía. Verificar la
+// constante no alcanzaba: hay que atar la pantalla a la lista.
+// ---------------------------------------------------------------------------
+console.log('\n6. La pantalla de Reportes Prepago muestra las tres:');
+
+const fuentePagina = readFileSync(
+  new URL('../../../pages/PrepaymentReportPage.jsx', import.meta.url), 'utf8',
+);
+
+check('hay una pestaña por cada plataforma de PLATAFORMAS', () => {
+  for (const p of PLATAFORMAS) {
+    assert.match(fuentePagina, new RegExp(`TabsTrigger value="${p}"`), `falta la pestaña de ${p}`);
+    assert.match(fuentePagina, new RegExp(`renderTab\\('${p}'`), `falta el contenido de ${p}`);
+  }
+});
+
+check('la grilla de pestañas tiene tantas columnas como plataformas', () => {
+  const m = fuentePagina.match(/TabsList className="grid w-full max-w-\[400px\] grid-cols-(\d)/);
+  assert.ok(m, 'no se encontró la grilla de pestañas');
+  assert.strictEqual(Number(m[1]), PLATAFORMAS.length, 'la grilla quedó desalineada con PLATAFORMAS');
+});
+
+check('cada plataforma tiene su propio conjunto de filas filtradas', () => {
+  // Si faltara, la pestaña mostraría los datos de otra.
+  for (const p of PLATAFORMAS) {
+    assert.match(fuentePagina, new RegExp(`filtrarPorPlataforma\\(filasDelRango, '${p}'\\)`), `${p} no filtra sus filas`);
+  }
+});
+
+check('el subtítulo nombra a las tres', () => {
+  assert.match(fuentePagina, /Ventas cobradas con PedidosYa, Rappi y M\.PAGO/);
+});
+
+check('el ledger se lee por PLATAFORMAS, así que MPAGO llega solo', () => {
+  const flujo = readFileSync(new URL('../ventasAppsFlujo.js', import.meta.url), 'utf8');
+  assert.match(flujo, /for \(const plataforma of PLATAFORMAS\)/, 'el ledger dejó de recorrer PLATAFORMAS');
+  assert.match(flujo, /PREPAGO_\$\{plataforma\}/, 'la ruta del ledger cambió');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

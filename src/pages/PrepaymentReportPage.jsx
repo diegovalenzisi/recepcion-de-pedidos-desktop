@@ -75,7 +75,7 @@ const PrepaymentReportPage = () => {
           title: 'Error de carga',
           description: error?.message?.includes('LOCAL_ID_REQUIRED')
             ? 'No hay un local configurado.'
-            : 'No se pudieron obtener las ventas de PedidosYa/Rappi.',
+            : 'No se pudieron obtener las ventas de PedidosYa/Rappi/M.PAGO.',
         });
       } finally {
         if (vigente && idConsulta === consultaRef.current) setLoading(false);
@@ -118,11 +118,17 @@ const PrepaymentReportPage = () => {
 
   const filasPY = useMemo(() => filtrarPorPlataforma(filasDelRango, 'PEDIDOSYA'), [filasDelRango]);
   const filasRP = useMemo(() => filtrarPorPlataforma(filasDelRango, 'RAPPI'), [filasDelRango]);
+  // M.PAGO usa exactamente el mismo filtro: `normalizarPlataforma` ya resuelve
+  // "PREPAGO M.PAGO" a MPAGO, y el ledger vive en {localId}/PREPAGO_MPAGO.
+  const filasMP = useMemo(() => filtrarPorPlataforma(filasDelRango, 'MPAGO'), [filasDelRango]);
 
   const statsPY = useMemo(() => calcularTotales(filasPY), [filasPY]);
   const statsRP = useMemo(() => calcularTotales(filasRP), [filasRP]);
+  const statsMP = useMemo(() => calcularTotales(filasMP), [filasMP]);
 
-  const filasVisibles = activeTab === 'PEDIDOSYA' ? filasPY : filasRP;
+  const filasVisibles = activeTab === 'PEDIDOSYA' ? filasPY
+    : activeTab === 'RAPPI' ? filasRP
+      : filasMP;
 
   const handleExport = useCallback(() => {
     if (filasVisibles.length === 0) {
@@ -232,7 +238,7 @@ const PrepaymentReportPage = () => {
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 md:p-6 space-y-6">
       <Helmet>
         <title>Reportes de Prepago | DLV Sistemas</title>
-        <meta name="description" content="Ventas cobradas con PedidosYa y Rappi, con su historial completo." />
+        <meta name="description" content="Ventas cobradas con PedidosYa, Rappi y M.PAGO, con su historial completo." />
       </Helmet>
 
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -243,7 +249,7 @@ const PrepaymentReportPage = () => {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Reportes de Prepago</h1>
             <p className="text-sm text-muted-foreground">
-              Ventas cobradas con PedidosYa y Rappi{localId ? ` · local ${localId}` : ''}
+              Ventas cobradas con PedidosYa, Rappi y M.PAGO{localId ? ` · local ${localId}` : ''}
             </p>
           </div>
         </div>
@@ -291,17 +297,21 @@ const PrepaymentReportPage = () => {
       )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full max-w-[400px] grid-cols-2 mb-8">
+        <TabsList className="grid w-full max-w-[400px] grid-cols-3 mb-8">
           <TabsTrigger value="PEDIDOSYA" className="data-[state=active]:bg-[#EA044E] data-[state=active]:text-white transition-colors duration-300">
             PedidosYa
           </TabsTrigger>
           <TabsTrigger value="RAPPI" className="data-[state=active]:bg-[#FF441F] data-[state=active]:text-white transition-colors duration-300">
             Rappi
           </TabsTrigger>
+          <TabsTrigger value="MPAGO" className="data-[state=active]:bg-[#009EE3] data-[state=active]:text-white transition-colors duration-300">
+            M.PAGO
+          </TabsTrigger>
         </TabsList>
 
         {renderTab('PEDIDOSYA', filasPY, statsPY, '#EA044E')}
         {renderTab('RAPPI', filasRP, statsRP, '#FF441F')}
+        {renderTab('MPAGO', filasMP, statsMP, '#009EE3')}
       </Tabs>
     </motion.div>
   );
