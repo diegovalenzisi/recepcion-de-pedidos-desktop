@@ -8,6 +8,11 @@ dist/
 build/
 release/
 out/
+
+# Archivo historico LOCAL del dist de cada version publicada
+# (DIST ANTIGUOS/<version>/). Son ~5 MB por release y se guardan solo en
+# esta PC para poder recuperar el build exacto de una version: no se suben.
+DIST ANTIGUOS/
 *.exe
 *.msi
 *.zip
