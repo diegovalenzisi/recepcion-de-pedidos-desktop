@@ -1,0 +1,7 @@
+{
+  "version": "1.3.96",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.96.exe",
+  "releaseDate": "2026-08-16",
+  "sha256": "979abe2fc2ba1ac12f8201ec24b2a3966340ddff98216a4eea179c5bb99c86fb",
+  "notes": "Corrige el cierre de turno, que podia quedar a mitad de camino. Si una cuenta tenia un punto en el nombre (por ejemplo PREPAGO M.PAGO), el cierre respaldaba y limpiaba los pedidos y despues no lograba guardar la caja: el turno quedaba abierto y la pantalla mostraba cero ventas. Ahora el cierre revisa todos los datos ANTES de mover un solo pedido, y si algo no se pudiera guardar avisa y no toca nada. Ademas soporta cualquier nombre de cuenta, incluso con . # $ / [ ], y el mensaje de error dice que paso y si los pedidos ya se movieron. En Cuentas, Nueva Cuenta ofrece ahora PREPAGO MPAGO, sin el punto; las cuentas y los pedidos que ya existan con el nombre anterior siguen funcionando igual, con el mismo historial. No cambia la facturacion, ni el mostrador, ni el delivery, ni los datos guardados."
+}
