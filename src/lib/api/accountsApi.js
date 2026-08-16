@@ -1,5 +1,6 @@
 import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
 import { getDatabase, ref, runTransaction, get, set, onValue, off, update } from 'firebase/database';
+import { normalizarClaveMedioPago } from '@/lib/api/facturaORemito';
 
 export const fetchAccounts = async () => {
   checkLocalId();
@@ -220,6 +221,28 @@ export const findAccountByPaymentMethod = async (localId, paymentMethod) => {
   }
 };
 
+/**
+ * Busca la cuenta de un medio de pago. Se usa SOLO para armar mensajes
+ * (alias y titular en el WhatsApp de prepago y de delivery): no decide colas
+ * fiscales ni importes.
+ *
+ * DOS PASADAS, en este orden:
+ *
+ *   1. Coincidencia EXACTA, tal como fue siempre. Si hay una cuenta con ese
+ *      nombre literal, gana — no cambia ni un caso de los que ya funcionaban.
+ *   2. Recién si no hubo ninguna, coincidencia NORMALIZADA con
+ *      `normalizarClaveMedioPago` (mayúsculas, sin acentos, sin espacios ni
+ *      signos). Es lo que permite que un pedido histórico guardado con
+ *      "PREPAGO M.PAGO" encuentre la cuenta que hoy se llama "PREPAGO MPAGO"
+ *      en vez de mostrar el alias "No configurado".
+ *
+ * No se toca ningún dato histórico: el pedido conserva su nombre original y
+ * la equivalencia se resuelve en memoria, en el momento de la lectura.
+ *
+ * La segunda pasada es determinística aunque haya varias cuentas equivalentes:
+ * recorre en el orden de las claves y devuelve la primera, igual que la
+ * primera pasada.
+ */
 export const findAccountByExactPaymentMethod = async (localId, exactPaymentMethod) => {
   if (!localId || !exactPaymentMethod) return null;
   try {
@@ -228,15 +251,22 @@ export const findAccountByExactPaymentMethod = async (localId, exactPaymentMetho
     const snapshot = await get(accountsRef);
     if (snapshot.exists()) {
       const data = snapshot.val();
+      const armar = (key) => ({
+        id: key,
+        alias: data[key].alias,
+        aNombreDe: data[key].aNombreDe,
+        ...data[key]
+      });
+
       for (const key in data) {
         // Exact match, case-sensitive lookup only in CUENTAS
-        if (data[key].nombre === exactPaymentMethod) {
-          return {
-             id: key,
-             alias: data[key].alias,
-             aNombreDe: data[key].aNombreDe,
-             ...data[key]
-          };
+        if (data[key].nombre === exactPaymentMethod) return armar(key);
+      }
+
+      const buscado = normalizarClaveMedioPago(exactPaymentMethod);
+      if (buscado) {
+        for (const key in data) {
+          if (normalizarClaveMedioPago(data[key].nombre) === buscado) return armar(key);
         }
       }
     }

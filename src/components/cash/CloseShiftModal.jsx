@@ -203,8 +203,23 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
       onShiftClosed(null);
       onClose();
     } catch (error) {
-      console.error("Error closing shift:", error);
-      toast({ variant: 'destructive', title: 'Error', description: 'No se pudo cerrar el turno.' });
+      // UN ERROR DE CIERRE TIENE QUE DECIR DOS COSAS: qué falló y en qué punto
+      // quedó. El mensaje viejo ("No se pudo cerrar el turno.") ocultó durante
+      // todo un turno que los pedidos YA se habían respaldado y borrado: la
+      // caja mostraba $0 y nadie sabía por qué.
+      console.error("Error closing shift:", error, {
+        fase: error?.faseCierre, pedidosYaMovidos: error?.pedidosYaMovidos,
+      });
+      const detalle = error?.message || 'Error desconocido.';
+      const estado = error?.pedidosYaMovidos
+        ? 'ATENCIÓN: los pedidos del turno ya fueron respaldados y sacados de las pantallas. NO reintentes el cierre sin revisarlo o el turno quedará guardado con ventas en cero.'
+        : 'No se movió ningún pedido y el turno sigue abierto: se puede reintentar.';
+      toast({
+        variant: 'destructive',
+        title: 'No se pudo cerrar el turno',
+        description: `${detalle} ${estado}`,
+        duration: 20000,
+      });
     } finally {
       setIsLoading(false);
       setProgressMessage('');

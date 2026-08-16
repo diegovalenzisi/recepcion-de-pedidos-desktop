@@ -244,7 +244,10 @@ export const saveCounterSale = async (saleData, shift) => {
               await savePrepaymentForApp('PEDIDOSYA', payment.amount, fechaCaja);
             } else if (methodUpper.includes('PREPAGO RAPPI') || methodUpper === 'PREPAGO_RAPPI') {
               await savePrepaymentForApp('RAPPI', payment.amount, fechaCaja);
-            } else if (methodUpper.includes('PREPAGO M.PAGO') || methodUpper === 'PREPAGO_MPAGO') {
+            // "PREPAGO MPAGO" es el nombre actual; "PREPAGO M.PAGO" el histórico
+            // que quedó en cuentas y ventas viejas. Los dos escriben el MISMO
+            // ledger PREPAGO_MPAGO, así que el historial no se parte en dos.
+            } else if (methodUpper.includes('PREPAGO MPAGO') || methodUpper.includes('PREPAGO M.PAGO') || methodUpper === 'PREPAGO_MPAGO') {
               await savePrepaymentForApp('MPAGO', payment.amount, fechaCaja);
             }
           } catch (prepError) {

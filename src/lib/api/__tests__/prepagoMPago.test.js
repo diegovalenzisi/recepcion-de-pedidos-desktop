@@ -70,6 +70,34 @@ check('PREPAGO M.PAGO se reconoce como plataforma (muestra el desplegable)', () 
   assert.strictEqual(plataformaDeCuenta('PREPAGO RAPPI'), 'RAPPI_PREPAGO');
 });
 
+// EL NOMBRE DE LA CUENTA CAMBIÓ.
+//
+// Desde que el punto rompió el cierre del turno 103 de Achaval, la pantalla de
+// Cuentas ofrece "PREPAGO MPAGO" (sin punto). El histórico "PREPAGO M.PAGO"
+// sigue existiendo en cuentas y ventas ya guardadas, así que TODO tiene que
+// funcionar con los dos y terminar en el mismo lugar.
+check('PREPAGO MPAGO (nombre actual) se comporta igual que el histórico', () => {
+  assert.strictEqual(plataformaDeCuenta('PREPAGO MPAGO'), 'MPAGO_PREPAGO');
+  assert.strictEqual(colaFiscalDeCuenta('PREPAGO MPAGO'), null, 'tampoco tiene cola propia');
+  assert.strictEqual(normalizarPlataforma('PREPAGO MPAGO'), 'MPAGO');
+  assert.strictEqual(esMedioDeApp('PREPAGO MPAGO'), true);
+});
+
+check('Nueva Cuenta ofrece SOLO el nombre sin punto', () => {
+  const fuenteCuentas = readFileSync(new URL('../../../pages/AccountsPage.jsx', import.meta.url), 'utf8');
+  // Sólo el array, y sin comentarios: en la prosa SÍ se nombra al histórico,
+  // para explicar por qué se dejó de ofrecer. Lo que importa son las entradas.
+  const desde = fuenteCuentas.indexOf('const ACCOUNT_NAMES');
+  const lista = fuenteCuentas
+    .slice(desde, fuenteCuentas.indexOf('];', desde))
+    .replace(/\/\/.*$/gm, '');
+  assert.ok(lista.includes('"PREPAGO MPAGO"'), 'el desplegable no ofrece el nombre nuevo');
+  assert.ok(!lista.includes('"PREPAGO M.PAGO"'), 'el desplegable todavía ofrece el nombre con punto');
+  // Pero el modal de prepago tiene que seguir abriéndose para el histórico.
+  assert.match(fuenteCuentas, /NOMBRES_DE_PREPAGO[\s\S]{0,220}'PREPAGO M\.PAGO'/,
+    'una cuenta vieja ya no abriría el modal de carga de prepago');
+});
+
 check('NO tiene cola fiscal propia: la saca de su cuenta asociada', () => {
   assert.strictEqual(colaFiscalDeCuenta('PREPAGO M.PAGO'), null);
   assert.strictEqual(colaFiscalDeCuenta('PREPAGO PEDIDOSYA'), null);
@@ -139,6 +167,17 @@ for (const [canal, hacerVenta] of [['MOSTRADOR', ventaMostrador], ['DELIVERY', v
   });
 }
 
+check('facturación: el nombre actual va a la MISMA cola que el histórico', () => {
+  // Mismo local, misma cuenta asociada, sólo cambia cómo se llama la cuenta.
+  const conNombreNuevo = { ...CUENTAS, 'cta-mp': { nombre: 'PREPAGO MPAGO', cuentaFacturacionAsociadaId: 'cta-3' } };
+  for (const [canal, venta] of [['mostrador', ventaMostrador('PREPAGO MPAGO', 12500)],
+                                ['delivery', ventaDelivery('PREPAGO MPAGO', 12500)]]) {
+    const e = encolar(venta, conNombreNuevo);
+    assert.strictEqual(e.cola, 'FACTURACION_3', `${canal}: no resolvió la cuenta asociada`);
+    assert.strictEqual(e.total, 12500, `${canal}: no facturó por el total`);
+  }
+});
+
 check('M.PAGO sin cuenta asociada: se DETIENE, no cae a otra cola ni a remito', () => {
   const sin = { ...CUENTAS, 'cta-mp': { nombre: 'PREPAGO M.PAGO' } };
   const d = decidirComprobante({ venta: ventaMostrador('PREPAGO M.PAGO'), cuentas: sin });
@@ -171,6 +210,22 @@ check('la pestaña "PREPAGO M.PAGO" resuelve al nodo PREPAGO_MPAGO', () => {
   assert.strictEqual(claveAlLeer('PREPAGO M.PAGO'), 'PREPAGO_MPAGO', 'el punto es ilegal en una clave RTDB');
   // Guardar y leer tienen que apuntar al MISMO nodo.
   assert.strictEqual(claveAlLeer('PREPAGO M.PAGO'), claveAlGuardar('MPAGO'));
+});
+
+check('el nombre actual y el histórico caen en el MISMO ledger', () => {
+  // Si cada nombre escribiera en un nodo distinto, el historial se partiría en
+  // dos y "Ventas por Apps" mostraría la mitad de los cobros.
+  assert.strictEqual(claveAlLeer('PREPAGO MPAGO'), 'PREPAGO_MPAGO');
+  assert.strictEqual(claveAlLeer('PREPAGO MPAGO'), claveAlLeer('PREPAGO M.PAGO'));
+  // Y el appType que deriva la pantalla de Cuentas también.
+  assert.strictEqual(claveAlGuardar('PREPAGO MPAGO'.replace('PREPAGO ', '')), 'PREPAGO_MPAGO');
+  assert.strictEqual(claveAlGuardar('PREPAGO M.PAGO'.replace('PREPAGO ', '')), 'PREPAGO_MPAGO');
+});
+
+check('la pestaña del historial usa el nombre actual', () => {
+  const modal = readFileSync(new URL('../../../components/prepayment/PrepaymentHistoryModal.jsx', import.meta.url), 'utf8');
+  assert.match(modal, /TabsTrigger value="PREPAGO MPAGO">M\.PAGO<\/TabsTrigger>/,
+    'la pestaña dejó de usar el nombre de cuenta actual, o cambió la etiqueta visible');
 });
 
 check('las pestañas de PEDIDOSYA y RAPPI apuntan al mismo nodo de siempre', () => {

@@ -37,7 +37,24 @@ const ACCOUNT_NAMES = [
   "Banco 2",
   "PREPAGO PEDIDOSYA",
   "PREPAGO RAPPI",
-  "PREPAGO M.PAGO"
+  // SIN PUNTO, a propósito. El nombre de la cuenta termina siendo clave de
+  // Firebase en el cierre de turno, y "PREPAGO M.PAGO" rompió el cierre del
+  // turno 103 de Achaval. El cierre igual sanea cualquier nombre (ver
+  // clavesCierre.js), pero no se ofrece uno que sabemos problemático.
+  // El rótulo visible de la marca sigue siendo "M.PAGO" en los reportes.
+  "PREPAGO MPAGO"
+];
+
+/**
+ * Nombres que abren el modal de carga de prepago. Incluye el histórico
+ * "PREPAGO M.PAGO" para las cuentas que ya existan con ese nombre: se dejó de
+ * ofrecer, pero las que estén creadas tienen que seguir funcionando igual.
+ */
+const NOMBRES_DE_PREPAGO = [
+  'PREPAGO PEDIDOSYA',
+  'PREPAGO RAPPI',
+  'PREPAGO MPAGO',
+  'PREPAGO M.PAGO',   // histórico
 ];
 
 const defaultAccountData = { nombre: '', aNombreDe: '', alias: '', imprimeFactura: false, isFavorite: false, cuentaFacturacionAsociadaId: '' };
@@ -145,7 +162,7 @@ function AccountsPageContent() {
 
   const handleSelectChange = useCallback((value) => {
     setAccountData(prev => ({ ...prev, nombre: value }));
-    if (value === 'PREPAGO PEDIDOSYA' || value === 'PREPAGO RAPPI' || value === 'PREPAGO M.PAGO') {
+    if (NOMBRES_DE_PREPAGO.includes(value)) {
       setSelectedPrepaymentType(value);
       setPrepaymentAmount('');
       setIsPrepaymentModalOpen(true);

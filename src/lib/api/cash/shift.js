@@ -2,6 +2,7 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getDatabase, ref, get, set, remove, update } from 'firebase/database';
 import { formatDateForFirebase } from '@/lib/utils';
+import { totalesPorMedioDePago, validarPayloadDeCierre } from './clavesCierre.js';
 
 export const checkOpenShift = async () => {
     checkLocalId();
@@ -179,6 +180,16 @@ const backupShiftData = async (shift, closingPayload, progressCallback, op) => {
 };
 
 /**
+ * Deja anotado en el error en qué fase murió el cierre y si el paso destructivo
+ * ya había corrido. Lo lee CloseShiftModal para redactar el aviso al operador.
+ */
+const marcarFase = (error, fase, pedidosYaMovidos) => {
+    if (!error || typeof error !== 'object') return;
+    error.faseCierre = fase;
+    error.pedidosYaMovidos = pedidosYaMovidos;
+};
+
+/**
  * @param {object} [ejecutadoPor] identidad de QUIEN ejecuta el cierre
  *   (id, usuario, nombre, rol, fecha). Es información de auditoría y es
  *   independiente de `responsible`: cuando cierra un dueño o un encargado no se
@@ -198,13 +209,11 @@ export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible
     const dateString = shift.date || formatDateForFirebase(new Date());
 
     progressCallback('Calculando totales...');
-    const totalsByPaymentMethod = sales.reduce((acc, sale) => {
-        (sale.payments || []).forEach(payment => {
-            acc[payment.method] = (acc[payment.method] || 0) + payment.amount;
-        });
-        return acc;
-    }, {});
-    
+    // Las claves se sanean SIEMPRE: el nombre de la cuenta lo escribe una
+    // persona en un campo libre y Realtime Database rechaza `. $ # [ ] /`.
+    // Ver clavesCierre.js — este `set()` es el que partió el turno 103.
+    const totalsByPaymentMethod = totalesPorMedioDePago(sales);
+
     const expensesArray = Object.values(shift.gastos || {});
     const totalExpenses = expensesArray.reduce((sum, expense) => sum + (expense?.monto || 0), 0);
     const totalCashExpenses = expensesArray
@@ -255,11 +264,42 @@ export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible
         cierreGanancia: Math.round(ganancia * 1000) / 1000
     };
 
+    // -----------------------------------------------------------------------
+    // VALIDACIÓN PREVIA — antes de tocar UN SOLO pedido.
+    //
+    // Este es el orden que faltaba. Hasta el turno 103 de Achaval el primer
+    // paso era el destructivo (respaldar y BORRAR los pedidos vivos) y recién
+    // después se intentaba escribir la caja: cuando esa escritura resultaba
+    // imposible, las ventas ya no estaban en ningún nodo activo y el turno
+    // quedaba "abierto" y vacío. Ahora, si el payload no se puede escribir, se
+    // aborta acá: no se movió nada y el operador puede reintentar sin secuelas.
+    //
+    // Alcanza con validar `closingPayload`: lo demás que termina en el backup
+    // sale de un snapshot de Firebase, o sea que sus claves ya son válidas por
+    // definición (la base no las habría aceptado al guardarlas).
+    // -----------------------------------------------------------------------
+    progressCallback('Validando datos del cierre...');
+    validarPayloadDeCierre(closingPayload);
+
+    // A partir de acá SÍ se modifican datos. Cada fase marca el error con
+    // dónde quedó, para que el mensaje al operador diga si los pedidos ya se
+    // movieron o no — un "No se pudo cerrar el turno." a secas fue justamente
+    // lo que ocultó el problema durante todo un turno.
     progressCallback('Respaldando y limpiando pedidos...');
-    await backupAndClearOrders(shift, progressCallback, op);
+    try {
+        await backupAndClearOrders(shift, progressCallback, op);
+    } catch (error) {
+        marcarFase(error, 'respaldo-pedidos', true);
+        throw error;
+    }
 
     progressCallback('Respaldando datos del turno...');
-    await backupShiftData(shift, closingPayload, progressCallback, op);
+    try {
+        await backupShiftData(shift, closingPayload, progressCallback, op);
+    } catch (error) {
+        marcarFase(error, 'respaldo-caja', true);
+        throw error;
+    }
 
     progressCallback('Cierre completado.');
 };

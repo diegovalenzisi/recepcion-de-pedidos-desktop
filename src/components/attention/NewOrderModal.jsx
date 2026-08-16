@@ -488,7 +488,8 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
             await savePrepaymentForApp('PEDIDOSYA', payment.amount, operationalDate);
           } else if (methodUpper.includes('PREPAGO RAPPI')) {
             await savePrepaymentForApp('RAPPI', payment.amount, operationalDate);
-          } else if (methodUpper.includes('PREPAGO M.PAGO')) {
+            // Nombre actual y el histórico con punto: mismo ledger PREPAGO_MPAGO.
+          } else if (methodUpper.includes('PREPAGO MPAGO') || methodUpper.includes('PREPAGO M.PAGO')) {
             await savePrepaymentForApp('MPAGO', payment.amount, operationalDate);
           }
         }
