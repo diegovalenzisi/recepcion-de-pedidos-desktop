@@ -1,0 +1,14 @@
+{
+  "database": {
+    "rules": "comision.rules.json"
+  },
+  "emulators": {
+    "database": {
+      "port": 9123
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}
