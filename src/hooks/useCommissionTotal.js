@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ref, onValue, off } from 'firebase/database';
 import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
-import { contabilidadActiva, leerAcumuladores, aPesos, rutaTotales } from '@/lib/api/comisionMovimiento';
+import { contabilidadActiva, leerAcumuladores, aPesos, aCentavos, rutaTotales } from '@/lib/api/comisionMovimiento';
 import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 /**
@@ -78,7 +78,11 @@ const isRegistroValido = (reg) => {
  *   - COMISIONES/PAGOS    → totalPaid
  */
 export const useCommissionBalance = (isActive = true) => {
-  const [state, setState] = useState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: true });
+  const [state, setState] = useState({
+    totalGenerated: 0, totalPaid: 0, pending: 0,
+    totalGeneratedCentavos: 0, totalPaidCentavos: 0, pendingCentavos: 0,
+    contabilidadNueva: false, loading: true,
+  });
   // firebaseReady en las deps del efecto de abajo: antes este hook solo
   // reaccionaba a `isActive` (típicamente !!user && !!localId), que NO
   // cambia de valor al cambiar de local A a B (ambos son localId truthy) —
@@ -90,7 +94,11 @@ export const useCommissionBalance = (isActive = true) => {
 
   useEffect(() => {
     if (!isActive || !firebaseReady) {
-      setState({ totalGenerated: 0, totalPaid: 0, pending: 0, loading: !isActive ? false : true });
+      setState({
+        totalGenerated: 0, totalPaid: 0, pending: 0,
+        totalGeneratedCentavos: 0, totalPaidCentavos: 0, pendingCentavos: 0,
+        contabilidadNueva: false, loading: !isActive ? false : true,
+      });
       return;
     }
     const localId = getCurrentLocalId();
@@ -126,12 +134,23 @@ export const useCommissionBalance = (isActive = true) => {
       const activa = contabilidadActiva(totales);
 
       if (activa) {
+        // TRANSICIÓN 0 → 1. Si los listeners legados ya estaban montados hay
+        // que DESMONTARLOS: si no, seguirían descargando REGISTRO y PAGOS en
+        // segundo plano para siempre, que es justamente lo que veníamos a
+        // eliminar. Y sus callbacks pisarían el estado con los valores viejos.
+        if (modoNuevo === false) desmontarModoLegado();
         modoNuevo = true;
         const a = leerAcumuladores(totales);
         setState({
+          // CENTAVOS: la fuente para cualquier validacion contable.
+          totalGeneratedCentavos: a.totalAcumuladoCentavos,
+          totalPaidCentavos: a.totalPagadoCentavos,
+          pendingCentavos: a.saldoPendienteCentavos,
+          // PESOS: derivados SOLO para las pantallas que ya los consumen.
           totalGenerated: aPesos(a.totalAcumuladoCentavos),
           totalPaid: aPesos(a.totalPagadoCentavos),
           pending: aPesos(a.saldoPendienteCentavos),
+          contabilidadNueva: true,
           loading: false,
         });
         return;
@@ -156,16 +175,32 @@ export const useCommissionBalance = (isActive = true) => {
 
     const recompute = () => {
       const pending = sumRegistro - sumPagos;
+      const pendienteFinal = pending > 0 ? pending : 0;
       setState({
         totalGenerated: sumRegistro,
         totalPaid: sumPagos,
-        pending: pending > 0 ? pending : 0, // nunca negativo
+        pending: pendienteFinal,
+        // Dormido la fuente son pesos; se ofrecen igual en centavos para que la
+        // logica nueva no tenga que convertir en cada llamador.
+        totalGeneratedCentavos: aCentavos(sumRegistro),
+        totalPaidCentavos: aCentavos(sumPagos),
+        pendingCentavos: aCentavos(pendienteFinal),
+        contabilidadNueva: false,
         loading: !(registroLoaded && pagosLoaded),
       });
     };
 
     let regListener = null, pagosListener = null;
+
+    /** Desmonta los listeners legados. Idempotente. */
+    const desmontarModoLegado = () => {
+      if (regListener) { off(registroRef, 'value', regListener); regListener = null; }
+      if (pagosListener) { off(pagosRef, 'value', pagosListener); pagosListener = null; }
+    };
+
     const activarModoLegado = () => {
+      // Nunca dos veces: si ya estan montados no se duplican.
+      if (regListener || pagosListener) return;
     regListener = onValue(
       registroRef,
       (snap) => {

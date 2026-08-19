@@ -17,8 +17,9 @@ import {
   validarPago, dejariaNegativo,
   planDeVenta, planDeAnulacion, planDePago,
   tieneEfectoContable, rutaTotales, rutaMovimiento,
-  frontera, esPosteriorAlCorte, separarPorFrontera,
+  frontera, esPosteriorAlCorte, separarPorFrontera, calcularComisionDeVenta,
 } from '../comisionMovimiento.js';
+import { datosDeRegistro, obtenerDeviceId } from '../deviceIdentity.js';
 import {
   ESTADO_INICIO, corteActivo, avisoActivo, evaluarInicio,
   bloquea, liberaTrasPago, validarConfiguracion, textoDeBloqueo,
@@ -569,6 +570,176 @@ check('fetchLimiteCorte distingue ausente de no verificable', () => {
   assert.match(settings, /valorNoVerificable/, 'no informa cuando no se pudo leer');
   assert.ok(!/console\.error\('Error fetching limiteCorte:[\s\S]{0,80}return 0;/.test(settings),
     'volvio a devolver 0 ante un error de lectura');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n15. Determinacion UNICA de la comision de una venta:');
+
+check('venta $100 al 1% -> los tres valores de una sola vez', () => {
+  assert.deepStrictEqual(calcularComisionDeVenta(100, 1), {
+    porcentajeComision: 1, comisionGenerada: 1, comisionGeneradaCentavos: 100,
+  });
+});
+
+check('venta $150 al 1% -> $1,50', () => {
+  const c = calcularComisionDeVenta(150, 1);
+  assert.strictEqual(c.comisionGenerada, 1.5);
+  assert.strictEqual(c.comisionGeneradaCentavos, 150);
+});
+
+check('los centavos salen del importe, no de redondear los pesos', () => {
+  // 18.500 al 1% = 185 exactos
+  assert.strictEqual(calcularComisionDeVenta(18500, 1).comisionGeneradaCentavos, 18500);
+  // 1.234,56 al 1% = 12,3456 -> 1234,56 centavos -> 1235
+  assert.strictEqual(calcularComisionDeVenta(1234.56, 1).comisionGeneradaCentavos, 1235);
+});
+
+check('porcentaje 0 -> comision 0, sin romper', () => {
+  assert.deepStrictEqual(calcularComisionDeVenta(100000, 0), {
+    porcentajeComision: 0, comisionGenerada: 0, comisionGeneradaCentavos: 0,
+  });
+});
+
+check('valores invalidos no producen NaN', () => {
+  for (const [v, p] of [[null, 1], [100, null], ['x', 'y'], [undefined, undefined]]) {
+    const c = calcularComisionDeVenta(v, p);
+    assert.ok(Number.isFinite(c.comisionGenerada));
+    assert.ok(Number.isInteger(c.comisionGeneradaCentavos));
+  }
+});
+
+check('cambiar el porcentaje despues NO cambia la comision de la venta vieja', () => {
+  const alMomentoDeLaVenta = calcularComisionDeVenta(100, 1);   // 1%
+  // El local pasa a 2%. La venta ya tiene su importe guardado.
+  const conElNuevoPorcentaje = calcularComisionDeVenta(100, 2);
+  assert.strictEqual(alMomentoDeLaVenta.comisionGeneradaCentavos, 100);
+  assert.strictEqual(conElNuevoPorcentaje.comisionGeneradaCentavos, 200);
+  // La anulacion tiene que usar el PRIMERO.
+  const d = deltasDeAnulacion(alMomentoDeLaVenta.comisionGeneradaCentavos);
+  assert.strictEqual(d.dHist, -100, 'la anulacion resta la comision original');
+});
+
+check('myAccountApi calcula UNA vez y pasa los tres valores', () => {
+  const my = readFileSync(new URL('../myAccountApi.js', import.meta.url), 'utf8');
+  assert.match(my, /calcularComisionDeVenta\(saleValue, porcentajeAplicado\)/, 'no usa la determinacion unica');
+  assert.match(my, /comisionGeneradaCentavos: comision\.comisionGeneradaCentavos/, 'no pasa los centavos al registro');
+  assert.match(my, /porcentajeComision: comision\.porcentajeComision/, 'no pasa el porcentaje determinado');
+  assert.ok(!/porcentajeComision: parseFloat\(percentage\)/.test(my), 'vuelve a leer el porcentaje al registrar');
+});
+
+check('registrarComision usa el importe recibido, no lo recalcula', () => {
+  assert.match(fuenteApi, /Number\.isInteger\(comisionGeneradaCentavos\)/, 'no acepta el importe ya determinado');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n16. El hook expone centavos, sin ida y vuelta:');
+
+const fuenteHook = readFileSync(new URL('../../../hooks/useCommissionTotal.js', import.meta.url), 'utf8');
+
+check('con la contabilidad activa los centavos son la fuente', () => {
+  assert.match(fuenteHook, /totalGeneratedCentavos: a\.totalAcumuladoCentavos/);
+  assert.match(fuenteHook, /pendingCentavos: a\.saldoPendienteCentavos/);
+});
+
+check('los pesos se derivan solo para mostrar', () => {
+  assert.match(fuenteHook, /totalGenerated: aPesos\(a\.totalAcumuladoCentavos\)/);
+});
+
+check('dormido tambien ofrece centavos, para no convertir en cada llamador', () => {
+  assert.match(fuenteHook, /pendingCentavos: aCentavos\(pendienteFinal\)/);
+});
+
+check('el hook informa en que modo esta', () => {
+  assert.match(fuenteHook, /contabilidadNueva: true/);
+  assert.match(fuenteHook, /contabilidadNueva: false/);
+});
+
+check('TRANSICION 0 -> 1: desmonta los listeners legados', () => {
+  assert.match(fuenteHook, /desmontarModoLegado/, 'no existe el desmontaje');
+  assert.match(fuenteHook, /if \(modoNuevo === false\) desmontarModoLegado\(\)/,
+    'al activarse no desmonta REGISTRO/PAGOS: seguirian descargando el historial');
+});
+
+check('no se duplican listeners si ya estaban montados', () => {
+  assert.match(fuenteHook, /if \(regListener \|\| pagosListener\) return;/);
+});
+
+check('la limpieza final desmonta TOTALES, REGISTRO y PAGOS', () => {
+  assert.match(fuenteHook, /off\(totalesRef, 'value', desuscribirTotales\)/);
+  assert.match(fuenteHook, /if \(regListener\) off\(registroRef, 'value', regListener\)/);
+  assert.match(fuenteHook, /if \(pagosListener\) off\(pagosRef, 'value', pagosListener\)/);
+});
+
+check('el cambio de local reinicia el efecto (firebaseReady en las deps)', () => {
+  assert.match(fuenteHook, /\}, \[isActive, firebaseReady\]\);/,
+    'sin firebaseReady en las deps quedarian listeners del local anterior');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n17. RESUMEN_CUENTA ya no se borra al pagar:');
+
+check('processCommissionPayment no pone fechas en null', () => {
+  const settings = readFileSync(new URL('../settingsApi.js', import.meta.url), 'utf8');
+  const i = settings.indexOf('export const processCommissionPayment');
+  const cuerpo = settings.slice(i, settings.indexOf('export const', i + 50));
+  assert.ok(!/updates\[key\] = null;/.test(cuerpo), 'volvio a borrar fechas de RESUMEN_CUENTA');
+  assert.match(cuerpo, /EL PAGO YA NO BORRA HISTÓRICO/, 'falta la explicacion de por que no se borra');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n18. Registro del dispositivo (adopcion):');
+
+check('el payload tiene los cinco campos, con deviceType desktop', () => {
+  const d = datosDeRegistro({ localId: '40508022', deviceId: 'dev-1', clientVersion: '1.3.97', ahora: 555 });
+  assert.deepStrictEqual(d, {
+    deviceName: 'Desktop 40508022', deviceType: 'desktop',
+    localId: '40508022', lastSeenAt: 555, clientVersion: '1.3.97',
+  });
+});
+
+check('primer inicio: crea la identidad y la persiste', () => {
+  const m = new Map();
+  const alm = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) };
+  const id1 = obtenerDeviceId(alm);
+  assert.ok(id1, 'no genero id');
+  assert.strictEqual(m.size, 1, 'no lo persistio');
+});
+
+check('segundo inicio: MISMO deviceId, solo cambia lastSeenAt', () => {
+  const m = new Map();
+  const alm = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) };
+  const id1 = obtenerDeviceId(alm);
+  const id2 = obtenerDeviceId(alm);
+  assert.strictEqual(id2, id1, 'creo un dispositivo nuevo en el segundo arranque');
+  const a = datosDeRegistro({ localId: 'L', deviceId: id1, clientVersion: '1.3.97', ahora: 100 });
+  const b = datosDeRegistro({ localId: 'L', deviceId: id2, clientVersion: '1.3.97', ahora: 200 });
+  assert.notStrictEqual(a.lastSeenAt, b.lastSeenAt);
+  assert.strictEqual(a.clientVersion, b.clientVersion);
+});
+
+check('nueva version: MISMO deviceId, nueva clientVersion', () => {
+  const m = new Map();
+  const alm = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) };
+  const id = obtenerDeviceId(alm);
+  const antes = datosDeRegistro({ localId: 'L', deviceId: id, clientVersion: '1.3.97', ahora: 1 });
+  const despues = datosDeRegistro({ localId: 'L', deviceId: obtenerDeviceId(alm), clientVersion: '1.3.98', ahora: 2 });
+  assert.strictEqual(obtenerDeviceId(alm), id, 'el deviceId tiene que sobrevivir a la actualizacion');
+  assert.strictEqual(antes.clientVersion, '1.3.97');
+  assert.strictEqual(despues.clientVersion, '1.3.98');
+});
+
+check('la version sale de la fuente real, no de una constante duplicada', () => {
+  const dev = readFileSync(new URL('../deviceIdentity.js', import.meta.url), 'utf8');
+  assert.match(dev, /__APP_VERSION__/, 'no usa la version inyectada desde package.json');
+  assert.ok(!/clientVersion: '1\.3\./.test(dev), 'hay un numero de version escrito a mano');
+});
+
+check('Desktop se registra en el ARRANQUE, no al abrir una pantalla', () => {
+  const app = readFileSync(new URL('../../../App.jsx', import.meta.url), 'utf8');
+  assert.match(app, /registrarDispositivo\(\{ localId: id, firebaseUrl: getFirebaseUrl\(\) \}\)/);
+  const iCarga = app.indexOf('const loadInitialData');
+  const iReg = app.indexOf('registrarDispositivo({');
+  assert.ok(iReg > iCarga && iReg > 0, 'no esta dentro de la carga inicial');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

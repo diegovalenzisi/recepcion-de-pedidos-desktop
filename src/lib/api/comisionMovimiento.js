@@ -74,6 +74,35 @@ export const aPesos = (centavos) => {
 export const esImporteValido = (centavos) =>
   Number.isInteger(centavos) && centavos >= 0;
 
+/**
+ * DETERMINACIÓN ÚNICA de la comisión de una venta.
+ *
+ * Se calcula UNA sola vez, al concretarse la venta, y los tres valores viajan
+ * juntos al registro. Ningún otro módulo la vuelve a calcular: la anulación usa
+ * el importe guardado, nunca el porcentaje vigente en el momento de anular.
+ *
+ * Venta $100 al 1%:
+ *     { porcentajeComision: 1, comisionGenerada: 1, comisionGeneradaCentavos: 100 }
+ *
+ * Si mañana el local pasa a 2%, esa venta sigue teniendo $1 de comisión.
+ *
+ * Los centavos se calculan desde el importe de la venta, no redondeando el
+ * resultado en pesos: así $0,005 no se pierde por un redondeo intermedio.
+ */
+export const calcularComisionDeVenta = (totalVenta, porcentaje) => {
+  const total = Number(totalVenta);
+  const pct = Number(porcentaje);
+  if (!Number.isFinite(total) || !Number.isFinite(pct) || pct <= 0 || total <= 0) {
+    return { porcentajeComision: Number.isFinite(pct) ? pct : 0, comisionGenerada: 0, comisionGeneradaCentavos: 0 };
+  }
+  const centavos = Math.round((total * pct) / 100 * 100);
+  return {
+    porcentajeComision: pct,
+    comisionGenerada: centavos / 100,
+    comisionGeneradaCentavos: centavos,
+  };
+};
+
 // ---------------------------------------------------------------------------
 // IDENTIDAD DE LA OPERACIÓN
 // ---------------------------------------------------------------------------

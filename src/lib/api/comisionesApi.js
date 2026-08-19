@@ -140,6 +140,7 @@ export const registrarComision = async ({
   origen,
   porcentajeComision,
   comisionGenerada,
+  comisionGeneradaCentavos,
 }) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
@@ -166,7 +167,11 @@ export const registrarComision = async ({
 
   console.log(`[COMISION] ventaKey=${ventaKey} yaExiste=false genera=true comision=${comisionGenerada}`);
 
-  const comisionCentavos = aCentavos(comisionGenerada);
+  // La comision viene YA determinada por quien concreto la venta. Solo se
+  // deriva si un llamador viejo no la manda: no se recalcula con el porcentaje.
+  const comisionCentavos = Number.isInteger(comisionGeneradaCentavos)
+    ? comisionGeneradaCentavos
+    : aCentavos(comisionGenerada);
   const opIdDeVenta = `V-${ventaKey}`;
   const totales = await leerTotales(op.getDatabaseOrAbort(), localId);
   const activa = contabilidadActiva(totales);

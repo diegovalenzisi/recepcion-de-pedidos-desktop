@@ -3,6 +3,7 @@ import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/
 import { fetchSalesPercentage } from '@/lib/api/settingsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { registrarComision } from '@/lib/api/comisionesApi';
+import { calcularComisionDeVenta } from '@/lib/api/comisionMovimiento';
 
 /**
  * Recalcula TotalComisionAPagar desde totalCommission y lo escribe en Firebase.
@@ -91,11 +92,19 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
             return;
         }
 
+        // DETERMINACIÓN ÚNICA DE LA COMISIÓN DE ESTA VENTA.
+        //
+        // Se calcula UNA sola vez, acá, y los tres valores viajan juntos al
+        // registro. Ningún otro módulo vuelve a calcularla: la anulación usa el
+        // importe guardado, no el porcentaje del momento en que se anula.
+        //
+        // Venta $100 al 1% → comisionGenerada 1, comisionGeneradaCentavos 100,
+        // porcentajeComision 1. Si mañana el local pasa a 2%, esa venta sigue
+        // teniendo $1 de comisión original.
         const saleValue = typeof valor === 'number' ? valor : 0;
-        let commission = (saleValue * parseFloat(percentage)) / 100;
-        if (isNaN(commission)) {
-            commission = 0;
-        }
+        const porcentajeAplicado = parseFloat(percentage);
+        const comision = calcularComisionDeVenta(saleValue, porcentajeAplicado);
+        const commission = comision.comisionGenerada;
 
         const operationalDate = getOperationalDate(new Date());
         const today = operationalDate.toISOString().split('T')[0]; // YYYY-MM-DD
@@ -136,8 +145,10 @@ export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) =>
                 ventaTotal: saleValue,
                 modoVenta: tipoNorm === 'mostrador' ? 'mostrador' : 'delivery',
                 origen: tipoNorm === 'mostrador' ? 'MOSTRADOR' : 'PEDIDOS',
-                porcentajeComision: parseFloat(percentage),
-                comisionGenerada: commission,
+                // Los tres valores salen de la MISMA determinación de arriba.
+                porcentajeComision: comision.porcentajeComision,
+                comisionGenerada: comision.comisionGenerada,
+                comisionGeneradaCentavos: comision.comisionGeneradaCentavos,
             });
         } catch (err) {
             console.error('[COMISIONES] Error al registrar comisión de venta:', err);
