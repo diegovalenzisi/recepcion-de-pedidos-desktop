@@ -58,6 +58,7 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/__tests__/facturaFormatoEmulator.integration.mjs',
   'src/lib/api/__tests__/reimpresionFactura.render.test.mjs',
   'src/components/sales/ReceiptDocument.jsx',      // reimpresión fiscal y de remitos
+  'src/lib/api/comisionVentaKey.js',              // identidad canonica M{id}/D{id} de la venta
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',

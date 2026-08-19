@@ -409,7 +409,10 @@ export const cancelCounterSale = async (sale, shift) => {
   }
 
   try {
-    await cancelarComision(String(sale.id));
+    // Se informa el canal: sin él, la búsqueda cae en la clave numérica y en un
+    // local con los contadores cruzados podría cancelar la comisión de un
+    // pedido de delivery con el mismo número.
+    await cancelarComision(String(sale.id), 'mostrador');
   } catch (err) {
     console.error('[COMISION] Error al cancelar registro de comisión:', err);
   }
