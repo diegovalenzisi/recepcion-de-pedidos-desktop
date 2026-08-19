@@ -49,7 +49,8 @@ const activar = async (inicial = {}) => {
 
 /**
  * LA OPERACIÓN CONTABLE: el plan puro se convierte en UN update() multipath.
- * Es exactamente lo que va a hacer la capa de Firebase en producción.
+ * Réplica EXACTA de `aplicarPlan` de comisionesApi.js, incluida la distinción
+ * entre un duplicado y un rechazo por otra causa.
  */
 async function aplicar(db, plan) {
   const payload = { [plan.movimiento.ruta]: { ...plan.movimiento.valor, ts: serverTimestamp() } };
@@ -57,10 +58,13 @@ async function aplicar(db, plan) {
   payload[plan.rutaMarcaDeTiempo] = serverTimestamp();
   try {
     await update(ref(db), payload);
-    return { aplicado: true };
+    return { aplicado: true, motivo: 'aplicado' };
   } catch (e) {
-    if (String(e.message).includes('PERMISSION_DENIED')) return { aplicado: false, motivo: 'rechazado' };
-    throw e;
+    if (!String(e.message).includes('PERMISSION_DENIED')) throw e;
+    // La diferencia entre "duplicado" y "error" es si el movimiento existe.
+    const existe = (await get(ref(db, plan.movimiento.ruta))).exists();
+    if (existe) return { aplicado: false, motivo: 'ya_aplicado' };
+    return { aplicado: false, motivo: 'operacion_rechazada', causa: e };
   }
 }
 
@@ -275,6 +279,65 @@ await check('un pago exacto por toda la deuda si entra', async () => {
   const t = await totales();
   assert.strictEqual(t.saldoPendienteCentavos, 0);
   assert.strictEqual(t.totalPagadoCentavos, 50000);
+});
+
+// ===========================================================================
+// UN PERMISSION_DENIED NO SIGNIFICA SIEMPRE LO MISMO.
+// Confundir "duplicado" con "rechazado" escondería un error contable real.
+// ===========================================================================
+console.log('\n7b. Distinguir duplicado de operacion rechazada:');
+nuevaFase(); await activar({ totalAcumuladoCentavos: 50000, saldoPendienteCentavos: 50000 });
+
+await check('DUPLICADO REAL: el movimiento existe -> ya_aplicado', async () => {
+  const r1 = await aplicar(A, pago('dup', 100));
+  assert.strictEqual(r1.aplicado, true);
+  const r2 = await aplicar(A, pago('dup', 100));
+  assert.strictEqual(r2.aplicado, false);
+  assert.strictEqual(r2.motivo, 'ya_aplicado', 'un duplicado tiene que reconocerse como tal');
+  const m = (await get(ref(A, `${L}/COMISIONES/MOVIMIENTOS/P-dup`))).val();
+  assert.ok(m, 'el movimiento del duplicado debe existir');
+});
+
+await check('PAGO MAYOR A LA DEUDA: el movimiento NO existe -> operacion_rechazada', async () => {
+  const t = await totales();
+  const excedido = Math.round(t.saldoPendienteCentavos / 100) + 1000;   // en pesos, por encima
+  const r = await aplicar(A, pago('excede', excedido));
+  assert.strictEqual(r.aplicado, false);
+  assert.strictEqual(r.motivo, 'operacion_rechazada', 'no puede pasar por un simple reintento');
+  const m = (await get(ref(A, `${L}/COMISIONES/MOVIMIENTOS/P-excede`))).val();
+  assert.strictEqual(m, null, 'no debe quedar el movimiento de una operacion rechazada');
+});
+
+await check('los acumuladores quedaron intactos tras el rechazo', async () => {
+  const t = await totales();
+  assert.strictEqual(t.saldoPendienteCentavos, 50000 - 10000);
+  assert.strictEqual(t.totalPagadoCentavos, 10000);
+});
+
+await check('MOVIMIENTO INVALIDO (sin los campos obligatorios) -> operacion_rechazada', async () => {
+  // La regla exige hasChildren(['tipo','ts']). Un movimiento sin `tipo` se
+  // rechaza y NO queda escrito: es un error, no un duplicado.
+  const plan = pago('malformado', 10);
+  const payload = {
+    [plan.movimiento.ruta]: { ts: serverTimestamp() },   // falta `tipo`
+    [plan.rutaMarcaDeTiempo]: serverTimestamp(),
+  };
+  for (const inc of plan.incrementos) payload[inc.ruta] = increment(inc.delta);
+  let motivo = 'aplicado';
+  try { await update(ref(A), payload); }
+  catch (e) {
+    assert.ok(String(e.message).includes('PERMISSION_DENIED'));
+    motivo = (await get(ref(A, plan.movimiento.ruta))).exists() ? 'ya_aplicado' : 'operacion_rechazada';
+  }
+  assert.strictEqual(motivo, 'operacion_rechazada');
+  assert.strictEqual((await get(ref(A, plan.movimiento.ruta))).val(), null);
+});
+
+await check('un rechazo no dejo ningun incremento a medias', async () => {
+  const t = await totales();
+  assert.strictEqual(t.saldoPendienteCentavos, 40000);
+  assert.strictEqual(t.totalPagadoCentavos, 10000);
+  assert.strictEqual(t.totalAcumuladoCentavos, 50000);
 });
 
 // ===========================================================================

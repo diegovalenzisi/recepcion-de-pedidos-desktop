@@ -21,12 +21,44 @@ import {
 const leerTotales = async (db, localId) => (await get(ref(db, rutaTotales(localId)))).val();
 
 /**
+ * Error de una operación contable que Firebase rechazó por algo que NO es un
+ * duplicado: un pago mayor a la deuda, un acumulador que quedaría inválido,
+ * reglas mal desplegadas, un movimiento mal formado, un cliente incompatible.
+ * Tiene que verse, no confundirse con un reintento.
+ */
+export class ComisionRechazadaError extends Error {
+  constructor(opId, causa) {
+    super(`La operación de comisión ${opId} fue rechazada por la base. `
+      + 'No se aplicó ningún movimiento ni se modificó ningún total.');
+    this.name = 'ComisionRechazadaError';
+    this.opId = opId;
+    this.motivo = 'operacion_rechazada';
+    this.causa = causa;
+  }
+}
+
+/**
  * Aplica un plan contable: el movimiento y los tres incrementos en el MISMO
  * `update()`. O entra todo, o no entra nada.
  *
- * Un `opId` repetido es rechazado por las reglas (create-only sobre
- * MOVIMIENTOS) y con él se descarta la escritura entera, incluidos los
- * incrementos: reintentar es gratis y no puede contar dos veces.
+ * QUÉ SIGNIFICA UN PERMISSION_DENIED
+ * ----------------------------------
+ * No alcanza con suponer "ya estaba aplicado". Las reglas rechazan por varias
+ * razones distintas y confundirlas escondería un error contable real:
+ *
+ *   · el `opId` ya existe            → duplicado legítimo, resultado normal
+ *   · el pago supera la deuda        → la validación de acumulador ≥ 0
+ *   · un acumulador quedaría inválido
+ *   · las reglas no son las esperadas
+ *   · el movimiento está mal formado
+ *
+ * Por eso, ante un rechazo se CONSULTA el movimiento:
+ *   - si existe  → fue un duplicado: `aplicado: false, motivo: 'ya_aplicado'`
+ *   - si no existe → fue rechazado por otra causa: se LANZA
+ *     `ComisionRechazadaError`, con el detalle técnico en el log.
+ *
+ * En los dos casos no se movió nada; la diferencia es que uno es esperable y
+ * el otro tiene que llegar a la superficie.
  */
 const aplicarPlan = async (db, plan) => {
   const payload = {
@@ -38,15 +70,29 @@ const aplicarPlan = async (db, plan) => {
   try {
     await update(ref(db), payload);
     console.log(`[COMISION] movimiento ${plan.opId} aplicado`);
-    return { aplicado: true };
+    return { aplicado: true, motivo: 'aplicado' };
   } catch (e) {
-    if (String(e?.message || '').includes('PERMISSION_DENIED')) {
-      // Ya estaba aplicado, o dejaría un acumulador negativo. En los dos casos
-      // NO se movió nada: es el resultado correcto, no un error que propagar.
-      console.log(`[COMISION] movimiento ${plan.opId} rechazado (ya aplicado o inválido)`);
-      return { aplicado: false, motivo: 'rechazado' };
+    const denegado = String(e?.message || '').includes('PERMISSION_DENIED');
+    if (!denegado) throw e;
+
+    // ¿Existe el movimiento? Esa es la diferencia entre "duplicado" y "error".
+    let existe = false;
+    try {
+      existe = (await get(ref(db, plan.movimiento.ruta))).exists();
+    } catch (errLectura) {
+      // Sin poder comprobarlo NO se asume nada: se trata como rechazo.
+      console.error(`[COMISION] ${plan.opId}: no se pudo verificar el movimiento:`, errLectura?.message || errLectura);
+      throw new ComisionRechazadaError(plan.opId, e);
     }
-    throw e;
+
+    if (existe) {
+      console.log(`[COMISION] movimiento ${plan.opId} ya estaba aplicado (duplicado)`);
+      return { aplicado: false, motivo: 'ya_aplicado' };
+    }
+
+    console.error(`[COMISION] ${plan.opId} RECHAZADO y el movimiento NO existe. `
+      + 'Causa probable: pago mayor a la deuda, acumulador inválido o reglas incorrectas.', e);
+    throw new ComisionRechazadaError(plan.opId, e);
   }
 };
 
@@ -181,11 +227,12 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema', 
       localId, idPago: idPagoIntento, montoCentavos: aCentavos(montoPago),
       meta: { responsable },
     }));
+    // Si el pago fue RECHAZADO por algo que no es un duplicado, aplicarPlan ya
+    // lanzó: el error sube al llamador y el operador lo ve. Acá solo queda el
+    // caso normal de reintento.
     if (!r.aplicado) {
-      // Ya se había aplicado (reintento) o dejaría la deuda negativa. No se
-      // vuelve a repartir entre los registros.
-      console.log(`[COMISION] pago ${idPagoIntento} no se aplica de nuevo`);
-      return;
+      console.log(`[COMISION] pago ${idPagoIntento} ya estaba aplicado: no se reparte de nuevo`);
+      return { yaAplicado: true };
     }
   }
 

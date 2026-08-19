@@ -415,6 +415,26 @@ check('R2: ordersApi cancela la comision del delivery anulado', () => {
   assert.match(orders, /cancelarComision\(String\(orderId\), 'delivery'\)/, 'no revierte la comision del delivery');
 });
 
+check('un PERMISSION_DENIED no se asume duplicado: se consulta el movimiento', () => {
+  assert.match(fuenteApi, /ComisionRechazadaError/, 'falta el error explicito');
+  assert.match(fuenteApi, /operacion_rechazada/, 'falta el motivo de rechazo');
+  assert.match(fuenteApi, /ya_aplicado/, 'falta el motivo de duplicado');
+  // La consulta del movimiento tiene que ocurrir DESPUES de detectar el rechazo
+  // y ANTES de decidir que fue un duplicado. Se mira el CODIGO, sin comentarios:
+  // la prosa de arriba tambien nombra los motivos y falsearia el orden.
+  const codigo = fuenteApi.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+  const iDenegado = codigo.indexOf('const denegado');
+  const iConsulta = codigo.indexOf('plan.movimiento.ruta))).exists()');
+  const iDuplicado = codigo.indexOf("motivo: 'ya_aplicado'");
+  assert.ok(iDenegado > 0, 'no detecta el rechazo');
+  assert.ok(iConsulta > iDenegado, 'no consulta el movimiento tras el rechazo');
+  assert.ok(iDuplicado > iConsulta, 'decide "duplicado" sin haber consultado');
+});
+
+check('si no se puede verificar el movimiento, se trata como rechazo', () => {
+  assert.match(fuenteApi, /no se pudo verificar el movimiento/, 'asume duplicado sin poder comprobarlo');
+});
+
 check('mostrador sigue informando su canal', () => {
   const counter = readFileSync(new URL('../counterApi.js', import.meta.url), 'utf8');
   assert.match(counter, /cancelarComision\(String\(sale\.id\), 'mostrador'\)/);
