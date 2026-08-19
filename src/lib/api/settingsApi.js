@@ -1,4 +1,5 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
+import { valorLeido, valorNoVerificable } from '@/lib/api/comisionCorte';
 import { getDatabase, ref, set, get, runTransaction, update, onValue, off } from 'firebase/database';
 import { registrarPagoComision } from '@/lib/api/comisionesApi';
 
@@ -392,7 +393,7 @@ const getNextPaymentId = async (db, localId) => {
   return snapshot.val();
 };
 
-export const processCommissionPayment = async (paymentAmount, responsable = 'Sistema') => {
+export const processCommissionPayment = async (paymentAmount, responsable = 'Sistema', idPagoIntento = null) => {
     checkLocalId();
     const LOCAL_ID = getCurrentDatabasePath();
     // Un solo "op" para todo el pago: hay varios await reales (lectura del
@@ -465,7 +466,7 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
 
         // Marcar registros en COMISIONES/REGISTRO como pagados
         try {
-            await registrarPagoComision(paymentAmount, responsable);
+            await registrarPagoComision(paymentAmount, responsable, idPagoIntento);
         } catch (err) {
             console.error('[COMISIONES] Error al registrar pago en COMISIONES/PAGOS:', err);
         }
@@ -541,17 +542,43 @@ export const fetchLimiteCorte = async () => {
   const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/limiteCorte.json`;
   try {
     const response = await fetch(url);
-    if (!response.ok) {
-      if (response.status === 404) return 0;
-      throw new Error('Network response was not ok');
-    }
+    // 404 = el campo NO existe. Eso es un dato válido: corte desactivado.
+    if (response.status === 404) return valorLeido(0);
+    if (!response.ok) return valorNoVerificable(`HTTP ${response.status}`);
     const data = await response.json();
-    return data !== null && data !== undefined ? Number(data) : 0;
+    // `null` es la respuesta de Firebase para un campo ausente: también válido.
+    return valorLeido(data === null || data === undefined ? 0 : Number(data));
   } catch (error) {
-    // Sin poder leerlo se devuelve 0 = desactivado: un problema de red NUNCA
-    // puede dejar a un local sin poder trabajar.
-    console.error('Error fetching limiteCorte:', error);
-    return 0;
+    // NO SE DEVUELVE 0.
+    //
+    // Un fallo de red no es "corte desactivado": sería justamente la forma de
+    // saltarse el límite cuando no se pudo comprobar. Se informa que no se pudo
+    // verificar y el arranque queda en ERROR_DE_VERIFICACION, con Reintentar /
+    // Salir. Esto aplica SOLO al arranque: una sesión ya autorizada nunca se
+    // re-evalúa, así que una caída posterior no bloquea a nadie.
+    console.error('Error fetching limiteCorte (NO se asume 0):', error);
+    return valorNoVerificable(error?.message || 'error de lectura');
+  }
+};
+
+/**
+ * Alarma de pago, con la misma distinción entre "ausente" y "no se pudo leer".
+ * `fetchAlarmaPago` se conserva sin cambios para los llamadores actuales.
+ */
+export const fetchAlarmaPagoVerificable = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/alarmaPago.json`;
+  try {
+    const response = await fetch(url);
+    if (response.status === 404) return valorLeido(0);
+    if (!response.ok) return valorNoVerificable(`HTTP ${response.status}`);
+    const data = await response.json();
+    return valorLeido(data === null || data === undefined ? 0 : Number(data));
+  } catch (error) {
+    console.error('Error fetching alarmaPago (NO se asume 0):', error);
+    return valorNoVerificable(error?.message || 'error de lectura');
   }
 };
 

@@ -120,6 +120,60 @@ export const leerAcumuladores = (totales) => ({
 });
 
 // ---------------------------------------------------------------------------
+// LA FRONTERA CONTABLE
+//
+// `COMISIONES/TOTALES/migracionActivadaEn` se escribe con el timestamp DEL
+// SERVIDOR en el mismo momento en que `migracionVersion` pasa a 1. Todo lo
+// anterior a esa marca es legado; todo lo posterior es del sistema nuevo.
+//
+// La frontera NO puede ser la forma de la clave. Las claves `M{id}`/`D{id}`
+// existen desde el hotfix de identidad, que se publicó ANTES de activar la
+// contabilidad: hay registros M/D que son legado. Y tampoco puede ser `fecha`
+// + `hora`, que son strings del reloj del cliente. Tiene que ser temporal y
+// del servidor.
+// ---------------------------------------------------------------------------
+
+/** Momento exacto de la activación, o null si todavía no se activó. */
+export const frontera = (totales) => {
+  const t = Number(totales?.migracionActivadaEn);
+  return Number.isFinite(t) && t > 0 ? t : null;
+};
+
+/**
+ * ¿Este registro pertenece al sistema nuevo?
+ *
+ * Solo si la contabilidad está activa Y el registro se creó a partir de la
+ * frontera. Un registro sin `registradoEn` es, por definición, anterior a que
+ * empezáramos a marcarlos: legado.
+ */
+export const esPosteriorAlCorte = (registro, totales) => {
+  const f = frontera(totales);
+  if (f === null) return false;
+  const t = Number(registro?.registradoEn);
+  return Number.isFinite(t) && t >= f;
+};
+
+/**
+ * Separa una colección de registros en legado y nuevo, según la frontera.
+ *
+ * Es la función central que evita que una pantalla mezcle sin criterio todo
+ * `COMISIONES/REGISTRO` con todo `RESUMEN_CUENTA` y termine duplicando
+ * operaciones: cada registro cae de un lado o del otro, nunca en los dos.
+ */
+export const separarPorFrontera = (registros, totales) => {
+  const legado = [];
+  const nuevo = [];
+  const lista = Array.isArray(registros)
+    ? registros.map((v, i) => [String(i), v])
+    : Object.entries(registros || {});
+  for (const [clave, r] of lista) {
+    if (!r) continue;
+    (esPosteriorAlCorte(r, totales) ? nuevo : legado).push({ clave, ...r });
+  }
+  return { legado, nuevo, frontera: frontera(totales) };
+};
+
+// ---------------------------------------------------------------------------
 // DELTAS
 // ---------------------------------------------------------------------------
 

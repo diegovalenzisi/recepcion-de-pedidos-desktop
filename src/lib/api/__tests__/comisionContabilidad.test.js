@@ -17,10 +17,13 @@ import {
   validarPago, dejariaNegativo,
   planDeVenta, planDeAnulacion, planDePago,
   tieneEfectoContable, rutaTotales, rutaMovimiento,
+  frontera, esPosteriorAlCorte, separarPorFrontera,
 } from '../comisionMovimiento.js';
 import {
   ESTADO_INICIO, corteActivo, avisoActivo, evaluarInicio,
   bloquea, liberaTrasPago, validarConfiguracion, textoDeBloqueo,
+  ESTADO_SESION, evaluarInicioConLecturas, estadoDeSesion,
+  valorLeido, valorNoVerificable, textoNoVerificable,
 } from '../comisionCorte.js';
 
 let passed = 0;
@@ -438,6 +441,130 @@ check('si no se puede verificar el movimiento, se trata como rechazo', () => {
 check('mostrador sigue informando su canal', () => {
   const counter = readFileSync(new URL('../counterApi.js', import.meta.url), 'utf8');
   assert.match(counter, /cancelarComision\(String\(sale\.id\), 'mostrador'\)/);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n13. Un error de lectura NO puede significar "corte desactivado":');
+
+check('campo ausente -> 0 valido -> desactivado', () => {
+  const e = evaluarInicioConLecturas({
+    saldo: valorLeido(aCentavos(999999)), alarma: valorLeido(0), limite: valorLeido(0),
+  });
+  assert.strictEqual(e.estado, ESTADO_INICIO.NORMAL, 'sin limite no bloquea');
+  assert.strictEqual(estadoDeSesion(e), ESTADO_SESION.AUTORIZADA);
+});
+
+check('campo presente en 0 -> desactivado (igual que ausente)', () => {
+  const e = evaluarInicioConLecturas({
+    saldo: valorLeido(aCentavos(70000)), alarma: valorLeido(50000), limite: valorLeido(0),
+  });
+  assert.strictEqual(bloquea(e), false);
+});
+
+check('LECTURA FALLIDA del limite -> NO se asume 0', () => {
+  const e = evaluarInicioConLecturas({
+    saldo: valorLeido(aCentavos(70000)), alarma: valorLeido(50000), limite: valorNoVerificable('timeout'),
+  });
+  assert.strictEqual(e.estado, ESTADO_INICIO.NO_VERIFICABLE, 'no puede pasar por corte desactivado');
+  assert.strictEqual(estadoDeSesion(e), ESTADO_SESION.ERROR);
+  assert.strictEqual(bloquea(e), false, 'no es un bloqueo por corte, es un error de verificacion');
+});
+
+check('lectura fallida del SALDO o de la ALARMA tambien es no verificable', () => {
+  for (const campo of ['saldo', 'alarma']) {
+    const args = { saldo: valorLeido(0), alarma: valorLeido(50000), limite: valorLeido(60000) };
+    args[campo] = valorNoVerificable('red');
+    assert.strictEqual(evaluarInicioConLecturas(args).estado, ESTADO_INICIO.NO_VERIFICABLE, campo);
+  }
+});
+
+check('no verificable NO habilita la sesion', () => {
+  const e = evaluarInicioConLecturas({ saldo: valorNoVerificable('x'), alarma: valorLeido(0), limite: valorLeido(0) });
+  assert.notStrictEqual(estadoDeSesion(e), ESTADO_SESION.AUTORIZADA, 'no se puede trabajar sin verificar');
+});
+
+check('la pantalla ofrece Reintentar y Salir', () => {
+  const t = textoNoVerificable();
+  assert.match(t.titulo, /NO SE PUDO VERIFICAR EL ESTADO DE COMISIONES/);
+  assert.deepStrictEqual(t.acciones, ['REINTENTAR', 'SALIR']);
+});
+
+check('una sesion YA autorizada no se re-evalua: un fallo posterior no bloquea', () => {
+  // Se evalua UNA vez, al inicio, y el resultado se guarda.
+  const decision = evaluarInicioConLecturas({
+    saldo: valorLeido(aCentavos(55000)), alarma: valorLeido(50000), limite: valorLeido(60000),
+  });
+  assert.strictEqual(estadoDeSesion(decision), ESTADO_SESION.AUTORIZADA);
+  // Firebase se cae despues. La sesion NO vuelve a evaluar nada.
+  assert.strictEqual(estadoDeSesion(decision), ESTADO_SESION.AUTORIZADA, 'sigue autorizada');
+  assert.strictEqual(bloquea(decision), false);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n14. La frontera contable (migracionActivadaEn):');
+
+const TOT_ACTIVO = { migracionVersion: 1, migracionActivadaEn: 1000 };
+
+check('sin activar no hay frontera', () => {
+  assert.strictEqual(frontera({ migracionVersion: 0 }), null);
+  assert.strictEqual(frontera(undefined), null);
+});
+
+check('activada, la frontera es el timestamp del servidor', () => {
+  assert.strictEqual(frontera(TOT_ACTIVO), 1000);
+});
+
+check('un registro ANTERIOR a la frontera es legado', () => {
+  assert.strictEqual(esPosteriorAlCorte({ registradoEn: 999 }, TOT_ACTIVO), false);
+});
+
+check('un registro EN la frontera o posterior es del sistema nuevo', () => {
+  assert.strictEqual(esPosteriorAlCorte({ registradoEn: 1000 }, TOT_ACTIVO), true);
+  assert.strictEqual(esPosteriorAlCorte({ registradoEn: 1001 }, TOT_ACTIVO), true);
+});
+
+check('un registro SIN registradoEn es legado', () => {
+  assert.strictEqual(esPosteriorAlCorte({ comisionGenerada: 10 }, TOT_ACTIVO), false);
+});
+
+check('la clave M/D NO define el lado de la frontera', () => {
+  // Las claves M/D existen desde el hotfix de identidad, ANTES de activar:
+  // hay registros M/D que son legado.
+  const mLegado = { ventaKey: 'M1808', canal: 'mostrador', registradoEn: 500 };
+  const mNuevo = { ventaKey: 'M1809', canal: 'mostrador', registradoEn: 1500 };
+  assert.strictEqual(esPosteriorAlCorte(mLegado, TOT_ACTIVO), false, 'una clave M puede ser legado');
+  assert.strictEqual(esPosteriorAlCorte(mNuevo, TOT_ACTIVO), true);
+});
+
+check('separarPorFrontera manda cada registro a UN solo lado', () => {
+  const REG = {
+    '744':   { comisionGenerada: 80 },                          // sin registradoEn: legado
+    'M1808': { comisionGenerada: 60, registradoEn: 500 },       // M pero anterior: legado
+    'M1809': { comisionGenerada: 70, registradoEn: 1500 },      // nuevo
+    'D5220': { comisionGenerada: 142, registradoEn: 2000 },     // nuevo
+  };
+  const { legado, nuevo } = separarPorFrontera(REG, TOT_ACTIVO);
+  assert.deepStrictEqual(legado.map((r) => r.clave).sort(), ['744', 'M1808']);
+  assert.deepStrictEqual(nuevo.map((r) => r.clave).sort(), ['D5220', 'M1809']);
+  assert.strictEqual(legado.length + nuevo.length, 4, 'ningun registro puede caer en los dos lados');
+});
+
+check('sin activar, TODO es legado', () => {
+  const REG = { 'M1': { registradoEn: 5 }, 'D2': { registradoEn: 9 } };
+  const { legado, nuevo } = separarPorFrontera(REG, { migracionVersion: 0 });
+  assert.strictEqual(nuevo.length, 0, 'no puede haber nada nuevo sin frontera');
+  assert.strictEqual(legado.length, 2);
+});
+
+check('los registros nuevos guardan registradoEn del servidor', () => {
+  assert.match(fuenteApi, /registradoEn: serverTimestamp\(\)/, 'no marca el momento del servidor');
+});
+
+check('fetchLimiteCorte distingue ausente de no verificable', () => {
+  const settings = readFileSync(new URL('../settingsApi.js', import.meta.url), 'utf8');
+  assert.match(settings, /valorNoVerificable/, 'no informa cuando no se pudo leer');
+  assert.ok(!/console\.error\('Error fetching limiteCorte:[\s\S]{0,80}return 0;/.test(settings),
+    'volvio a devolver 0 ante un error de lectura');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

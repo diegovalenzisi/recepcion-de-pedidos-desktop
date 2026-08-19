@@ -178,12 +178,26 @@ for (const loc of objetivo) {
         huboProblema = true;
         continue;
       }
+      // LA FRONTERA CONTABLE.
+      //
+      // `migracionActivadaEn` se escribe en el MISMO momento que
+      // migracionVersion: 1, con el timestamp DEL SERVIDOR ({".sv":"timestamp"}
+      // es la forma REST de serverTimestamp()). Todo lo anterior a esa marca es
+      // legado; todo lo posterior es del sistema nuevo.
+      //
+      // No puede ser la forma de la clave: las claves M{id}/D{id} existen desde
+      // el hotfix de identidad, publicado ANTES de activar, así que hay
+      // registros M/D que son legado. Y no puede ser `fecha`+`hora`, que son
+      // strings del reloj del cliente.
       await escribir(loc.db, loc.id, 'COMISIONES/TOTALES', {
-        migracionVersion: 1, migracionVerificadaEn: Date.now(),
+        migracionVersion: 1,
+        migracionVerificadaEn: { '.sv': 'timestamp' },
+        migracionActivadaEn: { '.sv': 'timestamp' },
       });
       const fin = await leer(loc.db, loc.id, 'COMISIONES/TOTALES');
-      console.log(`  PASO C: ${fin.migracionVersion === 1 ? 'ACTIVADO — contabilidad nueva en uso' : '*** FALLA al activar ***'}`);
-      if (fin.migracionVersion !== 1) huboProblema = true;
+      const okActivo = fin.migracionVersion === 1 && Number(fin.migracionActivadaEn) > 0;
+      console.log(`  PASO C: ${okActivo ? `ACTIVADO — frontera contable: ${new Date(fin.migracionActivadaEn).toISOString()}` : '*** FALLA al activar ***'}`);
+      if (!okActivo) huboProblema = true;
     }
   } catch (e) {
     console.error(`\n${loc.nombre}: ERROR — ${e.message}`);

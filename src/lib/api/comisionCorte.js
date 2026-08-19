@@ -30,7 +30,28 @@ export const ESTADO_INICIO = Object.freeze({
   NORMAL: 'NORMAL',       // ni aviso ni bloqueo
   AVISO: 'AVISO',         // se avisa, pero se trabaja
   BLOQUEADO: 'BLOQUEADO', // no se puede empezar hasta pagar
+  NO_VERIFICABLE: 'NO_VERIFICABLE', // no se pudo leer: NO se asume nada
 });
+
+/** Estados del gate de inicio, tal como los ve la interfaz. */
+export const ESTADO_SESION = Object.freeze({
+  VERIFICANDO: 'VERIFICANDO_COMISION',
+  AUTORIZADA: 'AUTORIZADA',
+  BLOQUEADA: 'BLOQUEADA_POR_CORTE',
+  ERROR: 'ERROR_DE_VERIFICACION',
+});
+
+/**
+ * Valor de configuración LEÍDO, distinguiendo "no está" de "no se pudo leer".
+ *
+ * Un campo ausente vale 0 y significa desactivado — eso es un dato válido.
+ * Una lectura fallida NO vale 0: significa que no sabemos, y no sabemos no
+ * puede convertirse en "corte desactivado", porque permitiría saltarse el
+ * límite justo cuando no se pudo comprobar.
+ */
+export const valorLeido = (pesos) => ({ ok: true, pesos: Number(pesos) || 0 });
+export const valorNoVerificable = (causa) => ({ ok: false, pesos: null, causa });
+export const esNoVerificable = (v) => !!v && v.ok === false;
 
 const aCentavosDeConfig = (pesos) => {
   const n = Number(pesos);
@@ -83,6 +104,52 @@ export const evaluarInicio = ({ saldoCentavos, alarmaPagoPesos, limiteCortePesos
 
 /** ¿Esta evaluación impide empezar a trabajar? */
 export const bloquea = (evaluacion) => evaluacion?.estado === ESTADO_INICIO.BLOQUEADO;
+
+/**
+ * EVALUACIÓN DE INICIO CON LECTURAS QUE PUEDEN FALLAR.
+ *
+ * Recibe los tres valores como `{ ok, pesos }` / `{ ok:false }`. Si CUALQUIERA
+ * no se pudo verificar, el resultado es NO_VERIFICABLE: no se asume 0, no se
+ * asume desactivado y no se habilita la sesión. La interfaz muestra
+ * "no se pudo verificar" con Reintentar / Salir.
+ *
+ * Esto aplica SOLO al arranque. Una sesión ya autorizada nunca se re-evalúa,
+ * así que una caída posterior de Firebase no puede bloquear a nadie.
+ */
+export const evaluarInicioConLecturas = ({ saldo, alarma, limite }) => {
+  const fallo = [saldo, alarma, limite].find(esNoVerificable);
+  if (fallo) {
+    return {
+      estado: ESTADO_INICIO.NO_VERIFICABLE,
+      saldoCentavos: null, alarmaCentavos: null, limiteCentavos: null,
+      faltaPagarCentavos: 0,
+      causa: fallo.causa,
+      mensaje: 'NO SE PUDO VERIFICAR EL ESTADO DE COMISIONES',
+    };
+  }
+  return evaluarInicio({
+    saldoCentavos: saldo.pesos,     // el saldo ya viene en centavos
+    alarmaPagoPesos: alarma.pesos,
+    limiteCortePesos: limite.pesos,
+  });
+};
+
+/** Estado de sesión que corresponde a una evaluación de inicio. */
+export const estadoDeSesion = (evaluacion) => {
+  switch (evaluacion?.estado) {
+    case ESTADO_INICIO.BLOQUEADO: return ESTADO_SESION.BLOQUEADA;
+    case ESTADO_INICIO.NO_VERIFICABLE: return ESTADO_SESION.ERROR;
+    default: return ESTADO_SESION.AUTORIZADA;   // NORMAL y AVISO dejan trabajar
+  }
+};
+
+/** Texto de la pantalla de "no se pudo verificar". */
+export const textoNoVerificable = () => ({
+  titulo: 'NO SE PUDO VERIFICAR EL ESTADO DE COMISIONES',
+  detalle: 'No fue posible consultar la configuración necesaria para iniciar. '
+    + 'Verifique la conexión e intente nuevamente.',
+  acciones: ['REINTENTAR', 'SALIR'],
+});
 
 /**
  * Después de un pago hecho DESDE la pantalla de bloqueo: ¿se libera la sesión?

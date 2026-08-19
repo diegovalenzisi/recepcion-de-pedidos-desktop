@@ -184,6 +184,11 @@ export const registrarComision = async ({
     // el que va a leer la anulación: así se revierte SIEMPRE lo que la venta
     // generó de verdad, aunque el porcentaje haya cambiado desde entonces.
     comisionGeneradaCentavos: comisionCentavos,
+    // Timestamp DEL SERVIDOR. Es lo único que permite decidir si una venta es
+    // anterior o posterior a la frontera contable: `fecha`/`hora` son strings
+    // del reloj del cliente, y la forma de la clave (M/D) no sirve porque esas
+    // claves existen desde el hotfix de identidad, ANTES de activar.
+    registradoEn: serverTimestamp(),
     totalComisionesAcumuladas: totalSnap.val(),
     estado: 'pendiente',
     origen,

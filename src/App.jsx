@@ -45,6 +45,7 @@ import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
 import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
 import { useImpresionFiscalPendiente } from '@/hooks/useImpresionFiscalPendiente.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
+import { registrarDispositivo } from '@/lib/api/deviceIdentity.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
 import DepsBootstrapScreen from '@/components/DepsBootstrapScreen.jsx';
 
@@ -548,6 +549,12 @@ function AppContent() {
         setNeedsNewShift(!shiftData);
         // Sincronizar TotalComisionAPagar con totalCommission al iniciar
         recalcularTotalComisionAPagar().catch(() => {});
+
+        // REGISTRO DEL EQUIPO, en el arranque real y no al abrir una pantalla.
+        // Deja constancia de qué dispositivo, de qué tipo y con qué versión está
+        // trabajando en este local — lo que hace falta para verificar adopción
+        // antes de activar la contabilidad nueva. No bloquea nada y no lanza.
+        registrarDispositivo({ localId: id, firebaseUrl: getFirebaseUrl() }).catch(() => {});
         perfMonitor.endTimer('initial-data-load');
     } catch (error) {
         console.error("Error loading initial data:", error);

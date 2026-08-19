@@ -1,5 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
+import { getCurrentLocalId } from '@/lib/firebase/core';
+import { nuevaMarca, guardarMarca, leerMarca, limpiarMarca } from '@/lib/api/intentoDePago';
+import { aCentavos, validarPago } from '@/lib/api/comisionMovimiento';
 import { useToast } from '@/components/ui/use-toast';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -37,16 +40,50 @@ const CommissionPaymentManager = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
 
+  // GUARDA SINCRÓNICA CONTRA EL DOBLE CLIC.
+  //
+  // `isProcessing` es estado de React: entre el primer clic y el re-render hay
+  // una ventana en la que el segundo clic entra igual. El ref se setea en la
+  // primera línea del handler, antes de cualquier await.
+  const enCursoRef = useRef(false);
+
+  // Deuda actual: del campo dedicado y, si no viene, derivada.
+  const aPagar = accountTotals.aPagar ?? Math.max(0, (accountTotals.totalCommission || 0) - (accountTotals.totalPagado || 0));
+
   const handleProcess = async () => {
+    if (enCursoRef.current) return;
+
     const amount = parseFloat(paymentAmount);
     if (isNaN(amount) || amount <= 0) {
       toast({ variant: 'destructive', title: 'Monto inválido', description: 'Por favor, ingresá un monto de pago válido.' });
       return;
     }
 
+    // NO SE PUEDE PAGAR MÁS QUE LA DEUDA. La garantía real la dan las reglas
+    // (rechazan la escritura entera); esto es para que el operador vea el
+    // motivo en vez de un error de permisos.
+    const v = validarPago(aCentavos(amount), aCentavos(aPagar));
+    if (!v.ok) {
+      toast({ variant: 'destructive', title: 'Importe mayor a la deuda', description: v.motivo });
+      return;
+    }
+
+    enCursoRef.current = true;
     setIsProcessing(true);
+
+    // IDENTIDAD DEL INTENTO. Se genera UNA vez y se persiste: si el commit
+    // entra pero la respuesta se pierde, el reintento reusa este mismo id y el
+    // servidor lo rechaza en vez de descontar dos veces.
+    const localId = getCurrentLocalId();
+    let marca = leerMarca(localId);
+    if (!marca) {
+      marca = nuevaMarca({ localId, montoCentavos: aCentavos(amount), responsable: 'Sistema', origen: 'desktop' });
+      guardarMarca(marca);
+    }
+
     try {
-      await onProcessPayment(amount);
+      await onProcessPayment(amount, 'Sistema', marca.idPago);
+      limpiarMarca(localId);
       toast({
         title: "¡Pago Procesado!",
         description: "El pago se registró y los resúmenes fueron actualizados.",
@@ -65,12 +102,10 @@ const CommissionPaymentManager = ({
         description: error.message || "Ocurrió un error inesperado.",
       });
     } finally {
+      enCursoRef.current = false;
       setIsProcessing(false);
     }
   };
-
-  // Precomputar aPagar desde el campo dedicado; si no viene, derivar
-  const aPagar = accountTotals.aPagar ?? Math.max(0, (accountTotals.totalCommission || 0) - (accountTotals.totalPagado || 0));
 
   return (
     <div className="pt-4 border-t border-primary/20">
