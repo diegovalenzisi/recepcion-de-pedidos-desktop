@@ -556,6 +556,112 @@ await check('con limiteCorte 0 (desactivado) nunca bloquea', async () => {
 });
 
 // ===========================================================================
+// ACTIVACIÓN ATÓMICA: migracionVersion y migracionActivadaEn juntos.
+//
+// Si fueran dos escrituras podría observarse migracionVersion=1 sin frontera,
+// y en esa ventana no habría forma de separar legado de nuevo.
+// ===========================================================================
+console.log('\n13. Activacion atomica (version + frontera):');
+nuevaFase();
+
+await check('activar escribe LOS DOS campos en el mismo update()', async () => {
+  await set(ref(A, rutaTotales(L)), {
+    totalAcumuladoCentavos: 5000, totalPagadoCentavos: 0, saldoPendienteCentavos: 5000,
+    migracionVersion: 0,
+  });
+  // Exactamente lo que hace el paso C del script de migración.
+  await update(ref(A, rutaTotales(L)), {
+    migracionVersion: 1,
+    migracionActivadaEn: serverTimestamp(),
+    migracionVerificadaEn: serverTimestamp(),
+  });
+  const t = await totales();
+  assert.strictEqual(t.migracionVersion, 1);
+  assert.ok(Number(t.migracionActivadaEn) > 0, 'la frontera no quedo escrita');
+});
+
+await check('NUNCA se observa migracionVersion=1 sin frontera', async () => {
+  const t = await totales();
+  const activa = contabilidadActiva(t);
+  const tieneFrontera = Number(t.migracionActivadaEn) > 0;
+  assert.strictEqual(activa && !tieneFrontera, false,
+    'hay una ventana en la que la contabilidad esta activa sin frontera');
+});
+
+await check('si el update falla, NINGUNO de los dos cambia', async () => {
+  nuevaFase();
+  await set(ref(A, rutaTotales(L)), {
+    totalAcumuladoCentavos: 100, totalPagadoCentavos: 0, saldoPendienteCentavos: 100,
+    migracionVersion: 0,
+  });
+  // Se fuerza el rechazo metiendo un acumulador invalido en el MISMO update.
+  let rechazado = false;
+  try {
+    await update(ref(A, rutaTotales(L)), {
+      migracionVersion: 1,
+      migracionActivadaEn: serverTimestamp(),
+      saldoPendienteCentavos: -1,        // invalido: la regla rechaza
+    });
+  } catch (e) { rechazado = String(e.message).includes('PERMISSION_DENIED'); }
+  assert.strictEqual(rechazado, true);
+  const t = await totales();
+  assert.strictEqual(t.migracionVersion, 0, 'la version cambio pese al rechazo');
+  assert.strictEqual(t.migracionActivadaEn, undefined, 'quedo la frontera de un intento fallido');
+  assert.strictEqual(t.saldoPendienteCentavos, 100);
+});
+
+// ===========================================================================
+// R2 DELIVERY — CIRCUITO COMPLETO.
+// ===========================================================================
+console.log('\n14. R2 Delivery integrado:');
+nuevaFase(); await activar();
+
+await check('entregar un delivery genera su comision', async () => {
+  const r = await aplicar(A, venta('delivery', 50, 142.02));
+  assert.strictEqual(r.aplicado, true);
+  const t = await totales();
+  assert.strictEqual(t.totalAcumuladoCentavos, 14202);
+  assert.strictEqual(t.saldoPendienteCentavos, 14202);
+});
+
+await check('una venta de MOSTRADOR con el mismo numero convive', async () => {
+  await aplicar(A, venta('mostrador', 50, 80));
+  const t = await totales();
+  assert.strictEqual(t.totalAcumuladoCentavos, 14202 + 8000);
+});
+
+await check('cancelar el delivery revierte EXACTAMENTE su comision original', async () => {
+  await aplicar(A, anul('delivery', 50, 142.02));
+  const t = await totales();
+  assert.strictEqual(t.totalAcumuladoCentavos, 8000, 'quedo solo la comision del mostrador');
+  assert.strictEqual(t.saldoPendienteCentavos, 8000);
+});
+
+await check('cancelar D50 NO afecto a M50', async () => {
+  const m = (await get(ref(A, `${L}/COMISIONES/MOVIMIENTOS`))).val() || {};
+  assert.ok(m['V-M50'], 'se perdio la venta de mostrador');
+  assert.ok(m['A-D50'], 'falta la anulacion del delivery');
+  assert.strictEqual(m['A-M50'], undefined, 'se anulo la venta de mostrador por error');
+});
+
+await check('repetir la cancelacion NO vuelve a descontar', async () => {
+  const r = await aplicar(A, anul('delivery', 50, 142.02));
+  assert.strictEqual(r.aplicado, false);
+  assert.strictEqual(r.motivo, 'ya_aplicado');
+  const t = await totales();
+  assert.strictEqual(t.totalAcumuladoCentavos, 8000);
+  assert.strictEqual(t.saldoPendienteCentavos, 8000);
+});
+
+await check('la anulacion usa la comision ORIGINAL aunque el porcentaje cambie', async () => {
+  nuevaFase(); await activar();
+  await aplicar(A, venta('delivery', 60, 1));      // 1% -> $1
+  // El local pasa a 2%. La anulacion igual resta el importe guardado.
+  await aplicar(A, anul('delivery', 60, 1));
+  assert.strictEqual((await totales()).totalAcumuladoCentavos, 0);
+});
+
+// ===========================================================================
 console.log(`\n${passed} pruebas OK, ${failed} fallas`);
 await deleteApp(A.app); await deleteApp(B.app);
 process.exit(failed ? 1 : 0);

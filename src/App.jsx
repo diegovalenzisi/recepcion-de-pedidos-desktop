@@ -42,7 +42,10 @@ import { perfMonitor } from '@/lib/performanceMonitor';
 import InstallPrompt from '@/components/InstallPrompt.jsx';
 import { useCommissionAlarm } from '@/hooks/useCommissionAlarm.js';
 import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
-import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
+import { useCommissionTotal, useCommissionBalance } from '@/hooks/useCommissionTotal.js';
+import { useGateComision } from '@/hooks/useGateComision.js';
+import { ESTADO_SESION } from '@/lib/api/comisionCorte.js';
+import CommissionBlockScreen from '@/components/CommissionBlockScreen.jsx';
 import { useImpresionFiscalPendiente } from '@/hooks/useImpresionFiscalPendiente.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import { registrarDispositivo } from '@/lib/api/deviceIdentity.js';
@@ -248,6 +251,10 @@ function AppContent() {
   // Badge de comisión pendiente (tiempo real) — única fuente de verdad para el saldo de
   // comisión a pagar, compartida entre el indicador del footer y el aviso al entrar al local.
   const commissionPending = useCommissionTotal(!!user && !!localId);
+  const commissionBalance = useCommissionBalance(!!user && !!localId);
+
+  // Gate de inicio por limite de corte: evaluacion UNICA por sesion real.
+  const gateComision = useGateComision();
 
   // IMPRESIÓN AUTOMÁTICA DE COMPROBANTES FISCALES.
   //
@@ -587,6 +594,18 @@ function AppContent() {
     }
   }, [localId, user, applySettings, firebaseReadiness.ready]);
 
+  // GATE DE COMISIÓN — se evalúa cuando hay sesión y Firebase confirmado.
+  //
+  // `evaluar()` es idempotente: si la sesión ya quedó AUTORIZADA no vuelve a
+  // leer nada, así que este efecto puede re-ejecutarse sin riesgo de que una
+  // sesión en curso se bloquee. Al cambiar de local el estado se reevalúa, que
+  // es lo correcto: es otro comercio, con su propia deuda y su propio límite.
+  useEffect(() => {
+    if (localId && user && firebaseReadiness.ready) {
+      gateComision.evaluar();
+    }
+  }, [localId, user, firebaseReadiness.ready, gateComision.evaluar]);
+
   // Reconciliación de MATERIA_PRIMA/{id}/activoDelivery al cargar / cambiar de
   // local: corrige materias primas con stock <= 0 que hayan quedado en
   // activoDelivery=true (datos existentes) y restaura las que corresponda.
@@ -776,6 +795,33 @@ function AppContent() {
           </Routes>
         </Suspense>
       );
+  }
+
+  // -------------------------------------------------------------------------
+  // GATE DE INICIO POR LÍMITE DE CORTE.
+  //
+  // Va DESPUÉS del login (se necesita sesión para poder pagar) y ANTES del área
+  // operativa. Se evalúa UNA sola vez, con una lectura puntual: no hay listener,
+  // así que una sesión ya autorizada no puede volver a bloquearse aunque la
+  // deuda supere el límite durante el turno. El límite se vuelve a mirar recién
+  // en el próximo inicio real.
+  //
+  // ERROR_DE_VERIFICACION no es un bloqueo por corte: es "no sabemos", con
+  // REINTENTAR / SALIR. Un fallo de red nunca se toma como corte desactivado.
+  // -------------------------------------------------------------------------
+  if (gateComision.estado === ESTADO_SESION.BLOQUEADA
+      || gateComision.estado === ESTADO_SESION.ERROR
+      || gateComision.estado === ESTADO_SESION.VERIFICANDO) {
+    return (
+      <CommissionBlockScreen
+        estado={gateComision.estado}
+        evaluacion={gateComision.evaluacion}
+        balance={commissionBalance}
+        onPagoExitoso={gateComision.reevaluarTrasPago}
+        onReintentar={gateComision.evaluar}
+        onSalir={logout}
+      />
+    );
   }
 
   const userPermissions = user.permissions || {};

@@ -257,6 +257,18 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema', 
   // `idPagoIntento` lo genera y CONSERVA el llamador: un reintento apunta al
   // mismo `P-{id}` y las reglas lo rechazan sin descontar de nuevo.
   // -------------------------------------------------------------------------
+  // GUARDA: con la contabilidad activa, un pago SIN identidad de intento no
+  // puede aplicarse. Sin `idPago` no hay `P-{id}` determinístico y por lo tanto
+  // no hay idempotencia: un reintento descontaría dos veces. Antes que dejar
+  // pasar un pago sin protección, se corta y se ve.
+  if (contabilidadActiva(totales) && !idPagoIntento) {
+    throw new Error(
+      'Pago de comisión sin identidad de intento (idPago). Con la contabilidad '
+      + 'nueva activa todo pago tiene que llegar con su idPago persistido; sin él '
+      + 'no hay forma de evitar un doble descuento ante un reintento.',
+    );
+  }
+
   if (contabilidadActiva(totales) && idPagoIntento) {
     const snapReg = await get(ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO`));
     const pendientesCentavos = [];

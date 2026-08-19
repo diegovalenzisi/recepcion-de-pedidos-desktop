@@ -742,4 +742,102 @@ check('Desktop se registra en el ARRANQUE, no al abrir una pantalla', () => {
   assert.ok(iReg > iCarga && iReg > 0, 'no esta dentro de la carga inicial');
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n19. Gate de inicio cableado y camino unico de pago:');
+
+const fuenteGate = readFileSync(new URL('../../../hooks/useGateComision.js', import.meta.url), 'utf8');
+const fuenteApp = readFileSync(new URL('../../../App.jsx', import.meta.url), 'utf8');
+
+check('el gate usa una LECTURA PUNTUAL, sin listener', () => {
+  assert.match(fuenteGate, /await get\(ref\(db, rutaTotales\(localId\)\)\)/, 'no lee el saldo de una vez');
+  assert.ok(!/onValue/.test(fuenteGate), 'un listener podria bloquear una sesion en curso');
+});
+
+check('una sesion AUTORIZADA no se vuelve a evaluar', () => {
+  assert.match(fuenteGate, /if \(yaEvaluadoRef\.current\) return;/, 'falta el corte de re-evaluacion');
+  assert.match(fuenteGate, /if \(nuevo === ESTADO_SESION\.AUTORIZADA\) yaEvaluadoRef\.current = true;/);
+});
+
+check('un bloqueo o un error SI se pueden reintentar', () => {
+  // Solo se "fija" la decision cuando quedo autorizada.
+  assert.ok(!/yaEvaluadoRef\.current = true;\s*setEstado\(ESTADO_SESION\.BLOQUEADA/.test(fuenteGate));
+});
+
+check('el desbloqueo tras pagar hace UNA relectura y fija la sesion', () => {
+  assert.match(fuenteGate, /reevaluarTrasPago/);
+  assert.match(fuenteGate, /liberaTrasPago\(\{ saldoCentavosDespues/);
+  assert.match(fuenteGate, /yaEvaluadoRef\.current = true;\s*\/\/ desde acá, definitiva/);
+});
+
+check('no verificar el limite NO libera la sesion', () => {
+  assert.match(fuenteGate, /if \(!limite\.ok\) return false;/);
+});
+
+check('App.jsx bloquea el area operativa en los tres estados no autorizados', () => {
+  assert.match(fuenteApp, /ESTADO_SESION\.BLOQUEADA/);
+  assert.match(fuenteApp, /ESTADO_SESION\.ERROR/);
+  assert.match(fuenteApp, /ESTADO_SESION\.VERIFICANDO/);
+  assert.match(fuenteApp, /<CommissionBlockScreen/);
+});
+
+check('el gate va DESPUES del login (hay que poder pagar) y ANTES de operar', () => {
+  const iLogin = fuenteApp.indexOf('if (!user) {');
+  const iGate = fuenteApp.indexOf('gateComision.estado === ESTADO_SESION.BLOQUEADA');
+  const iNav = fuenteApp.indexOf('<NavLink to="/atencion"');
+  assert.ok(iLogin > 0 && iGate > iLogin, 'el gate quedo antes del login');
+  assert.ok(iNav > iGate, 'el area operativa quedo antes del gate');
+});
+
+check('la pantalla de bloqueo reutiliza el MISMO circuito de pago', () => {
+  const pantalla = readFileSync(new URL('../../../components/CommissionBlockScreen.jsx', import.meta.url), 'utf8');
+  assert.match(pantalla, /CommissionPaymentManager/, 'creo un segundo mecanismo de pago');
+  assert.match(pantalla, /processCommissionPayment/);
+  assert.match(pantalla, /LÍMITE DE COMISIÓN ALCANZADO|textoDeBloqueo/);
+});
+
+check('CAMINO UNICO DE PAGO: solo processCommissionPayment llama a registrarPagoComision', () => {
+  const settings = readFileSync(new URL('../settingsApi.js', import.meta.url), 'utf8');
+  // Una sola llamada real, y pasa el idPago.
+  const llamadas = (settings.match(/await registrarPagoComision\(/g) || []).length;
+  assert.strictEqual(llamadas, 1, 'hay mas de un camino de pago');
+  assert.match(settings, /registrarPagoComision\(paymentAmount, responsable, idPagoIntento\)/);
+});
+
+check('con la contabilidad activa, un pago SIN idPago se corta', () => {
+  assert.match(fuenteApi, /contabilidadActiva\(totales\) && !idPagoIntento/, 'falta la guarda');
+  assert.match(fuenteApi, /sin identidad de intento/, 'el error no explica el motivo');
+});
+
+// ---------------------------------------------------------------------------
+console.log('\n20. MyAccountPage: fuente dual sin duplicar operaciones:');
+
+const fuenteMy = readFileSync(new URL('../myAccountApi.js', import.meta.url), 'utf8');
+
+check('dormido devuelve exactamente lo de siempre', () => {
+  assert.match(fuenteMy, /if \(!contabilidadActiva\(totales\)\) \{[\s\S]{0,200}fetchAccountSummary\(\)/);
+});
+
+check('activo toma los totales de los acumuladores', () => {
+  assert.match(fuenteMy, /totalCommissionCentavos: acum\.totalAcumuladoCentavos/);
+  assert.match(fuenteMy, /pendingCentavos: acum\.saldoPendienteCentavos/);
+});
+
+check('los movimientos se parten por la frontera', () => {
+  assert.match(fuenteMy, /separarPorFrontera\(registro, totales\)/);
+});
+
+check('activo, el ledger viejo DEJA DE ESCRIBIRSE (o la venta se veria dos veces)', () => {
+  assert.match(fuenteMy, /CONGELAMIENTO DE RESUMEN_CUENTA/);
+  assert.match(fuenteMy, /if \(!yaActiva\) \{/, 'sigue escribiendo RESUMEN_CUENTA con la contabilidad activa');
+});
+
+check('imposible que una operacion aparezca en las dos listas', () => {
+  // separarPorFrontera ya garantiza que cada registro cae de UN lado; y como el
+  // ledger viejo deja de escribirse, una venta nueva no puede estar en los dos.
+  const REG = { 'M1': { registradoEn: 5 }, 'M2': { registradoEn: 1500 } };
+  const { legado, nuevo } = separarPorFrontera(REG, { migracionVersion: 1, migracionActivadaEn: 1000 });
+  const ids = [...legado, ...nuevo].map((r) => r.clave);
+  assert.strictEqual(new Set(ids).size, ids.length, 'una operacion quedo en los dos lados');
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
