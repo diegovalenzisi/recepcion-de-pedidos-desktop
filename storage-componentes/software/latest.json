@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.96",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.96%2FRecepcion-de-Pedidos-Setup-1.3.96.exe?alt=media",
-  "sha256": "979abe2fc2ba1ac12f8201ec24b2a3966340ddff98216a4eea179c5bb99c86fb",
-  "size": 125273876,
+  "latest": "1.3.97",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.97%2FRecepcion-de-Pedidos-Setup-1.3.97.exe?alt=media",
+  "sha256": "3c3437dae96a4d77511dbf19a961ec4818453c5e7f70ca5b96ac2fbef9274ee0",
+  "size": 125270931,
   "mandatory": true,
-  "releaseDate": "2026-08-16",
-  "notes": "Version 1.3.96. Corrige el cierre de turno, que podia quedar a mitad de camino. Si una cuenta tenia un punto en el nombre (por ejemplo PREPAGO M.PAGO), el cierre respaldaba y limpiaba los pedidos y despues no lograba guardar la caja: el turno quedaba abierto y la pantalla mostraba cero ventas. Ahora el cierre revisa todos los datos ANTES de mover un solo pedido, y si algo no se pudiera guardar avisa y no toca nada. Ademas soporta cualquier nombre de cuenta, incluso con . # $ / [ ], y el mensaje de error dice que paso y si los pedidos ya se movieron. En Cuentas, Nueva Cuenta ofrece ahora PREPAGO MPAGO, sin el punto; las cuentas y los pedidos que ya existan con el nombre anterior siguen funcionando igual, con el mismo historial. No cambia la facturacion, ni el mostrador, ni el delivery, ni los datos guardados."
+  "releaseDate": "2026-08-19",
+  "notes": "Version 1.3.97. Corrige una perdida de comisiones. Las ventas de mostrador y los pedidos de delivery se numeran por separado, los dos empezando en 1, y cuando esos numeros se cruzan una venta quedaba tapada por la otra: la comision de la segunda se descartaba sin avisar. Desde esta version cada venta se identifica con su canal ademas de su numero, asi mostrador 744 y delivery 744 son dos operaciones distintas y las dos generan su comision. No cambia ninguna deuda ni ningun total existente, no modifica ventas anteriores y no cobra nada hacia atras: solo evita que se pierdan comisiones de ahora en adelante. Actualizacion obligatoria para que todos los equipos usen la misma identificacion de ventas."
 }
