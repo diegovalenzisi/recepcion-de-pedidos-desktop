@@ -1,6 +1,54 @@
-import { getDatabase, ref, get, set, push, runTransaction, update } from 'firebase/database';
+import { getDatabase, ref, get, set, push, runTransaction, update, increment, serverTimestamp } from 'firebase/database';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { claveDeVenta, claveLegada, identidadDeVenta, registroEsDelCanal } from '@/lib/api/comisionVentaKey';
+import {
+  aCentavos, contabilidadActiva, rutaTotales,
+  planDeVenta, planDeAnulacion, planDePago,
+  tieneEfectoContable, deltasDeVenta, deltasDeAnulacion,
+} from '@/lib/api/comisionMovimiento';
+
+// ---------------------------------------------------------------------------
+// PUENTE ENTRE EL PLAN PURO Y FIREBASE.
+//
+// `comisionMovimiento.js` decide QUÉ mover (rutas + deltas). Acá se convierte
+// en UNA sola escritura multipath con los `increment()` del servidor.
+//
+// Mientras `migracionVersion < 1` nada de esto corre: los tres acumuladores no
+// existen todavía y cada función se comporta EXACTAMENTE como antes.
+// ---------------------------------------------------------------------------
+
+/** Lee el nodo de totales una sola vez. Devuelve null si no existe. */
+const leerTotales = async (db, localId) => (await get(ref(db, rutaTotales(localId)))).val();
+
+/**
+ * Aplica un plan contable: el movimiento y los tres incrementos en el MISMO
+ * `update()`. O entra todo, o no entra nada.
+ *
+ * Un `opId` repetido es rechazado por las reglas (create-only sobre
+ * MOVIMIENTOS) y con él se descarta la escritura entera, incluidos los
+ * incrementos: reintentar es gratis y no puede contar dos veces.
+ */
+const aplicarPlan = async (db, plan) => {
+  const payload = {
+    [plan.movimiento.ruta]: { ...plan.movimiento.valor, ts: serverTimestamp() },
+    [plan.rutaMarcaDeTiempo]: serverTimestamp(),
+  };
+  for (const inc of plan.incrementos) payload[inc.ruta] = increment(inc.delta);
+
+  try {
+    await update(ref(db), payload);
+    console.log(`[COMISION] movimiento ${plan.opId} aplicado`);
+    return { aplicado: true };
+  } catch (e) {
+    if (String(e?.message || '').includes('PERMISSION_DENIED')) {
+      // Ya estaba aplicado, o dejaría un acumulador negativo. En los dos casos
+      // NO se movió nada: es el resultado correcto, no un error que propagar.
+      console.log(`[COMISION] movimiento ${plan.opId} rechazado (ya aplicado o inválido)`);
+      return { aplicado: false, motivo: 'rechazado' };
+    }
+    throw e;
+  }
+};
 
 const ahora = () => {
   const now = new Date();
@@ -59,6 +107,11 @@ export const registrarComision = async ({
 
   console.log(`[COMISION] ventaKey=${ventaKey} yaExiste=false genera=true comision=${comisionGenerada}`);
 
+  const comisionCentavos = aCentavos(comisionGenerada);
+  const opIdDeVenta = `V-${ventaKey}`;
+  const totales = await leerTotales(op.getDatabaseOrAbort(), localId);
+  const activa = contabilidadActiva(totales);
+
   // Incrementar total acumulado histórico en forma atómica
   const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   const { committed, snapshot: totalSnap } = await runTransaction(totalRef, (current) => {
@@ -81,10 +134,27 @@ export const registrarComision = async ({
     ventaTotal,
     porcentajeComision,
     comisionGenerada,
+    // Importe exacto en centavos enteros. Es el que usa la contabilidad nueva y
+    // el que va a leer la anulación: así se revierte SIEMPRE lo que la venta
+    // generó de verdad, aunque el porcentaje haya cambiado desde entonces.
+    comisionGeneradaCentavos: comisionCentavos,
     totalComisionesAcumuladas: totalSnap.val(),
     estado: 'pendiente',
     origen,
+    ...(activa ? { opId: opIdDeVenta } : {}),
   });
+
+  // CONTABILIDAD NUEVA. Dormida mientras migracionVersion < 1.
+  //
+  // Una venta con comisión 0 (local con porcentaje en 0, como Achaval) guarda
+  // su identidad igual, pero no hay nada que mover: no se emite movimiento y
+  // los acumuladores quedan intactos.
+  if (activa && tieneEfectoContable(deltasDeVenta(comisionCentavos))) {
+    await aplicarPlan(op.getDatabaseOrAbort(), planDeVenta({
+      localId, modoVenta, idVenta, comisionCentavos,
+      meta: { ventaKey, ventaTotal: aCentavos(ventaTotal), origen },
+    }));
+  }
 };
 
 /**
@@ -94,13 +164,32 @@ export const registrarComision = async ({
  * como "pagada_parcial" con saldoPendiente.
  * Crea un registro en COMISIONES/PAGOS con el resumen del pago.
  */
-export const registrarPagoComision = async (montoPago, responsable = 'Sistema') => {
+export const registrarPagoComision = async (montoPago, responsable = 'Sistema', idPagoIntento = null) => {
   checkLocalId();
   const localId = getCurrentDatabasePath();
   const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
-  const snap = await get(ref(db, `${localId}/COMISIONES/REGISTRO`));
+  // CONTABILIDAD NUEVA: el movimiento del pago se aplica ANTES de repartirlo
+  // entre los registros, porque es la parte que mueve la deuda y la que tiene
+  // que ser exactamente-una-vez. `idPagoIntento` lo genera y CONSERVA el
+  // llamador: un reintento con el mismo id vuelve a apuntar al mismo `P-{id}`
+  // y las reglas lo rechazan sin descontar de nuevo.
+  const totales = await leerTotales(db, localId);
+  if (contabilidadActiva(totales) && idPagoIntento) {
+    const r = await aplicarPlan(op.getDatabaseOrAbort(), planDePago({
+      localId, idPago: idPagoIntento, montoCentavos: aCentavos(montoPago),
+      meta: { responsable },
+    }));
+    if (!r.aplicado) {
+      // Ya se había aplicado (reintento) o dejaría la deuda negativa. No se
+      // vuelve a repartir entre los registros.
+      console.log(`[COMISION] pago ${idPagoIntento} no se aplica de nuevo`);
+      return;
+    }
+  }
+
+  const snap = await get(ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO`));
   if (!snap.exists()) return;
 
   // Recolectar pendientes (incluyendo pagos parciales previos)
@@ -237,12 +326,29 @@ export const cancelarComision = async (idVenta, modoVenta) => {
   }
 
   const comisionGenerada = registro.comisionGenerada || 0;
+  // SIEMPRE la comisión que generó ESTA venta, nunca el porcentaje de hoy. Los
+  // registros nuevos ya la traen en centavos; los anteriores se convierten.
+  const comisionCentavos = Number.isInteger(registro.comisionGeneradaCentavos)
+    ? registro.comisionGeneradaCentavos
+    : aCentavos(comisionGenerada);
+
+  const totales = await leerTotales(op.getDatabaseOrAbort(), localId);
+  const activa = contabilidadActiva(totales);
 
   // Descontar del total acumulado. Revalida antes: el get() de arriba fue un await real.
   const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   await runTransaction(totalRef, (current) => {
     return Math.max(0, (current || 0) - comisionGenerada);
   });
+
+  // CONTABILIDAD NUEVA. `A-{ventaKey}` es único por venta, así que anular dos
+  // veces revierte una sola. Dormida mientras migracionVersion < 1.
+  if (activa && modoVenta && tieneEfectoContable(deltasDeAnulacion(comisionCentavos))) {
+    await aplicarPlan(op.getDatabaseOrAbort(), planDeAnulacion({
+      localId, modoVenta, idVenta, comisionCentavos,
+      meta: { ventaKey: claveResuelta },
+    }));
+  }
 
   const { fecha, hora } = ahora();
   // Se revalida la database, pero se conserva la MISMA clave que se resolvió

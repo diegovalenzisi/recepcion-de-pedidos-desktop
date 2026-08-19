@@ -2,6 +2,7 @@
 import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
 import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
+import { cancelarComision } from '@/lib/api/comisionesApi';
 import { formatDateForFirebase, getOperationalDate } from '@/lib/utils';
 import { calcularVentaCostoGanancia } from '@/lib/api/ventaUtils';
 import { construirLineaPersistible, enriquecerOpcionalSnapshot } from '@/lib/api/optionalsPricing';
@@ -650,6 +651,23 @@ export const updateOrder = async (orderId, dataToUpdate, currentShift = null) =>
             // operador ve el problema fiscal y puede corregir la configuración
             // de la cola, sin que eso haya costado el descuento de la venta.
             if (errorFiscal) throw errorFiscal;
+        }
+
+        // R2 — ANULACIÓN DE DELIVERY.
+        //
+        // Faltaba por completo: un pedido que pasaba de ENTREGADO a CANCELADO
+        // dejaba su comisión viva. Mostrador sí lo hacía (counterApi), delivery
+        // no, así que la deuda del local sumaba comisiones de pedidos anulados.
+        //
+        // Se revierte con la comisión ORIGINAL guardada en el registro, nunca
+        // recalculando con el porcentaje de hoy, y con la clave canónica del
+        // canal para no tocar la venta de mostrador del mismo número.
+        if (wasEntregado && newStatus === 'CANCELADO') {
+            try {
+                await cancelarComision(String(orderId), 'delivery');
+            } catch (err) {
+                console.error(`[COMISION] Error al cancelar la comisión del delivery ${orderId}:`, err);
+            }
         }
     }
 

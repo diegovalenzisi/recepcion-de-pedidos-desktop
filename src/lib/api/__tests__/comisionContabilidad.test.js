@@ -7,6 +7,7 @@
 //
 // Correr con: node src/lib/api/__tests__/comisionContabilidad.test.js
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import {
   TIPO_MOVIMIENTO, VERSION_ACTIVA,
   aCentavos, aPesos, esImporteValido,
@@ -353,6 +354,70 @@ check('el texto de bloqueo nombra deuda y limite', () => {
   assert.match(t.titulo, /LÍMITE DE COMISIÓN ALCANZADO/);
   assert.match(t.pendiente, /65\.000/);
   assert.match(t.limite, /60\.000/);
+});
+
+// ---------------------------------------------------------------------------
+// EL CABLEADO REAL.
+//
+// La atomicidad y la concurrencia se prueban contra el emulador. Acá se
+// verifica sobre el CÓDIGO que el camino dormido siga existiendo y que el
+// camino nuevo esté detrás de `contabilidadActiva`, que es lo que garantiza
+// que instalar esta versión no altere la contabilidad actual.
+// ---------------------------------------------------------------------------
+console.log('\n12. El cableado respeta el sistema dormido:');
+
+const fuenteApi = readFileSync(new URL('../comisionesApi.js', import.meta.url), 'utf8');
+
+check('comisionesApi lee los totales y decide con contabilidadActiva', () => {
+  assert.match(fuenteApi, /leerTotales\(/, 'no lee el nodo de totales');
+  assert.match(fuenteApi, /contabilidadActiva\(totales\)/, 'no consulta si esta activa');
+});
+
+check('el camino DORMIDO conserva la escritura de siempre', () => {
+  // La transaccion sobre el totalAcumulado legado y el set() del REGISTRO
+  // siguen ocurriendo SIEMPRE, activo o no: es el comportamiento actual.
+  assert.match(fuenteApi, /COMISIONES\/TOTALES\/totalAcumulado`\)/, 'se perdio el acumulador legado');
+  assert.match(fuenteApi, /estado: 'pendiente'/, 'se perdio el registro de siempre');
+});
+
+check('el camino NUEVO esta detras del interruptor, en las tres operaciones', () => {
+  const cuerpo = fuenteApi.replace(/\r\n/g, '\n');
+  for (const plan of ['planDeVenta', 'planDeAnulacion', 'planDePago']) {
+    const i = cuerpo.indexOf(plan + '(');
+    assert.ok(i > 0, `falta ${plan}`);
+    // Hacia atras desde la llamada tiene que aparecer la guarda.
+    const antes = cuerpo.slice(Math.max(0, i - 700), i);
+    assert.match(antes, /activa|contabilidadActiva/, `${plan} no esta detras del interruptor`);
+  }
+});
+
+check('una venta con comision 0 no emite movimiento', () => {
+  assert.match(fuenteApi, /tieneEfectoContable\(deltasDeVenta\(comisionCentavos\)\)/);
+});
+
+check('la anulacion usa comisionGeneradaCentavos guardado, no un porcentaje', () => {
+  assert.match(fuenteApi, /registro\.comisionGeneradaCentavos/, 'no lee el importe guardado');
+  assert.ok(!/fetchSalesPercentage/.test(fuenteApi), 'la anulacion no puede consultar el porcentaje actual');
+});
+
+check('el registro nuevo guarda comisionGeneradaCentavos', () => {
+  assert.match(fuenteApi, /comisionGeneradaCentavos: comisionCentavos/);
+});
+
+check('el pago recibe y usa un idPago conservado por el llamador', () => {
+  assert.match(fuenteApi, /idPagoIntento/, 'no acepta el id del intento');
+  assert.match(fuenteApi, /planDePago\(\{[\s\S]{0,120}idPago: idPagoIntento/, 'no usa el id del intento');
+});
+
+check('R2: ordersApi cancela la comision del delivery anulado', () => {
+  const orders = readFileSync(new URL('../ordersApi.js', import.meta.url), 'utf8');
+  assert.match(orders, /wasEntregado && newStatus === 'CANCELADO'/, 'no detecta la anulacion de un entregado');
+  assert.match(orders, /cancelarComision\(String\(orderId\), 'delivery'\)/, 'no revierte la comision del delivery');
+});
+
+check('mostrador sigue informando su canal', () => {
+  const counter = readFileSync(new URL('../counterApi.js', import.meta.url), 'utf8');
+  assert.match(counter, /cancelarComision\(String\(sale\.id\), 'mostrador'\)/);
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));
