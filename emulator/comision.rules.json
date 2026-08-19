@@ -1,18 +1,14 @@
 {
   "rules": {
     ".read": true,
-
     "$localId": {
-
       "COMISIONES": {
-
         "MOVIMIENTOS": {
           "$opId": {
             ".write": "!data.exists()",
             ".validate": "newData.hasChildren(['tipo','ts'])"
           }
         },
-
         "TOTALES": {
           ".write": true,
           "totalAcumuladoCentavos": {
@@ -27,24 +23,37 @@
           "migracionVersion": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
-          "$otroTotal": { ".validate": true }
+          "$otroTotal": {
+            ".validate": true
+          }
         },
-
         "REGISTRO": {
           ".write": true,
           "$ventaKey": {
-            ".validate": "root.child($localId).child('COMISIONES').child('TOTALES').child('migracionVersion').val() < 1 || newData.hasChild('opId') || !newData.hasChildren(['comisionGenerada'])"
+            ".validate": "newData.hasChild('opId') || !newData.hasChild('comisionGeneradaCentavos') || !root.child($localId).child('COMISIONES/TOTALES/migracionActivadaEn').exists()"
           }
         },
-
-        "PAGOS":            { ".write": true },
-        "PAGOS_PENDIENTES": { ".write": true },
-        "$otroComision":    { ".write": true }
+        "PAGOS": {
+          ".write": true
+        },
+        "PAGOS_PENDIENTES": {
+          ".write": true
+        },
+        "$otroComision": {
+          ".write": true
+        }
       },
-
-      "PEDIDOS":   { ".write": true, ".indexOn": "fechacaja" },
-      "MOSTRADOR": { ".write": true, ".indexOn": "fechacaja" },
-      "$otro":     { ".write": true }
+      "PEDIDOS": {
+        ".write": true,
+        ".indexOn": "fechacaja"
+      },
+      "MOSTRADOR": {
+        ".write": true,
+        ".indexOn": "fechacaja"
+      },
+      "$otro": {
+        ".write": true
+      }
     }
   }
 }

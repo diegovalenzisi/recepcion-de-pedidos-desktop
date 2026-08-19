@@ -3,7 +3,7 @@ import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/
 import { claveDeVenta, claveLegada, identidadDeVenta, registroEsDelCanal } from '@/lib/api/comisionVentaKey';
 import {
   aCentavos, contabilidadActiva, rutaTotales,
-  planDeVenta, planDeAnulacion, planDePago,
+  planDeVenta, planDeAnulacion, planCompletoDePago,
   tieneEfectoContable, deltasDeVenta, deltasDeAnulacion,
 } from '@/lib/api/comisionMovimiento';
 
@@ -60,10 +60,11 @@ export class ComisionRechazadaError extends Error {
  * En los dos casos no se movió nada; la diferencia es que uno es esperable y
  * el otro tiene que llegar a la superficie.
  */
-const aplicarPlan = async (db, plan) => {
+const aplicarPlan = async (db, plan, extras = null) => {
   const payload = {
     [plan.movimiento.ruta]: { ...plan.movimiento.valor, ts: serverTimestamp() },
     [plan.rutaMarcaDeTiempo]: serverTimestamp(),
+    ...(extras || {}),
   };
   for (const inc of plan.incrementos) payload[inc.ruta] = increment(inc.delta);
 
@@ -104,6 +105,18 @@ const ahora = () => {
     hora: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
   };
 };
+
+/**
+ * Aplica el plan COMPLETO de un pago: movimiento, acumuladores, comprobante y
+ * los registros que el pago alcanza — todo en la misma escritura atómica.
+ *
+ * No existe el estado "deuda descontada pero detalle incompleto": es una sola
+ * operación. Verificado contra el emulador con 250 registros (1.256 rutas).
+ */
+const aplicarPlanCompleto = (db, plan) => aplicarPlan(db, plan, {
+  [plan.comprobante.ruta]: plan.comprobante.valor,
+  ...plan.detalle,
+});
 
 /**
  * Registra la comisión generada por una venta concretada.
@@ -221,26 +234,63 @@ export const registrarPagoComision = async (montoPago, responsable = 'Sistema', 
   const op = beginFirebaseOperation();
   const db = op.getDatabaseOrAbort();
 
-  // CONTABILIDAD NUEVA: el movimiento del pago se aplica ANTES de repartirlo
-  // entre los registros, porque es la parte que mueve la deuda y la que tiene
-  // que ser exactamente-una-vez. `idPagoIntento` lo genera y CONSERVA el
-  // llamador: un reintento con el mismo id vuelve a apuntar al mismo `P-{id}`
-  // y las reglas lo rechazan sin descontar de nuevo.
   const totales = await leerTotales(db, localId);
+
+  // -------------------------------------------------------------------------
+  // CONTABILIDAD NUEVA: EL PAGO ENTERO EN UNA SOLA ESCRITURA.
+  //
+  // Un pago mueve dos cosas: la DEUDA (los acumuladores) y el DETALLE (qué
+  // registros quedan pagados, más el comprobante). Si fueran dos escrituras, un
+  // fallo entre medio dejaría la deuda correcta y el detalle incompleto, sin
+  // que nadie se entere.
+  //
+  // Se arma todo junto y se manda en un único `update()` multipath — movimiento
+  // create-only, los tres increments, el comprobante y los registros. Verificado
+  // contra el emulador con un pago que alcanzó 250 registros: 1.256 rutas en una
+  // sola escritura. O entra todo, o no entra nada.
+  //
+  // `idPagoIntento` lo genera y CONSERVA el llamador: un reintento apunta al
+  // mismo `P-{id}` y las reglas lo rechazan sin descontar de nuevo.
+  // -------------------------------------------------------------------------
   if (contabilidadActiva(totales) && idPagoIntento) {
-    const r = await aplicarPlan(op.getDatabaseOrAbort(), planDePago({
+    const snapReg = await get(ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO`));
+    const pendientesCentavos = [];
+    snapReg.forEach((child) => {
+      const v = child.val();
+      if (!v) return;
+      const enCentavos = (pesos, centavos) => (Number.isInteger(centavos) ? centavos : aCentavos(pesos));
+      if (v.estado === 'pendiente') {
+        pendientesCentavos.push({
+          key: child.key, fecha: v.fecha, hora: v.hora, estado: v.estado,
+          pendingAmount: enCentavos(v.comisionGenerada, v.comisionGeneradaCentavos),
+        });
+      } else if (v.estado === 'pagada_parcial') {
+        pendientesCentavos.push({
+          key: child.key, fecha: v.fecha, hora: v.hora, estado: v.estado,
+          pendingAmount: enCentavos(v.saldoPendiente, v.saldoPendienteCentavos),
+        });
+      }
+    });
+
+    const { fecha: fechaPago, hora: horaPago } = ahora();
+    const plan = planCompletoDePago({
       localId, idPago: idPagoIntento, montoCentavos: aCentavos(montoPago),
-      meta: { responsable },
-    }));
-    // Si el pago fue RECHAZADO por algo que no es un duplicado, aplicarPlan ya
-    // lanzó: el error sube al llamador y el operador lo ve. Acá solo queda el
-    // caso normal de reintento.
+      responsable, fechaPago, horaPago, pendientes: pendientesCentavos,
+    });
+
+    const r = await aplicarPlanCompleto(op.getDatabaseOrAbort(), plan);
+    // Si fue RECHAZADO por algo que no es un duplicado, aplicarPlanCompleto ya
+    // lanzó y el operador lo ve. Acá solo queda el caso normal de reintento.
     if (!r.aplicado) {
-      console.log(`[COMISION] pago ${idPagoIntento} ya estaba aplicado: no se reparte de nuevo`);
+      console.log(`[COMISION] pago ${idPagoIntento} ya estaba aplicado: no se repite`);
       return { yaAplicado: true };
     }
+    return { aplicado: true, registrosPagados: plan.registrosPagados };
   }
 
+  // -------------------------------------------------------------------------
+  // CAMINO DORMIDO: exactamente el de siempre, sin cambios.
+  // -------------------------------------------------------------------------
   const snap = await get(ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO`));
   if (!snap.exists()) return;
 

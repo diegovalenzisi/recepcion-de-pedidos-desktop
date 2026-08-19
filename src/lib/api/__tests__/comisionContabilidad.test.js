@@ -385,11 +385,11 @@ check('el camino DORMIDO conserva la escritura de siempre', () => {
 
 check('el camino NUEVO esta detras del interruptor, en las tres operaciones', () => {
   const cuerpo = fuenteApi.replace(/\r\n/g, '\n');
-  for (const plan of ['planDeVenta', 'planDeAnulacion', 'planDePago']) {
+  for (const plan of ['planDeVenta', 'planDeAnulacion', 'planCompletoDePago']) {
     const i = cuerpo.indexOf(plan + '(');
     assert.ok(i > 0, `falta ${plan}`);
     // Hacia atras desde la llamada tiene que aparecer la guarda.
-    const antes = cuerpo.slice(Math.max(0, i - 700), i);
+    const antes = cuerpo.slice(Math.max(0, i - 1800), i);
     assert.match(antes, /activa|contabilidadActiva/, `${plan} no esta detras del interruptor`);
   }
 });
@@ -409,7 +409,11 @@ check('el registro nuevo guarda comisionGeneradaCentavos', () => {
 
 check('el pago recibe y usa un idPago conservado por el llamador', () => {
   assert.match(fuenteApi, /idPagoIntento/, 'no acepta el id del intento');
-  assert.match(fuenteApi, /planDePago\(\{[\s\S]{0,120}idPago: idPagoIntento/, 'no usa el id del intento');
+  assert.match(fuenteApi, /planCompletoDePago\(\{[\s\S]{0,200}idPago: idPagoIntento/, 'no usa el id del intento');
+  // Y el pago entero (contabilidad + detalle) va en UNA sola escritura.
+  assert.match(fuenteApi, /aplicarPlanCompleto/, 'el detalle no viaja con la contabilidad');
+  assert.match(fuenteApi, /\.\.\.plan\.detalle/, 'los registros no entran en el mismo update');
+  assert.match(fuenteApi, /plan\.comprobante\.ruta/, 'el comprobante no entra en el mismo update');
 });
 
 check('R2: ordersApi cancela la comision del delivery anulado', () => {

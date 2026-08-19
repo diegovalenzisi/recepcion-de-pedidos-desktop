@@ -16,7 +16,7 @@ import { initializeApp, deleteApp } from 'firebase/app';
 import { getDatabase, ref, get, set, update, increment, serverTimestamp } from 'firebase/database';
 import {
   aCentavos, contabilidadActiva, leerAcumuladores,
-  planDeVenta, planDeAnulacion, planDePago,
+  planDeVenta, planDeAnulacion, planDePago, planCompletoDePago,
   validarPago, tieneEfectoContable, deltasDeVenta,
   rutaTotales,
 } from '../comisionMovimiento.js';
@@ -338,6 +338,93 @@ await check('un rechazo no dejo ningun incremento a medias', async () => {
   assert.strictEqual(t.saldoPendienteCentavos, 40000);
   assert.strictEqual(t.totalPagadoCentavos, 10000);
   assert.strictEqual(t.totalAcumuladoCentavos, 50000);
+});
+
+// ===========================================================================
+// ¿EL PAGO COMPLETO (contabilidad + detalle) ENTRA EN UNA SOLA ESCRITURA?
+//
+// Si entra, no existe el estado "deuda correcta pero detalle incompleto".
+// Se prueba con un pago que alcanza a MUCHOS registros, que es el caso que
+// podría chocar con un límite de tamaño.
+// ===========================================================================
+console.log('\n7c. Pago atomico: contabilidad Y detalle en UN update():');
+nuevaFase();
+
+await check('se preparan 300 registros pendientes', async () => {
+  const carga = {};
+  for (let i = 1; i <= 300; i++) {
+    carga[`M${i}`] = {
+      idVenta: String(i), canal: 'mostrador', ventaKey: `M${i}`,
+      comisionGeneradaCentavos: 100, estado: 'pendiente',
+      fecha: '01-08-2026', hora: '10:00:00',
+    };
+  }
+  await set(ref(A, `${L}/COMISIONES/REGISTRO`), carga);
+  await activar({ totalAcumuladoCentavos: 30000, saldoPendienteCentavos: 30000 });
+  const n = Object.keys((await get(ref(A, `${L}/COMISIONES/REGISTRO`))).val() || {}).length;
+  assert.strictEqual(n, 300);
+});
+
+let planGrande = null;
+await check('UN SOLO update() aplica movimiento, totales, comprobante y 250 registros', async () => {
+  const reg = (await get(ref(A, `${L}/COMISIONES/REGISTRO`))).val();
+  const pendientes = Object.entries(reg).map(([key, v]) => ({
+    key, fecha: v.fecha, hora: v.hora, estado: v.estado, pendingAmount: v.comisionGeneradaCentavos,
+  }));
+  planGrande = planCompletoDePago({
+    localId: L, idPago: 'atomico-1', montoCentavos: 25000, responsable: 'CARO',
+    fechaPago: '19-08-2026', horaPago: '12:00:00', pendientes,
+  });
+  assert.strictEqual(planGrande.registrosPagados.length, 250, 'el pago cubre 250 registros de 100 centavos');
+
+  const payload = {
+    [planGrande.movimiento.ruta]: { ...planGrande.movimiento.valor, ts: serverTimestamp() },
+    [planGrande.comprobante.ruta]: planGrande.comprobante.valor,
+    [planGrande.rutaMarcaDeTiempo]: serverTimestamp(),
+    ...planGrande.detalle,
+  };
+  for (const inc of planGrande.incrementos) payload[inc.ruta] = increment(inc.delta);
+
+  const rutas = Object.keys(payload).length;
+  await update(ref(A), payload);
+  console.log(`        (${rutas} rutas en una sola escritura)`);
+});
+
+await check('la contabilidad quedo bien', async () => {
+  const t = await totales();
+  assert.strictEqual(t.totalPagadoCentavos, 25000);
+  assert.strictEqual(t.saldoPendienteCentavos, 5000);
+  assert.strictEqual(t.totalAcumuladoCentavos, 30000, 'el historico no se toca');
+});
+
+await check('el detalle quedo COMPLETO en la misma escritura', async () => {
+  const reg = (await get(ref(A, `${L}/COMISIONES/REGISTRO`))).val();
+  const pagadas = Object.values(reg).filter((r) => r.estado === 'pagada').length;
+  const pendientes = Object.values(reg).filter((r) => r.estado === 'pendiente').length;
+  assert.strictEqual(pagadas, 250, 'faltan registros marcados');
+  assert.strictEqual(pendientes, 50);
+});
+
+await check('el comprobante de PAGOS tambien entro', async () => {
+  const p = (await get(ref(A, `${L}/COMISIONES/PAGOS/atomico-1`))).val();
+  assert.ok(p, 'no se creo el comprobante');
+  assert.strictEqual(p.montoPagoCentavos, 25000);
+  assert.strictEqual(p.registrosPagados.length, 250);
+});
+
+await check('reintentar el MISMO pago no toca nada: ni deuda ni detalle', async () => {
+  const payload = {
+    [planGrande.movimiento.ruta]: { ...planGrande.movimiento.valor, ts: serverTimestamp() },
+    [planGrande.comprobante.ruta]: planGrande.comprobante.valor,
+    ...planGrande.detalle,
+  };
+  for (const inc of planGrande.incrementos) payload[inc.ruta] = increment(inc.delta);
+  let rechazado = false;
+  try { await update(ref(A), payload); } catch (e) { rechazado = String(e.message).includes('PERMISSION_DENIED'); }
+  assert.strictEqual(rechazado, true, 'el reintento tiene que rechazarse entero');
+  const t = await totales();
+  assert.strictEqual(t.totalPagadoCentavos, 25000, 'se descontó dos veces');
+  assert.strictEqual(t.saldoPendienteCentavos, 5000);
 });
 
 // ===========================================================================

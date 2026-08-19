@@ -298,6 +298,82 @@ export const planDePago = ({ localId, idPago, montoCentavos, meta }) =>
   });
 
 /**
+ * PLAN COMPLETO DE UN PAGO: contabilidad Y detalle, para UNA sola escritura.
+ *
+ * El pago mueve dos cosas: la deuda (los acumuladores) y el detalle (qué
+ * registros quedan pagados y el comprobante en COMISIONES/PAGOS). Si fueran dos
+ * escrituras, un fallo entre medio dejaría la deuda correcta y el detalle
+ * incompleto, sin que nadie se entere.
+ *
+ * Acá se arma TODO junto para que entre en un único `update()` multipath:
+ *
+ *     MOVIMIENTOS/P-{idPago}          create-only: la idempotencia
+ *     TOTALES/totalPagadoCentavos     increment(+monto)
+ *     TOTALES/saldoPendienteCentavos  increment(−monto)
+ *     PAGOS/{idPago}                  el comprobante
+ *     REGISTRO/{k}/estado…            los registros que cubre el pago
+ *
+ * O entra todo, o no entra nada.
+ *
+ * @param {object[]} pendientes registros con { key, fecha, hora, pendingAmount, estado }
+ */
+export const planCompletoDePago = ({
+  localId, idPago, montoCentavos, responsable, fechaPago, horaPago, pendientes = [],
+}) => {
+  const plan = planDePago({ localId, idPago, montoCentavos, meta: { responsable } });
+
+  // Se reparte del más antiguo al más nuevo, igual que siempre.
+  const orden = [...pendientes].sort((a, b) => {
+    const ms = (d, h) => {
+      const [dd, mm, yyyy] = String(d || '').split('-');
+      return new Date(`${yyyy}-${mm}-${dd}T${h || '00:00:00'}`).getTime() || 0;
+    };
+    return ms(a.fecha, a.hora) - ms(b.fecha, b.hora);
+  });
+
+  const detalle = {};
+  const registrosPagados = [];
+  let restante = montoCentavos;
+
+  for (const reg of orden) {
+    if (restante <= 0) break;
+    const base = `${localId}/COMISIONES/REGISTRO/${reg.key}`;
+    const pendiente = Number(reg.pendingAmount) || 0;
+    if (pendiente <= 0) continue;
+
+    if (restante >= pendiente) {
+      detalle[`${base}/estado`] = 'pagada';
+      detalle[`${base}/fechaPago`] = fechaPago;
+      detalle[`${base}/horaPago`] = horaPago;
+      detalle[`${base}/montoPagoCentavos`] = pendiente;
+      detalle[`${base}/idPagoComision`] = idPago;
+      if (reg.estado === 'pagada_parcial') detalle[`${base}/saldoPendienteCentavos`] = null;
+      restante -= pendiente;
+    } else {
+      detalle[`${base}/estado`] = 'pagada_parcial';
+      detalle[`${base}/fechaPago`] = fechaPago;
+      detalle[`${base}/horaPago`] = horaPago;
+      detalle[`${base}/montoPagoCentavos`] = restante;
+      detalle[`${base}/saldoPendienteCentavos`] = pendiente - restante;
+      detalle[`${base}/idPagoComision`] = idPago;
+      restante = 0;
+    }
+    registrosPagados.push(reg.key);
+  }
+
+  return {
+    ...plan,
+    comprobante: {
+      ruta: `${localId}/COMISIONES/PAGOS/${idPago}`,
+      valor: { fechaPago, horaPago, montoPagoCentavos: montoCentavos, registrosPagados, responsable, idPago },
+    },
+    detalle,
+    registrosPagados,
+    sobrante: restante,
+  };
+};
+
+/**
  * ¿Esta operación tiene efecto contable?
  *
  * Una venta de un local con porcentaje 0 genera comisión 0: su identidad se
