@@ -451,16 +451,17 @@ export const processCommissionPayment = async (paymentAmount, responsable = 'Sis
             return currentTotals;
         });
 
-        const updates = {};
-        for (const key in salesToArchive) {
-            if (key !== 'PAGO' && key !== 'VENTAS_COMISION' && key !== 'TOTALES') {
-              updates[key] = null;
-            }
-        }
-        if(Object.keys(updates).length > 0) {
-            const freshAccountSummaryRef = ref(op.getDatabaseOrAbort(), `${LOCAL_ID}/RESUMEN_CUENTA`);
-            await update(freshAccountSummaryRef, updates);
-        }
+        // EL PAGO YA NO BORRA HISTÓRICO.
+        //
+        // Acá se recorrían las fechas de RESUMEN_CUENTA y se ponían en null:
+        // cada pago de comisión destruía el detalle de ventas de todos los días
+        // anteriores. Por eso RESUMEN_CUENTA arranca recién en julio en varios
+        // locales, y por eso "Mi Cuenta" muestra un historial mutilado.
+        //
+        // Ese detalle ya está archivado en PAGOS_COMISIONES/{id}/sales, así que
+        // el borrado no aportaba nada: solo perdía información.
+        //
+        // RESUMEN_CUENTA queda como histórico de SOLO LECTURA.
 
         // Marcar registros en COMISIONES/REGISTRO como pagados
         try {
@@ -517,6 +518,52 @@ export const saveAlarmaPago = async (amount) => {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(Number(amount)),
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+};
+
+/**
+ * LÍMITE DE CORTE — el monto de deuda a partir del cual una sesión NUEVA no
+ * puede empezar a trabajar.
+ *
+ * Ausente o 0 = DESACTIVADO. Es el valor con el que quedan todos los locales:
+ * actualizar no bloquea a nadie, y cada límite se activa después, uno por uno.
+ *
+ * Se evalúa SOLO al iniciar (ver comisionCorte.js). Una sesión ya autorizada
+ * no se bloquea aunque la deuda pase el límite durante el turno.
+ */
+export const fetchLimiteCorte = async () => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/limiteCorte.json`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (response.status === 404) return 0;
+      throw new Error('Network response was not ok');
+    }
+    const data = await response.json();
+    return data !== null && data !== undefined ? Number(data) : 0;
+  } catch (error) {
+    // Sin poder leerlo se devuelve 0 = desactivado: un problema de red NUNCA
+    // puede dejar a un local sin poder trabajar.
+    console.error('Error fetching limiteCorte:', error);
+    return 0;
+  }
+};
+
+export const saveLimiteCorte = async (amount) => {
+  checkLocalId();
+  const LOCAL_ID = getCurrentDatabasePath();
+  const FIREBASE_URL = getFirebaseUrl();
+  const url = `${FIREBASE_URL}/${LOCAL_ID}/CONFIGURACION/limiteCorte.json`;
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(Number(amount) || 0),
   });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);

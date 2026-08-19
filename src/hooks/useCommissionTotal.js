@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ref, onValue, off } from 'firebase/database';
 import { getCurrentLocalId, getCurrentDatabaseOrThrow } from '@/lib/firebase/core';
+import { contabilidadActiva, leerAcumuladores, aPesos, rutaTotales } from '@/lib/api/comisionMovimiento';
 import { useFirebaseReadiness } from '@/hooks/useFirebaseReadiness';
 
 /**
@@ -106,6 +107,43 @@ export const useCommissionBalance = (isActive = true) => {
       setState((s) => ({ ...s, loading: false }));
       return;
     }
+    // -----------------------------------------------------------------------
+    // CAMINO NUEVO: leer los tres acumuladores y nada más.
+    //
+    // Con la contabilidad activa NO se recorre REGISTRO ni PAGOS. Se escucha
+    // COMISIONES/TOTALES, que son cuatro números: iniciar la aplicación, abrir
+    // Configuración o montar este hook deja de descargar y sumar el historial
+    // entero (en Achaval eran 834 KB en cada arranque).
+    //
+    // Mientras migracionVersion < 1 se usa el camino de siempre, sin cambios.
+    // -----------------------------------------------------------------------
+    const totalesRef = ref(db, rutaTotales(localId));
+    let desuscribirTotales = null;
+    let modoNuevo = null;   // null = todavía no se sabe
+
+    const escucharTotales = () => onValue(totalesRef, (snap) => {
+      const totales = snap.val();
+      const activa = contabilidadActiva(totales);
+
+      if (activa) {
+        modoNuevo = true;
+        const a = leerAcumuladores(totales);
+        setState({
+          totalGenerated: aPesos(a.totalAcumuladoCentavos),
+          totalPaid: aPesos(a.totalPagadoCentavos),
+          pending: aPesos(a.saldoPendienteCentavos),
+          loading: false,
+        });
+        return;
+      }
+
+      // Dormido: se activan los listeners de siempre, una sola vez.
+      if (modoNuevo === null) {
+        modoNuevo = false;
+        activarModoLegado();
+      }
+    }, () => { if (modoNuevo === null) { modoNuevo = false; activarModoLegado(); } });
+
     const registroRef = ref(db, `${localId}/COMISIONES/REGISTRO`);
     const pagosRef = ref(db, `${localId}/COMISIONES/PAGOS`);
 
@@ -126,7 +164,9 @@ export const useCommissionBalance = (isActive = true) => {
       });
     };
 
-    const regListener = onValue(
+    let regListener = null, pagosListener = null;
+    const activarModoLegado = () => {
+    regListener = onValue(
       registroRef,
       (snap) => {
         let total = 0;
@@ -143,7 +183,7 @@ export const useCommissionBalance = (isActive = true) => {
       () => { registroLoaded = true; recompute(); }
     );
 
-    const pagosListener = onValue(
+    pagosListener = onValue(
       pagosRef,
       (snap) => {
         let total = 0;
@@ -159,10 +199,15 @@ export const useCommissionBalance = (isActive = true) => {
       },
       () => { pagosLoaded = true; recompute(); }
     );
+    };   // fin de activarModoLegado
+
+    // Se escucha SIEMPRE el nodo de totales; él decide qué camino se usa.
+    desuscribirTotales = escucharTotales();
 
     return () => {
-      off(registroRef, 'value', regListener);
-      off(pagosRef, 'value', pagosListener);
+      if (desuscribirTotales) off(totalesRef, 'value', desuscribirTotales);
+      if (regListener) off(registroRef, 'value', regListener);
+      if (pagosListener) off(pagosRef, 'value', pagosListener);
     };
   }, [isActive, firebaseReady]);
 
