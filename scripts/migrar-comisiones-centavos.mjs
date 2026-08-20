@@ -37,7 +37,7 @@
 // No se recorre MOSTRADOR, ni PEDIDOS, ni BACKUP. No se reconstruye ninguna
 // comisión perdida, no se buscan ventas antiguas y no se genera deuda
 // retroactiva. `totalAcumulado` (pesos, legado) NO se toca: lo lee
-// dlvsistemas-v2. `limiteCorte` NO se toca: hoy está ausente en los siete.
+// dlvsistemas-v2. `limiteCorte` NO se toca: hoy está ausente en los ocho.
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from 'node:fs';
@@ -48,8 +48,9 @@ const LOCALES = [
   { nombre: 'Centenario', db: 'https://centenario1199-default-rtdb.firebaseio.com',         id: '51501748' },
   { nombre: 'Burano',     db: 'https://buranoheladerias-default-rtdb.firebaseio.com',       id: '25230974' },
   { nombre: 'Canada',     db: 'https://lanyulinacanada-default-rtdb.firebaseio.com',        id: '34734081' },
-  { nombre: 'Bynnon',     db: 'https://heladeriabynnonadrogue-default-rtdb.firebaseio.com', id: '34516605' },
   { nombre: 'IlCapo',     db: 'https://ilcapogelatojls2026-default-rtdb.firebaseio.com',    id: '31915636' },
+  { nombre: 'Joao',       db: 'https://achava3703-default-rtdb.firebaseio.com',             id: '58290322' },
+  { nombre: 'Viticos',    db: 'https://achava3703-default-rtdb.firebaseio.com',             id: '57641732' },
 ];
 
 // Las MISMAS reglas de useCommissionTotal.js — el estado oficial de hoy.

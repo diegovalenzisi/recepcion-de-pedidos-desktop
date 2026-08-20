@@ -56,8 +56,9 @@ const LOCALES = [
   { nombre: 'Centenario', db: 'https://centenario1199-default-rtdb.firebaseio.com',         id: '51501748' },
   { nombre: 'Burano',     db: 'https://buranoheladerias-default-rtdb.firebaseio.com',       id: '25230974' },
   { nombre: 'Canada',     db: 'https://lanyulinacanada-default-rtdb.firebaseio.com',        id: '34734081' },
-  { nombre: 'Bynnon',     db: 'https://heladeriabynnonadrogue-default-rtdb.firebaseio.com', id: '34516605' },
   { nombre: 'IlCapo',     db: 'https://ilcapogelatojls2026-default-rtdb.firebaseio.com',    id: '31915636' },
+  { nombre: 'Joao',       db: 'https://achava3703-default-rtdb.firebaseio.com',             id: '58290322' },
+  { nombre: 'Viticos',    db: 'https://achava3703-default-rtdb.firebaseio.com',             id: '57641732' },
 ];
 
 // Las MISMAS reglas de useCommissionTotal.js — el estado oficial de hoy.

@@ -12,34 +12,27 @@
     "aprobado: false  ->  el script NO escribe ese local. Es el estado por",
     "defecto a proposito: nadie migra por olvido.",
     "",
-    "No contiene ningun secreto: son importes y notas."
+    "No contiene ningun secreto: son importes y notas.",
+    "",
+    "Achaval, Joao y Viticos comparten el proyecto achava3703 y por lo tanto las",
+    "MISMAS reglas: no hay Firebase nuevo ni reglas separadas para los dos ultimos.",
+    "",
+    "Bynnon (34516605) quedo FUERA de la migracion productiva: es solo prueba."
   ],
   "generadoDesde": "scripts/diagnostico-saldo-inicial.mjs",
   "fechaDiagnostico": "2026-08-20",
   "locales": {
-    "40508022": {
-      "nombre": "Achaval",
-      "saldoInicialCentavos": 0,
-      "aprobado": false,
-      "observacion": "Sin deuda: REGISTRO y PAGOS coinciden. El unico pago de PAGOS_COMISIONES ($3.560) se emparejo con certeza contra COMISIONES/PAGOS."
-    },
-    "38827976": {
-      "nombre": "Temperley",
-      "saldoInicialCentavos": 3775000,
-      "aprobado": false,
-      "observacion": "Igual al saldo reconocido. Su unico pago de PAGOS_COMISIONES se emparejo con certeza."
-    },
-    "51501748": {
-      "nombre": "Centenario",
-      "saldoInicialCentavos": 3305300,
-      "aprobado": false,
-      "observacion": "Saldo reconocido 3.305.400 MENOS el pago de Tablet de $1,00 (PAGOS_COMISIONES/2, 2026-07-16) que nunca quedo reflejado en COMISIONES/PAGOS. Es el unico ajuste manual de los siete locales."
-    },
     "25230974": {
       "nombre": "Burano",
       "saldoInicialCentavos": 3478200,
       "aprobado": false,
       "observacion": "Igual al saldo reconocido. No tiene nodo PAGOS_COMISIONES."
+    },
+    "31915636": {
+      "nombre": "IlCapo",
+      "saldoInicialCentavos": 12204410,
+      "aprobado": false,
+      "observacion": "Igual al saldo reconocido. No tiene nodo PAGOS_COMISIONES. Tiene un registro en pagada_parcial (1165) con saldoPendiente 1.674e-11, que redondea a 0 centavos."
     },
     "34734081": {
       "nombre": "Canada",
@@ -47,17 +40,35 @@
       "aprobado": false,
       "observacion": "Sin comision registrada ni pagos. No tiene nodo PAGOS_COMISIONES."
     },
-    "34516605": {
-      "nombre": "Bynnon",
+    "38827976": {
+      "nombre": "Temperley",
+      "saldoInicialCentavos": 3775000,
+      "aprobado": false,
+      "observacion": "Igual al saldo reconocido. Su unico pago de PAGOS_COMISIONES se emparejo con certeza."
+    },
+    "40508022": {
+      "nombre": "Achaval",
       "saldoInicialCentavos": 0,
       "aprobado": false,
-      "observacion": "COMISIONES vacio por completo. No tiene nodo PAGOS_COMISIONES."
+      "observacion": "Sin deuda: REGISTRO y PAGOS coinciden. El unico pago de PAGOS_COMISIONES ($3.560) se emparejo con certeza contra COMISIONES/PAGOS."
     },
-    "31915636": {
-      "nombre": "IlCapo",
-      "saldoInicialCentavos": 12204410,
+    "51501748": {
+      "nombre": "Centenario",
+      "saldoInicialCentavos": 3305300,
       "aprobado": false,
-      "observacion": "Igual al saldo reconocido. No tiene nodo PAGOS_COMISIONES. Tiene un registro en pagada_parcial (1165) con saldoPendiente 1.674e-11, que redondea a 0 centavos."
+      "observacion": "Saldo reconocido 3.305.400 MENOS el pago de Tablet de $1,00 (PAGOS_COMISIONES/2, 2026-07-16) que nunca quedo reflejado en COMISIONES/PAGOS. Es el unico ajuste manual de los ocho locales."
+    },
+    "57641732": {
+      "nombre": "Viticos",
+      "saldoInicialCentavos": 0,
+      "aprobado": false,
+      "observacion": "Vive dentro del proyecto de Achaval (achava3703), rama /57641732. Hoy esta vacio: sin REGISTRO, sin PAGOS y sin RESUMEN_CUENTA."
+    },
+    "58290322": {
+      "nombre": "Joao",
+      "saldoInicialCentavos": 2143200,
+      "aprobado": false,
+      "observacion": "Vive dentro del proyecto de Achaval (achava3703), rama /58290322: no tiene Firebase propio. 143 registros pendientes, 1 cancelado, y NINGUN pago: nunca pago comision. Sin PAGOS_COMISIONES, asi que no hay ajuste por Tablet."
     }
   }
 }
