@@ -812,35 +812,41 @@ check('con la contabilidad activa, un pago SIN idPago se corta', () => {
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n20. MyAccountPage: fuente dual sin duplicar operaciones:');
+// EL LEDGER VIEJO SE CONGELA AL ACTIVAR.
+//
+// "Mi Cuenta" (MyAccountPage) NO está enrutada en ninguna de las dos
+// aplicaciones: existe el archivo y un permiso con navPath '/mi-cuenta', pero
+// no hay <Route> ni import, así que el bundler la elimina. Por eso no se le
+// agregó ninguna fuente dual: habría sido complejidad para una pantalla que
+// nadie puede abrir. Lo que sí importa es que el ledger viejo deje de recibir
+// escrituras cuando la contabilidad nueva esté activa.
+// ---------------------------------------------------------------------------
+console.log('\n20. El ledger viejo se congela al activar:');
 
 const fuenteMy = readFileSync(new URL('../myAccountApi.js', import.meta.url), 'utf8');
 
-check('dormido devuelve exactamente lo de siempre', () => {
-  assert.match(fuenteMy, /if \(!contabilidadActiva\(totales\)\) \{[\s\S]{0,200}fetchAccountSummary\(\)/);
-});
-
-check('activo toma los totales de los acumuladores', () => {
-  assert.match(fuenteMy, /totalCommissionCentavos: acum\.totalAcumuladoCentavos/);
-  assert.match(fuenteMy, /pendingCentavos: acum\.saldoPendienteCentavos/);
-});
-
-check('los movimientos se parten por la frontera', () => {
-  assert.match(fuenteMy, /separarPorFrontera\(registro, totales\)/);
-});
-
-check('activo, el ledger viejo DEJA DE ESCRIBIRSE (o la venta se veria dos veces)', () => {
+check('activo, RESUMEN_CUENTA DEJA DE ESCRIBIRSE', () => {
   assert.match(fuenteMy, /CONGELAMIENTO DE RESUMEN_CUENTA/);
   assert.match(fuenteMy, /if \(!yaActiva\) \{/, 'sigue escribiendo RESUMEN_CUENTA con la contabilidad activa');
 });
 
-check('imposible que una operacion aparezca en las dos listas', () => {
-  // separarPorFrontera ya garantiza que cada registro cae de UN lado; y como el
-  // ledger viejo deja de escribirse, una venta nueva no puede estar en los dos.
+check('dormido, RESUMEN_CUENTA se sigue escribiendo igual que hoy', () => {
+  assert.match(fuenteMy, /RESUMEN_CUENTA\/\$\{today\}\/\$\{numeroPedido\}/);
+});
+
+check('la frontera reparte cada operacion a UN solo lado', () => {
+  // Se conserva la primitiva: `migracionActivadaEn` es parte de la arquitectura
+  // aprobada y lo escribe la migracion, aunque hoy no haya pantalla que lo use.
   const REG = { 'M1': { registradoEn: 5 }, 'M2': { registradoEn: 1500 } };
   const { legado, nuevo } = separarPorFrontera(REG, { migracionVersion: 1, migracionActivadaEn: 1000 });
   const ids = [...legado, ...nuevo].map((r) => r.clave);
   assert.strictEqual(new Set(ids).size, ids.length, 'una operacion quedo en los dos lados');
+});
+
+check('MyAccountPage NO quedo enrutada ni con codigo muerto nuevo', () => {
+  const app = readFileSync(new URL('../../../App.jsx', import.meta.url), 'utf8');
+  assert.ok(!/MyAccountPage/.test(app), 'se enruto una pantalla que no existia');
+  assert.ok(!/fetchAccountSummaryDual/.test(fuenteMy), 'quedo la fuente dual de una pantalla inalcanzable');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

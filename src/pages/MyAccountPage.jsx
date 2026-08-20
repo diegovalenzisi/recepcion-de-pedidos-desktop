@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { useToast } from '@/components/ui/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { fetchAccountSummaryDual } from '@/lib/api/myAccountApi';
+import { fetchAccountSummary } from '@/lib/api/myAccountApi';
 import { Loader2, ShoppingCart, Truck } from 'lucide-react';
 
 const formatCurrency = (value) => {
@@ -21,16 +21,8 @@ const MyAccountPage = () => {
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // Fuente DUAL: dormido devuelve exactamente lo de siempre; activo,
-            // los totales de los acumuladores y los movimientos partidos por la
-            // frontera, sin mezclar nunca las dos fuentes.
-            const data = await fetchAccountSummaryDual();
-            setSummary({
-                ...data,
-                transactions: data.contabilidadNueva
-                    ? [...(data.movimientosNuevos || []), ...(data.transaccionesLegado || [])]
-                    : data.transactions,
-            });
+            const data = await fetchAccountSummary();
+            setSummary(data);
         } catch (error) {
             toast({
                 variant: 'destructive',

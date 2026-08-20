@@ -3,7 +3,7 @@ import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/
 import { fetchSalesPercentage } from '@/lib/api/settingsApi';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { registrarComision } from '@/lib/api/comisionesApi';
-import { calcularComisionDeVenta, rutaTotales, contabilidadActiva, leerAcumuladores, separarPorFrontera, frontera } from '@/lib/api/comisionMovimiento';
+import { calcularComisionDeVenta, rutaTotales, contabilidadActiva, leerAcumuladores } from '@/lib/api/comisionMovimiento';
 
 /**
  * Recalcula TotalComisionAPagar desde totalCommission y lo escribe en Firebase.
@@ -78,75 +78,6 @@ export const fetchAccountSummary = async () => {
         console.error("Error fetching account summary:", error);
         throw error;
     }
-};
-
-/**
- * RESUMEN DE CUENTA CON FUENTE DUAL.
- *
- * migracionVersion < 1  → exactamente el comportamiento de siempre.
- * migracionVersion >= 1 → los totales salen de los acumuladores, y los
- *                         movimientos se parten por la frontera:
- *
- *     registradoEn >= migracionActivadaEn  → sistema nuevo (COMISIONES/REGISTRO)
- *     registradoEn <  migracionActivadaEn  → legado
- *     sin registradoEn                     → legado
- *
- * `RESUMEN_CUENTA` queda como histórico ANTERIOR a la frontera, de sólo
- * lectura. Nunca se suman las dos fuentes sin criterio: cada operación cae de
- * un lado o del otro, así que es imposible que aparezca dos veces.
- *
- * No reconstruye el pasado, no busca comisiones faltantes y no corrige deudas
- * históricas.
- */
-export const fetchAccountSummaryDual = async () => {
-    checkLocalId();
-    const localId = getCurrentDatabasePath();
-    const db = getDatabase();
-
-    const totales = (await get(ref(db, rutaTotales(localId)))).val();
-
-    // DORMIDO: nada cambia.
-    if (!contabilidadActiva(totales)) {
-        const legado = await fetchAccountSummary();
-        return { ...legado, contabilidadNueva: false, frontera: null, movimientosNuevos: [] };
-    }
-
-    // ACTIVO: totales de los acumuladores, movimientos partidos por la frontera.
-    const acum = leerAcumuladores(totales);
-    const registro = (await get(ref(db, `${localId}/COMISIONES/REGISTRO`))).val();
-    const { nuevo } = separarPorFrontera(registro, totales);
-
-    const movimientosNuevos = nuevo.map((r) => ({
-        id: r.ventaKey || r.clave,
-        numero: r.idVenta ?? r.clave,
-        tipo: (r.canal || r.modoVenta || '').toLowerCase(),
-        valor: Number(r.ventaTotal) || 0,
-        comision: Number.isInteger(r.comisionGeneradaCentavos)
-            ? r.comisionGeneradaCentavos / 100
-            : (Number(r.comisionGenerada) || 0),
-        fecha: r.fecha,
-        registradoEn: r.registradoEn,
-        estado: r.estado,
-    })).sort((a, b) => (Number(b.registradoEn) || 0) - (Number(a.registradoEn) || 0));
-
-    // El histórico anterior a la frontera se sigue leyendo del ledger viejo,
-    // SOLO para mostrar. No se mezcla con lo de arriba.
-    const legado = await fetchAccountSummary();
-
-    return {
-        contabilidadNueva: true,
-        frontera: frontera(totales),
-        totals: {
-            totalCommission: acum.totalAcumuladoCentavos / 100,
-            totalPaid: acum.totalPagadoCentavos / 100,
-            pending: acum.saldoPendienteCentavos / 100,
-            totalCommissionCentavos: acum.totalAcumuladoCentavos,
-            totalPaidCentavos: acum.totalPagadoCentavos,
-            pendingCentavos: acum.saldoPendienteCentavos,
-        },
-        movimientosNuevos,
-        transaccionesLegado: legado.transactions,
-    };
 };
 
 export const saveSaleToAccountSummary = async ({ numeroPedido, valor, tipo }) => {
