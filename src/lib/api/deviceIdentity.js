@@ -54,24 +54,16 @@ export const obtenerDeviceId = (almacen = (typeof localStorage !== 'undefined' ?
 };
 
 /**
- * Versión REAL de la aplicación.
+ * Payload del registro. Función PURA.
  *
- * Sale de `__APP_VERSION__`, que Vite inyecta desde el `version` del
- * package.json (ver vite.config.js). No se duplica el número a mano: si se
- * copiara acá, quedaría desactualizado en el primer release.
+ * `deviceType` y `clientVersion` los provee cada aplicación: es lo único que
+ * cambia entre plataformas. Desktop toma la versión de `__APP_VERSION__` (Vite,
+ * desde package.json) y Tablet de `App.getInfo()` (Capacitor, desde la APK
+ * instalada). En los dos casos es la fuente REAL: nunca un número a mano.
  */
-export const versionDeCliente = () => {
-  try {
-    // eslint-disable-next-line no-undef
-    if (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) return String(__APP_VERSION__);
-  } catch { /* fuera de Vite */ }
-  return 'desconocida';
-};
-
-/** Payload del registro. Función pura, para poder probarla. */
-export const datosDeRegistro = ({ localId, deviceId, clientVersion, ahora = Date.now(), deviceName }) => ({
-  deviceName: deviceName || `Desktop ${localId}`,
-  deviceType: 'desktop',
+export const datosDeRegistro = ({ localId, deviceId, clientVersion, deviceType, ahora = Date.now(), deviceName }) => ({
+  deviceName: deviceName || `${deviceType === 'tablet' ? 'Tablet' : 'Desktop'} ${localId}`,
+  deviceType,
   localId: String(localId),
   lastSeenAt: ahora,
   clientVersion: String(clientVersion),
@@ -85,10 +77,10 @@ export const datosDeRegistro = ({ localId, deviceId, clientVersion, ahora = Date
  *
  * Nunca lanza: un fallo de registro no puede impedir que el local trabaje.
  */
-export const registrarDispositivo = async ({ localId, firebaseUrl }) => {
+export const registrarDispositivo = async ({ localId, firebaseUrl, deviceType, clientVersion }) => {
   if (!localId || !firebaseUrl) return { ok: false, motivo: 'sin local' };
   const deviceId = obtenerDeviceId();
-  const datos = datosDeRegistro({ localId, deviceId, clientVersion: versionDeCliente() });
+  const datos = datosDeRegistro({ localId, deviceId, deviceType, clientVersion: clientVersion || 'desconocida' });
   try {
     const r = await fetch(`${firebaseUrl}/${localId}/DISPOSITIVOS/${deviceId}.json`, {
       method: 'PATCH',

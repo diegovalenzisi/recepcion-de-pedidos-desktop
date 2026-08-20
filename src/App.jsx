@@ -561,7 +561,12 @@ function AppContent() {
         // Deja constancia de qué dispositivo, de qué tipo y con qué versión está
         // trabajando en este local — lo que hace falta para verificar adopción
         // antes de activar la contabilidad nueva. No bloquea nada y no lanza.
-        registrarDispositivo({ localId: id, firebaseUrl: getFirebaseUrl() }).catch(() => {});
+        registrarDispositivo({
+          localId: id, firebaseUrl: getFirebaseUrl(),
+          deviceType: 'desktop',
+          // Version REAL del paquete, inyectada por Vite desde package.json.
+          clientVersion: typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'desconocida',
+        }).catch(() => {});
         perfMonitor.endTimer('initial-data-load');
     } catch (error) {
         console.error("Error loading initial data:", error);

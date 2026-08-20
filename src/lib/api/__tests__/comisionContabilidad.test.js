@@ -689,12 +689,13 @@ check('processCommissionPayment no pone fechas en null', () => {
 // ---------------------------------------------------------------------------
 console.log('\n18. Registro del dispositivo (adopcion):');
 
-check('el payload tiene los cinco campos, con deviceType desktop', () => {
-  const d = datosDeRegistro({ localId: '40508022', deviceId: 'dev-1', clientVersion: '1.3.97', ahora: 555 });
-  assert.deepStrictEqual(d, {
-    deviceName: 'Desktop 40508022', deviceType: 'desktop',
-    localId: '40508022', lastSeenAt: 555, clientVersion: '1.3.97',
-  });
+check('el payload tiene los cinco campos, con el deviceType de cada plataforma', () => {
+  assert.deepStrictEqual(
+    datosDeRegistro({ localId: '40508022', deviceId: 'd', deviceType: 'desktop', clientVersion: '1.3.97', ahora: 555 }),
+    { deviceName: 'Desktop 40508022', deviceType: 'desktop', localId: '40508022', lastSeenAt: 555, clientVersion: '1.3.97' });
+  assert.deepStrictEqual(
+    datosDeRegistro({ localId: '40508022', deviceId: 'd', deviceType: 'tablet', clientVersion: '1.0.14', ahora: 555 }),
+    { deviceName: 'Tablet 40508022', deviceType: 'tablet', localId: '40508022', lastSeenAt: 555, clientVersion: '1.0.14' });
 });
 
 check('primer inicio: crea la identidad y la persiste', () => {
@@ -734,9 +735,11 @@ check('la version sale de la fuente real, no de una constante duplicada', () => 
   assert.ok(!/clientVersion: '1\.3\./.test(dev), 'hay un numero de version escrito a mano');
 });
 
-check('Desktop se registra en el ARRANQUE, no al abrir una pantalla', () => {
+check('la app se registra en el ARRANQUE, no al abrir una pantalla', () => {
   const app = readFileSync(new URL('../../../App.jsx', import.meta.url), 'utf8');
-  assert.match(app, /registrarDispositivo\(\{ localId: id, firebaseUrl: getFirebaseUrl\(\) \}\)/);
+  assert.match(app, /registrarDispositivo\(\{/, 'no registra el dispositivo');
+  assert.match(app, /deviceType: '(desktop|tablet)'/, 'no informa el tipo de equipo');
+  assert.match(app, /clientVersion:/, 'no informa la version');
   const iCarga = app.indexOf('const loadInitialData');
   const iReg = app.indexOf('registrarDispositivo({');
   assert.ok(iReg > iCarga && iReg > 0, 'no esta dentro de la carga inicial');

@@ -59,6 +59,13 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/__tests__/reimpresionFactura.render.test.mjs',
   'src/components/sales/ReceiptDocument.jsx',      // reimpresión fiscal y de remitos
   'src/lib/api/comisionVentaKey.js',              // identidad canonica M{id}/D{id} de la venta
+  'src/lib/api/comisionMovimiento.js',             // acumuladores, opIds, deltas y plan de escritura
+  'src/lib/api/comisionCorte.js',                  // aviso, limite de corte y estados de sesion
+  'src/lib/api/intentoDePago.js',                  // identidad persistente del intento de pago
+  'src/lib/api/deviceIdentity.js',                 // registro del equipo y clientVersion
+  'src/lib/api/__tests__/comisionContabilidad.test.js',
+  'src/lib/api/__tests__/intentoDePago.test.js',
+  'src/lib/api/__tests__/comisionEmulator.integration.mjs',
   'src/lib/api/ventaUtils.js',
   'src/lib/api/ordersIngest.js',
   'src/lib/api/stockAtomico.js',
