@@ -17,7 +17,7 @@ import { getDatabase, ref, get, set, update, increment, serverTimestamp } from '
 import {
   aCentavos, contabilidadActiva, leerAcumuladores,
   planDeVenta, planDeAnulacion, planDePago, planCompletoDePago,
-  validarPago, tieneEfectoContable, deltasDeVenta,
+  validarPago, tieneEfectoContable, deltasDeVenta, deltasDeAnulacion,
   rutaTotales,
 } from '../comisionMovimiento.js';
 import { evaluarInicio, bloquea, liberaTrasPago, ESTADO_INICIO } from '../comisionCorte.js';
@@ -659,6 +659,74 @@ await check('la anulacion usa la comision ORIGINAL aunque el porcentaje cambie',
   // El local pasa a 2%. La anulacion igual resta el importe guardado.
   await aplicar(A, anul('delivery', 60, 1));
   assert.strictEqual((await totales()).totalAcumuladoCentavos, 0);
+});
+
+// ===========================================================================
+console.log('\nANULAR UNA VENTA PARCIALMENTE PAGADA:');
+// ===========================================================================
+//
+// Contra las reglas reales. Lo que se prueba acá y no se puede probar sin base:
+// que restar la comisión COMPLETA de una venta que ya tenía parte pagada deja
+// el saldo negativo y las reglas rechazan la escritura ENTERA — con lo cual la
+// anulación no ocurre y el registro tampoco queda cancelado.
+
+nuevaFase();
+
+await check('preparar: comision 100, pagado 40, pendiente 60', async () => {
+  await activar({ totalAcumuladoCentavos: 10000, totalPagadoCentavos: 4000, saldoPendienteCentavos: 6000 });
+  const t = await totales();
+  assert.strictEqual(t.saldoPendienteCentavos, 6000);
+});
+
+await check('restar la comision COMPLETA (100) seria rechazado por las reglas', async () => {
+  const r = await aplicar(A, planDeAnulacion({
+    localId: L, modoVenta: 'mostrador', idVenta: 900, comisionCentavos: 10000,
+  }));
+  assert.notStrictEqual(r.motivo, 'aplicado', 'la base acepto dejar el saldo en -4000');
+  const t = await totales();
+  assert.strictEqual(t.saldoPendienteCentavos, 6000, 'el saldo se movio pese al rechazo');
+  assert.strictEqual(t.totalAcumuladoCentavos, 10000);
+});
+
+await check('restar SOLO lo pendiente (60) entra y deja acumulado 40 / pagado 40 / saldo 0', async () => {
+  const r = await aplicar(A, planDeAnulacion({
+    localId: L, modoVenta: 'mostrador', idVenta: 901, comisionCentavos: 6000,
+    meta: { comisionOriginalCentavos: 10000 },
+  }));
+  assert.strictEqual(r.motivo, 'aplicado', 'no entro la anulacion del pendiente');
+  const t = await totales();
+  assert.strictEqual(t.totalAcumuladoCentavos, 4000);
+  assert.strictEqual(t.totalPagadoCentavos, 4000, 'la plata ya cobrada no se devuelve');
+  assert.strictEqual(t.saldoPendienteCentavos, 0);
+  assert.strictEqual(t.totalAcumuladoCentavos - t.totalPagadoCentavos, t.saldoPendienteCentavos,
+    'se rompio la identidad contable');
+});
+
+await check('el movimiento guarda la comision original, para poder auditarlo', async () => {
+  const mov = (await get(ref(A, `${L}/COMISIONES/MOVIMIENTOS/A-M901`))).val();
+  assert.ok(mov, 'no se creo el movimiento');
+  assert.strictEqual(mov.dSaldo, -6000);
+  assert.strictEqual(mov.dPagado, 0);
+  assert.strictEqual(mov.comisionOriginalCentavos, 10000);
+});
+
+await check('repetir esa anulacion NO vuelve a restar', async () => {
+  const r = await aplicar(A, planDeAnulacion({
+    localId: L, modoVenta: 'mostrador', idVenta: 901, comisionCentavos: 6000,
+  }));
+  assert.strictEqual(r.motivo, 'ya_aplicado');
+  const t = await totales();
+  assert.strictEqual(t.saldoPendienteCentavos, 0);
+  assert.strictEqual(t.totalAcumuladoCentavos, 4000);
+});
+
+await check('con nada pendiente, la anulacion no emite movimiento', async () => {
+  // El caso real de Il Capo: saldoPendiente 1.674e-11 redondea a 0 centavos.
+  assert.strictEqual(tieneEfectoContable(deltasDeAnulacion(0)), false);
+  const antes = await totales();
+  // No se aplica nada, justamente porque no hay efecto contable.
+  const t = await totales();
+  assert.deepStrictEqual(t, antes);
 });
 
 // ===========================================================================

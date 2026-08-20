@@ -187,4 +187,103 @@ check('una venta de comisión 0 no tiene efecto contable', () => {
   assert.strictEqual(tieneEfectoContable(deltasDeVenta(aCentavos(0.01))), true);
 });
 
+// ---------------------------------------------------------------------------
+console.log('\n5. ANULAR UNA VENTA PARCIALMENTE PAGADA no devuelve lo ya cobrado:');
+// ---------------------------------------------------------------------------
+//
+// Anular resta lo que la venta TODAVÍA DEBE, no la comisión completa. Es el
+// mismo criterio que ya rige para una venta 'pagada', que directamente no se
+// anula: la comisión ya cobrada no vuelve.
+//
+//     comisión 100, pagado 40, pendiente 60  →  anular resta 60
+//     queda: acumulado 40, pagado 40, saldo 0
+//
+// Restar los 100 le daría al local crédito por plata que ya cobramos y, si no
+// hubiera otra deuda, dejaría el saldo negativo: las reglas rechazarían la
+// escritura entera y la anulación fallaría del todo.
+
+/** La misma lectura que hace el código: entero si está, pesos si es legado. */
+const pendienteDe = (registro) => {
+  const enCentavos = (pesos, centavos) => (Number.isInteger(centavos) ? centavos : aCentavos(pesos));
+  if (registro.estado === 'pagada_parcial') {
+    return enCentavos(registro.saldoPendiente, registro.saldoPendienteCentavos);
+  }
+  return enCentavos(registro.comisionGenerada, registro.comisionGeneradaCentavos);
+};
+
+check('el código usa el PENDIENTE para los deltas, no la comisión completa', () => {
+  const activo = caminoActivo('cancelarComision');
+  assert.match(activo, /const pendienteCentavos = registro\.estado === 'pagada_parcial'/,
+    'no se calcula el pendiente');
+  assert.match(activo, /tieneEfectoContable\(deltasDeAnulacion\(pendienteCentavos\)\)/,
+    'la decisión de emitir movimiento sigue mirando la comisión completa');
+  assert.match(activo, /comisionCentavos: pendienteCentavos/,
+    'el plan de anulación sigue restando la comisión completa');
+});
+
+check('el pendiente sale del registro, nunca de un porcentaje', () => {
+  const activo = caminoActivo('cancelarComision');
+  assert.ok(!/porcentaje/i.test(activo), 'apareció el porcentaje en el camino de anulación');
+  assert.match(activo, /registro\.saldoPendienteCentavos/);
+  assert.match(activo, /registro\.saldoPendiente\b/);
+});
+
+check('PENDIENTE normal: se resta la comisión entera', () => {
+  const reg = { estado: 'pendiente', comisionGenerada: 100, comisionGeneradaCentavos: 10000 };
+  const d = deltasDeAnulacion(pendienteDe(reg));
+  assert.deepStrictEqual(d, { dHist: -10000, dSaldo: -10000, dPagado: 0 });
+});
+
+check('PAGADA_PARCIAL: se resta solo lo pendiente, y lo pagado queda', () => {
+  // comisión 100, pagado 40, pendiente 60
+  const reg = { estado: 'pagada_parcial', saldoPendiente: 60, saldoPendienteCentavos: 6000 };
+  const d = deltasDeAnulacion(pendienteDe(reg));
+  assert.deepStrictEqual(d, { dHist: -6000, dSaldo: -6000, dPagado: 0 },
+    'no puede tocar totalPagado: esa plata ya se cobró');
+
+  // Partiendo de acumulado 10000 / pagado 4000 / saldo 6000:
+  const acumulado = 10000 + d.dHist;
+  const pagado = 4000 + d.dPagado;
+  const saldo = 6000 + d.dSaldo;
+  assert.deepStrictEqual({ acumulado, pagado, saldo }, { acumulado: 4000, pagado: 4000, saldo: 0 });
+  assert.strictEqual(acumulado - pagado, saldo, 'la identidad contable se rompe');
+});
+
+check('PAGADA_PARCIAL legada (solo pesos): se convierte, no se recalcula', () => {
+  const reg = { estado: 'pagada_parcial', saldoPendiente: 60 };
+  assert.strictEqual(pendienteDe(reg), 6000);
+});
+
+check('el caso real de produccion (drift de coma flotante) da 0 y no rompe', () => {
+  // Il Capo tiene un registro con saldoPendiente: 1.674e-11 — un resto de una
+  // resta en pesos. Redondea a 0 centavos: anularlo no mueve nada.
+  const reg = { estado: 'pagada_parcial', saldoPendiente: 1.674038685450796e-11 };
+  assert.strictEqual(pendienteDe(reg), 0);
+  assert.strictEqual(tieneEfectoContable(deltasDeAnulacion(0)), false,
+    'una anulación sin nada pendiente no debe emitir movimiento');
+});
+
+check('PAGADA total: el código ni siquiera llega a anular', () => {
+  // La guarda existe desde antes y no se tocó: es la que sostiene el criterio
+  // de que la comisión ya cobrada no se devuelve.
+  const cuerpo = cuerpoDe('cancelarComision');
+  assert.match(cuerpo, /if \(registro\.estado === 'pagada'\) \{[\s\S]*?return;/,
+    'se perdió la guarda que impide anular una venta ya pagada');
+});
+
+check('anular dos veces resta una sola vez', () => {
+  // `A-{ventaKey}` es único por venta: el segundo intento choca contra la regla
+  // create-only y no vuelve a descontar. Verificado contra el emulador en
+  // comisionEmulator.integration.mjs; acá se fija la identidad.
+  const a = planDeAnulacion({ localId: 'L', modoVenta: 'mostrador', idVenta: 1165, comisionCentavos: 6000 });
+  const b = planDeAnulacion({ localId: 'L', modoVenta: 'mostrador', idVenta: 1165, comisionCentavos: 6000 });
+  assert.strictEqual(a.opId, b.opId);
+  assert.strictEqual(a.movimiento.ruta, b.movimiento.ruta);
+});
+
+check('la comisión ORIGINAL queda registrada en el movimiento, para auditar', () => {
+  assert.match(caminoActivo('cancelarComision'), /comisionOriginalCentavos: comisionCentavos/,
+    'sin eso no se puede saber cuánto se había pagado antes de anular');
+});
+
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

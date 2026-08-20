@@ -532,12 +532,34 @@ export const cancelarComision = async (idVenta, modoVenta) => {
   if (activa) {
     const modoEfectivo = modoVenta ?? registro.canal ?? registro.modoVenta;
 
-    if (modoEfectivo && tieneEfectoContable(deltasDeAnulacion(comisionCentavos))) {
+    // LO QUE ESTA VENTA TODAVÍA DEBE.
+    //
+    // Anular NO devuelve la comisión ya pagada. Es el mismo criterio que ya
+    // rige para una venta 'pagada', que directamente no se anula. Entonces lo
+    // que deja de deberse es el PENDIENTE, no la comisión completa:
+    //
+    //     comisión 100, pagado 40, pendiente 60  →  la anulación resta 60
+    //     queda: acumulado 40, pagado 40, saldo 0
+    //
+    // Restar los 100 le daría al local crédito por plata que ya cobramos y, si
+    // no hubiera otra deuda, dejaría el saldo negativo: las reglas rechazarían
+    // la escritura entera y la anulación fallaría del todo.
+    //
+    // Los importes salen SIEMPRE del registro, nunca del porcentaje de hoy. Es
+    // la misma lectura que hace el pago para repartir: el entero si está, los
+    // pesos si es un registro legado.
+    const pendienteCentavos = registro.estado === 'pagada_parcial'
+      ? (Number.isInteger(registro.saldoPendienteCentavos)
+        ? registro.saldoPendienteCentavos
+        : aCentavos(registro.saldoPendiente))
+      : comisionCentavos;
+
+    if (modoEfectivo && tieneEfectoContable(deltasDeAnulacion(pendienteCentavos))) {
       await aplicarPlan(
         op.getDatabaseOrAbort(),
         planDeAnulacion({
-          localId, modoVenta: modoEfectivo, idVenta, comisionCentavos,
-          meta: { ventaKey: claveResuelta },
+          localId, modoVenta: modoEfectivo, idVenta, comisionCentavos: pendienteCentavos,
+          meta: { ventaKey: claveResuelta, comisionOriginalCentavos: comisionCentavos },
         }),
         detalleCancelacion,
       );
