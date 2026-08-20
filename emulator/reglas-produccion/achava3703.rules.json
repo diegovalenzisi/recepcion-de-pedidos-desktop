@@ -1,0 +1,14 @@
+{
+      "rules": {
+        "$localId": {
+          ".read": "true",
+          ".write": "true",
+          "PEDIDOS": {
+            ".indexOn": "fechacaja"
+          },
+          "MOSTRADOR": {
+            ".indexOn": "fechacaja"
+          }
+        }
+      }
+    }

@@ -1,3 +1,30 @@
+// REGLAS PROPUESTAS PARA COMISIONES. NO PUBLICADAS.
+//
+// Este es el archivo contra el que corren las pruebas de emulador de los cuatro
+// escritores. Que las suites pasen contra estas reglas es la unica evidencia de
+// que la propuesta es viable.
+//
+// QUE PROTEGEN (integridad operativa):
+//   - un movimiento no se puede sobrescribir ni borrar: eso es el exactly-once
+//   - los acumuladores no pueden quedar negativos ni fraccionarios
+//   - migracionActivadaEn no se puede mover una vez puesto: la frontera es fija
+//   - migracionVersion no puede retroceder
+//   - el importe de un excedente ya registrado no se puede cambiar
+//
+// LO QUE SE PROBO Y NO ENTRO: bajar el .write de REGISTRO a $ventaKey para que
+// un registro no se pueda BORRAR. Rompe la escritura del nodo REGISTRO entero,
+// que usan los fixtures y que ninguna regla puede distinguir de un borrado
+// masivo legitimo. Queda como NO protegido, a la vista.
+//
+// QUE **NO** PROTEGEN (seguridad frente a un atacante):
+//   Desktop, Tablet, DLV Consultas y la Cloud Function escriben DIRECTO en la
+//   base, y la Function lo hace por REST SIN AUTENTICAR. Por eso TOTALES tiene
+//   .write publico. Cualquiera con la URL puede leer todo y puede escribir un
+//   saldo distinto: estas reglas NO impiden que alguien manipule la contabilidad
+//   a proposito. Cierran errores, concurrencia y duplicados; no cierran un
+//   ataque. Resolverlo requiere una frontera de autenticacion para los CUATRO
+//   escritores, o mover las mutaciones a un backend confiable. No es este
+//   proyecto.
 {
   "rules": {
     ".read": true,
@@ -20,8 +47,14 @@
           "saldoPendienteCentavos": {
             ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0"
           },
+          "saldoInicialCentavos": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0"
+          },
           "migracionVersion": {
-            ".validate": "newData.isNumber() && newData.val() >= 0"
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0 && (!data.exists() || newData.val() >= data.val())"
+          },
+          "migracionActivadaEn": {
+            ".validate": "newData.isNumber() && newData.val() > 0 && (!data.exists() || newData.val() === data.val())"
           },
           "$otroTotal": {
             ".validate": true
@@ -35,6 +68,21 @@
         },
         "PAGOS": {
           ".write": true
+        },
+        "EXCEDENTES": {
+          "$idPago": {
+            ".write": true,
+            ".validate": "!newData.exists() || (newData.hasChildren(['paymentId','externalReference','montoCobradoCentavos','montoAplicadoCentavos','excedenteCentavos','estado','registradoEn']) && newData.child('excedenteCentavos').isNumber() && newData.child('excedenteCentavos').val() % 1 === 0 && newData.child('excedenteCentavos').val() > 0 && (!data.exists() || data.child('excedenteCentavos').val() === newData.child('excedenteCentavos').val()))"
+          }
+        },
+        "PREFERENCIA_VIGENTE": {
+          ".write": true,
+          "montoCentavos": {
+            ".validate": "newData.isNumber() && newData.val() % 1 === 0 && newData.val() >= 0"
+          },
+          "$otroCampo": {
+            ".validate": true
+          }
         },
         "PAGOS_PENDIENTES": {
           ".write": true

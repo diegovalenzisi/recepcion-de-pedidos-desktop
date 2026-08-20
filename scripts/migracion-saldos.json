@@ -1,0 +1,63 @@
+{
+  "_comentario": [
+    "SALDO INICIAL APROBADO POR LOCAL, EN CENTAVOS ENTEROS.",
+    "",
+    "Este archivo es la DECISION, no un calculo. El script de migracion no lo",
+    "recalcula ni lo sobrescribe: lo lee, verifica que lo que hay en la base sea",
+    "coherente con el, y si no lo es ABORTA ese local.",
+    "",
+    "El numero sale del diagnostico de solo lectura (scripts/diagnostico-saldo-inicial.mjs)",
+    "y tiene que estar aprobado a mano, local por local, antes de escribir nada.",
+    "",
+    "aprobado: false  ->  el script NO escribe ese local. Es el estado por",
+    "defecto a proposito: nadie migra por olvido.",
+    "",
+    "No contiene ningun secreto: son importes y notas."
+  ],
+  "generadoDesde": "scripts/diagnostico-saldo-inicial.mjs",
+  "fechaDiagnostico": "2026-08-20",
+  "locales": {
+    "40508022": {
+      "nombre": "Achaval",
+      "saldoInicialCentavos": 0,
+      "aprobado": false,
+      "observacion": "Sin deuda: REGISTRO y PAGOS coinciden. El unico pago de PAGOS_COMISIONES ($3.560) se emparejo con certeza contra COMISIONES/PAGOS."
+    },
+    "38827976": {
+      "nombre": "Temperley",
+      "saldoInicialCentavos": 3775000,
+      "aprobado": false,
+      "observacion": "Igual al saldo reconocido. Su unico pago de PAGOS_COMISIONES se emparejo con certeza."
+    },
+    "51501748": {
+      "nombre": "Centenario",
+      "saldoInicialCentavos": 3305300,
+      "aprobado": false,
+      "observacion": "Saldo reconocido 3.305.400 MENOS el pago de Tablet de $1,00 (PAGOS_COMISIONES/2, 2026-07-16) que nunca quedo reflejado en COMISIONES/PAGOS. Es el unico ajuste manual de los siete locales."
+    },
+    "25230974": {
+      "nombre": "Burano",
+      "saldoInicialCentavos": 3478200,
+      "aprobado": false,
+      "observacion": "Igual al saldo reconocido. No tiene nodo PAGOS_COMISIONES."
+    },
+    "34734081": {
+      "nombre": "Canada",
+      "saldoInicialCentavos": 0,
+      "aprobado": false,
+      "observacion": "Sin comision registrada ni pagos. No tiene nodo PAGOS_COMISIONES."
+    },
+    "34516605": {
+      "nombre": "Bynnon",
+      "saldoInicialCentavos": 0,
+      "aprobado": false,
+      "observacion": "COMISIONES vacio por completo. No tiene nodo PAGOS_COMISIONES."
+    },
+    "31915636": {
+      "nombre": "IlCapo",
+      "saldoInicialCentavos": 12204410,
+      "aprobado": false,
+      "observacion": "Igual al saldo reconocido. No tiene nodo PAGOS_COMISIONES. Tiene un registro en pagada_parcial (1165) con saldoPendiente 1.674e-11, que redondea a 0 centavos."
+    }
+  }
+}
