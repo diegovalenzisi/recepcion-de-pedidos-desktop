@@ -173,9 +173,74 @@ export const registrarComision = async ({
     ? comisionGeneradaCentavos
     : aCentavos(comisionGenerada);
   const opIdDeVenta = `V-${ventaKey}`;
+  const rutaRegistro = `${localId}/COMISIONES/REGISTRO/${ventaKey}`;
   const totales = await leerTotales(op.getDatabaseOrAbort(), localId);
   const activa = contabilidadActiva(totales);
+  const { fecha, hora } = ahora();
 
+  /** El registro de la venta. `extra` es lo que cambia entre los dos caminos. */
+  const datosDelRegistro = (extra) => ({
+    // Identidad EXPLÍCITA además de la clave: ninguna lógica futura debería
+    // tener que deducir el canal de la primera letra de la key.
+    ...identidad,
+    fecha,
+    hora,
+    modoVenta,
+    ventaTotal,
+    porcentajeComision,
+    comisionGenerada,
+    // Importe exacto en centavos enteros. Es el que usa la contabilidad nueva y
+    // el que va a leer la anulación: así se revierte SIEMPRE lo que la venta
+    // generó de verdad, aunque el porcentaje haya cambiado desde entonces.
+    comisionGeneradaCentavos: comisionCentavos,
+    // Timestamp DEL SERVIDOR. Es lo único que permite decidir si una venta es
+    // anterior o posterior a la frontera contable: `fecha`/`hora` son strings
+    // del reloj del cliente, y la forma de la clave (M/D) no sirve porque esas
+    // claves existen desde el hotfix de identidad, ANTES de activar.
+    registradoEn: serverTimestamp(),
+    estado: 'pendiente',
+    origen,
+    ...extra,
+  });
+
+  // -------------------------------------------------------------------------
+  // CAMINO ACTIVO: LA VENTA ES UNA SOLA ESCRITURA.
+  //
+  // El registro, el movimiento y los acumuladores entran en el MISMO `update()`
+  // multipath. Antes eran tres escrituras separadas y un corte entre la segunda
+  // y la tercera dejaba el registro escrito con la deuda sin subir — y, peor,
+  // era IRRECUPERABLE: al reintentar, la deduplicación de arriba encuentra el
+  // registro ya existente y devuelve sin crear el movimiento. La comisión se
+  // perdía en silencio.
+  //
+  // `totalAcumulado` (pesos, legado) DEJA de escribirse con la contabilidad
+  // activa: queda congelado con el resto del sistema viejo. Por eso el registro
+  // activo tampoco lleva `totalComisionesAcumuladas`, que salía de ese contador.
+  // -------------------------------------------------------------------------
+  if (activa) {
+    const registro = datosDelRegistro({ opId: opIdDeVenta });
+
+    // Una venta con comisión 0 (local con porcentaje en 0) guarda su identidad
+    // igual, pero no hay nada que mover: no se emite movimiento.
+    if (!tieneEfectoContable(deltasDeVenta(comisionCentavos))) {
+      await set(ref(op.getDatabaseOrAbort(), rutaRegistro), registro);
+      return;
+    }
+
+    await aplicarPlan(
+      op.getDatabaseOrAbort(),
+      planDeVenta({
+        localId, modoVenta, idVenta, comisionCentavos,
+        meta: { ventaKey, ventaTotal: aCentavos(ventaTotal), origen },
+      }),
+      { [rutaRegistro]: registro },
+    );
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // CAMINO DORMIDO: exactamente el de siempre, sin cambios.
+  // -------------------------------------------------------------------------
   // Incrementar total acumulado histórico en forma atómica
   const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   const { committed, snapshot: totalSnap } = await runTransaction(totalRef, (current) => {
@@ -184,10 +249,8 @@ export const registrarComision = async ({
 
   if (!committed) throw new Error('No se pudo actualizar totalAcumulado de comisiones.');
 
-  const { fecha, hora } = ahora();
-
   // Revalida antes del set() definitivo: la transacción de arriba fue un await real.
-  const freshRegistroRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/REGISTRO/${ventaKey}`);
+  const freshRegistroRef = ref(op.getDatabaseOrAbort(), rutaRegistro);
   await set(freshRegistroRef, {
     // Identidad EXPLÍCITA además de la clave: ninguna lógica futura debería
     // tener que deducir el canal de la primera letra de la key.
@@ -210,20 +273,7 @@ export const registrarComision = async ({
     totalComisionesAcumuladas: totalSnap.val(),
     estado: 'pendiente',
     origen,
-    ...(activa ? { opId: opIdDeVenta } : {}),
   });
-
-  // CONTABILIDAD NUEVA. Dormida mientras migracionVersion < 1.
-  //
-  // Una venta con comisión 0 (local con porcentaje en 0, como Achaval) guarda
-  // su identidad igual, pero no hay nada que mover: no se emite movimiento y
-  // los acumuladores quedan intactos.
-  if (activa && tieneEfectoContable(deltasDeVenta(comisionCentavos))) {
-    await aplicarPlan(op.getDatabaseOrAbort(), planDeVenta({
-      localId, modoVenta, idVenta, comisionCentavos,
-      meta: { ventaKey, ventaTotal: aCentavos(ventaTotal), origen },
-    }));
-  }
 };
 
 /**
@@ -453,26 +503,63 @@ export const cancelarComision = async (idVenta, modoVenta) => {
 
   const totales = await leerTotales(op.getDatabaseOrAbort(), localId);
   const activa = contabilidadActiva(totales);
+  const { fecha, hora } = ahora();
 
+  // Se conserva la MISMA clave que se resolvió arriba: escribir sobre
+  // `${idVenta}` marcaría como cancelado el registro legado del otro canal.
+  const detalleCancelacion = {
+    [`${base}/${claveResuelta}/estado`]: 'cancelada',
+    [`${base}/${claveResuelta}/fechaCancelacion`]: fecha,
+    [`${base}/${claveResuelta}/horaCancelacion`]: hora,
+  };
+
+  // -------------------------------------------------------------------------
+  // CAMINO ACTIVO: LA ANULACIÓN ES UNA SOLA ESCRITURA.
+  //
+  // El movimiento, los acumuladores y el estado del registro entran en el MISMO
+  // `update()`. Antes eran tres escrituras y un corte entre medio dejaba la
+  // deuda bajada con el registro todavía pendiente.
+  //
+  // `A-{ventaKey}` es único por venta, así que anular dos veces revierte una
+  // sola: el segundo intento choca contra la regla create-only y el estado del
+  // registro tampoco se reescribe.
+  //
+  // El canal sale del propio registro cuando el llamador no lo informa: sin él
+  // no habría opId y la deuda no bajaría, que es justamente lo que hay que
+  // evitar. `totalAcumulado` (pesos, legado) ya no se toca con la contabilidad
+  // activa.
+  // -------------------------------------------------------------------------
+  if (activa) {
+    const modoEfectivo = modoVenta ?? registro.canal ?? registro.modoVenta;
+
+    if (modoEfectivo && tieneEfectoContable(deltasDeAnulacion(comisionCentavos))) {
+      await aplicarPlan(
+        op.getDatabaseOrAbort(),
+        planDeAnulacion({
+          localId, modoVenta: modoEfectivo, idVenta, comisionCentavos,
+          meta: { ventaKey: claveResuelta },
+        }),
+        detalleCancelacion,
+      );
+    } else {
+      // Comisión 0, o un registro tan viejo que no dice de qué canal es: no hay
+      // nada que revertir, pero el registro igual queda cancelado.
+      await update(ref(op.getDatabaseOrAbort()), detalleCancelacion);
+    }
+
+    console.log(`[COMISION] cancelarComision ventaKey=${claveResuelta} comision=${comisionGenerada} → cancelada`);
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // CAMINO DORMIDO: exactamente el de siempre, sin cambios.
+  // -------------------------------------------------------------------------
   // Descontar del total acumulado. Revalida antes: el get() de arriba fue un await real.
   const totalRef = ref(op.getDatabaseOrAbort(), `${localId}/COMISIONES/TOTALES/totalAcumulado`);
   await runTransaction(totalRef, (current) => {
     return Math.max(0, (current || 0) - comisionGenerada);
   });
 
-  // CONTABILIDAD NUEVA. `A-{ventaKey}` es único por venta, así que anular dos
-  // veces revierte una sola. Dormida mientras migracionVersion < 1.
-  if (activa && modoVenta && tieneEfectoContable(deltasDeAnulacion(comisionCentavos))) {
-    await aplicarPlan(op.getDatabaseOrAbort(), planDeAnulacion({
-      localId, modoVenta, idVenta, comisionCentavos,
-      meta: { ventaKey: claveResuelta },
-    }));
-  }
-
-  const { fecha, hora } = ahora();
-  // Se revalida la database, pero se conserva la MISMA clave que se resolvió
-  // arriba: escribir sobre `${idVenta}` marcaría como cancelado el registro
-  // legado del otro canal.
   const freshRegistroRef = ref(op.getDatabaseOrAbort(), `${base}/${claveResuelta}`);
   await update(freshRegistroRef, {
     estado: 'cancelada',

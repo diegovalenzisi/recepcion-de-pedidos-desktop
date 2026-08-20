@@ -64,6 +64,7 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/api/intentoDePago.js',                  // identidad persistente del intento de pago
   'src/lib/api/deviceIdentity.js',                 // registro del equipo y clientVersion
   'src/lib/api/__tests__/comisionContabilidad.test.js',
+  'src/lib/api/__tests__/ventaAtomica.test.js',
   'src/lib/api/__tests__/intentoDePago.test.js',
   'src/lib/api/__tests__/comisionEmulator.integration.mjs',
   'src/lib/api/ventaUtils.js',
