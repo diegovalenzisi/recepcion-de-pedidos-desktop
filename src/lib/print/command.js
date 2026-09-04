@@ -6,6 +6,7 @@ import { printElectron } from './electronPrint';
 import { generateOptionalsHtml } from './utils';
 import { bloquesDeComanda } from './comandaModelo.js';
 import { getBusinessNameUppercase } from '@/lib/businessNameUtils';
+import { medidasDePapel, cssExtraAngosto } from './paper';
 
 export const printCommand = async (order, optionalGroups = []) => {
   await reloadPrintSettings();
@@ -131,6 +132,10 @@ export const printCommand = async (order, optionalGroups = []) => {
   // Get location-specific business name
   const businessName = getBusinessNameUppercase();
 
+  // Medidas del rollo. Con 80 mm (el default) todo lo de abajo queda idéntico
+  // a como estaba: 80mm de ancho, 3mm de padding y escala 1.
+  const papel = medidasDePapel(settings.printPaperWidth);
+
   const content = `
     <html>
       <head>
@@ -138,18 +143,18 @@ export const printCommand = async (order, optionalGroups = []) => {
         <style>
           @media print {
             @page {
-              size: 80mm auto;
+              size: ${papel.anchoMm}mm auto;
               margin: 0;
             }
           }
           body {
             font-family: ${settings.printFontFamily}, sans-serif;
-            width: 80mm;
+            width: ${papel.anchoMm}mm;
             box-sizing: border-box;
-            font-size: ${settings.printFontSize}px;
+            font-size: ${Math.round(settings.printFontSize * papel.escala)}px;
             margin: 0;
             margin-left: ${settings.printHorizontalOffset || 0}mm;
-            padding: 3mm;
+            padding: ${papel.paddingMm}mm;
             color: black !important;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
@@ -229,7 +234,7 @@ export const printCommand = async (order, optionalGroups = []) => {
           .qr-label {
             font-size: 1.1em;
             margin-top: 5px;
-          }
+          }${cssExtraAngosto(settings.printPaperWidth)}
         </style>
       </head>
       <body>

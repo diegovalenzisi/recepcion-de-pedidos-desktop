@@ -1,5 +1,6 @@
 
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
+import { asegurarOperable } from '@/lib/api/mantenimientoApi';
 import { getDatabase, ref, get, set, remove, update } from 'firebase/database';
 import { formatDateForFirebase } from '@/lib/utils';
 import { totalesPorMedioDePago, validarPayloadDeCierre } from './clavesCierre.js';
@@ -35,6 +36,9 @@ export const checkOpenShift = async () => {
 };
 
 export const createNewShift = async (initialFund, date) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('la apertura de caja');
     // First, double-check there isn't an open shift before creating a new one.
     const openShift = await checkOpenShift();
     if (openShift) {
@@ -197,6 +201,9 @@ const marcarFase = (error, fase, pedidosYaMovidos) => {
  *   cambia ningún cálculo ni el significado de `cierreResponsable`.
  */
 export const closeShift = async (shift, cashCount, sales, pdfBase64, responsible, progressCallback, ejecutadoPor = null) => {
+  // El cierre escribe BACKUP, RESUMEN_TURNO y borra pedidos: es la operacion
+  // mas destructiva del dia. No puede correr a la par del reset.
+  await asegurarOperable('el cierre de caja');
     checkLocalId();
     // Un solo "op" para TODO el cierre (múltiples lotes + backup del turno):
     // captura el local/generación acá y se revalida en cada escritura. Si el

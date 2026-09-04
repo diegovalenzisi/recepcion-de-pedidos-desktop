@@ -64,7 +64,7 @@ const PrepaymentHistoryModal = ({ isOpen, onClose }) => {
             {/* El `value` es el nombre de la cuenta (deriva la clave del nodo);
                 la etiqueta visible sigue siendo la marca "M.PAGO". Los dos
                 nombres resuelven al mismo nodo PREPAGO_MPAGO. */}
-            <TabsTrigger value="PREPAGO MPAGO">M.PAGO</TabsTrigger>
+            <TabsTrigger value="PREPAGO MPAGO">M.LIBRE</TabsTrigger>
           </TabsList>
           
           <div className="flex justify-end mt-4">

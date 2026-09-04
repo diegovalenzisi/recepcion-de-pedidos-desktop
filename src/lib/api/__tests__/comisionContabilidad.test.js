@@ -353,11 +353,17 @@ check('faltaPagarCentavos dice cuanto hay que pagar como minimo', () => {
   assert.strictEqual(liberaTrasPago({ saldoCentavosDespues: saldoDespues, limiteCortePesos: 60000 }), true);
 });
 
-check('el texto de bloqueo nombra deuda y limite', () => {
+check('el texto de bloqueo pide el SALDO TOTAL y no ofrece ninguna accion', () => {
   const t = textoDeBloqueo(evaluarInicio({ saldoCentavos: aCentavos(65000), alarmaPagoPesos: 50000, limiteCortePesos: 60000 }));
-  assert.match(t.titulo, /LÍMITE DE COMISIÓN ALCANZADO/);
-  assert.match(t.pendiente, /65\.000/);
-  assert.match(t.limite, /60\.000/);
+  assert.match(t.titulo, /SISTEMA BLOQUEADO POR FALTA DE PAGO/);
+  // El importe es la deuda ENTERA, no el minimo para quedar debajo del limite
+  // (faltaPagarCentavos daria $5.000,01).
+  assert.strictEqual(t.importe, "$65.000,00");
+  // El limite es informacion interna: no se le muestra al local.
+  assert.ok(!Object.values(t).some((v) => /60\.000/.test(String(v))), 'expone el limite');
+  // Y ningun texto invita a hacer algo desde la aplicacion.
+  const todo = Object.values(t).join(' ');
+  assert.ok(!/pag(ar|ue)\b|ya pagu|desbloque|continuar|reintent/i.test(todo), `texto con accion local: ${todo}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -766,14 +772,19 @@ check('un bloqueo o un error SI se pueden reintentar', () => {
   assert.ok(!/yaEvaluadoRef\.current = true;\s*setEstado\(ESTADO_SESION\.BLOQUEADA/.test(fuenteGate));
 });
 
-check('el desbloqueo tras pagar hace UNA relectura y fija la sesion', () => {
-  assert.match(fuenteGate, /reevaluarTrasPago/);
-  assert.match(fuenteGate, /liberaTrasPago\(\{ saldoCentavosDespues/);
-  assert.match(fuenteGate, /yaEvaluadoRef\.current = true;\s*\/\/ desde acá, definitiva/);
+check('NO existe ningun desbloqueo desde la aplicacion', () => {
+  // Aca vivia reevaluarTrasPago: releia el saldo tras un pago hecho en la propia
+  // pantalla de bloqueo y habilitaba la sesion en el acto. El unico desbloqueo
+  // posible es el proximo arranque, con evaluar().
+  assert.ok(!/const reevaluarTrasPago/.test(fuenteGate), 'volvio el desbloqueo local');
+  assert.ok(!/liberaTrasPago/.test(fuenteGate), 'el gate volvio a liberar tras un pago');
+  // Y no se colo un reintento automatico en su lugar.
+  assert.ok(!/setInterval|setTimeout|onValue/.test(fuenteGate), 'apareció polling o un listener');
 });
 
 check('no verificar el limite NO libera la sesion', () => {
-  assert.match(fuenteGate, /if \(!limite\.ok\) return false;/);
+  assert.match(fuenteGate, /if \(fallo\)|valorNoVerificable/, 'se perdio el camino no verificable');
+  assert.ok(!/limite\.pesos \|\| 0/.test(fuenteGate), 'un limite ilegible se asume desactivado');
 });
 
 check('App.jsx bloquea el area operativa en los tres estados no autorizados', () => {
@@ -783,7 +794,7 @@ check('App.jsx bloquea el area operativa en los tres estados no autorizados', ()
   assert.match(fuenteApp, /<CommissionBlockScreen/);
 });
 
-check('el gate va DESPUES del login (hay que poder pagar) y ANTES de operar', () => {
+check('el gate va DESPUES del login y ANTES de operar', () => {
   const iLogin = fuenteApp.indexOf('if (!user) {');
   const iGate = fuenteApp.indexOf('gateComision.estado === ESTADO_SESION.BLOQUEADA');
   const iNav = fuenteApp.indexOf('<NavLink to="/atencion"');
@@ -791,11 +802,46 @@ check('el gate va DESPUES del login (hay que poder pagar) y ANTES de operar', ()
   assert.ok(iNav > iGate, 'el area operativa quedo antes del gate');
 });
 
-check('la pantalla de bloqueo reutiliza el MISMO circuito de pago', () => {
+check('App.jsx no le pasa a la pantalla ninguna via de pago', () => {
+  assert.ok(!/onPagoExitoso/.test(fuenteApp), 'volvio el callback de pago');
+  assert.ok(!/<CommissionBlockScreen[\s\S]{0,400}balance=/.test(fuenteApp), 'volvio el balance a la pantalla');
+});
+
+check('la pantalla de bloqueo NO ofrece ninguna forma de pagar ni de continuar', () => {
   const pantalla = readFileSync(new URL('../../../components/CommissionBlockScreen.jsx', import.meta.url), 'utf8');
-  assert.match(pantalla, /CommissionPaymentManager/, 'creo un segundo mecanismo de pago');
-  assert.match(pantalla, /processCommissionPayment/);
-  assert.match(pantalla, /LÍMITE DE COMISIÓN ALCANZADO|textoDeBloqueo/);
+  // El local no puede declarar que pago: ni el formulario, ni la funcion de pago.
+  // Se busca el USO, no la palabra: el comentario de cabecera nombra a proposito
+  // lo que se elimino, para que nadie lo reintroduzca por desconocimiento.
+  assert.ok(!/<CommissionPaymentManager|import CommissionPaymentManager/.test(pantalla), 'volvio el formulario de pago');
+  assert.ok(!/import {[^}]*processCommissionPayment|onProcessPayment=/.test(pantalla), 'volvio el circuito de pago');
+  assert.ok(!/onPagoExitoso=|onPaymentSuccess=/.test(pantalla), 'volvio el desbloqueo tras pagar');
+  // El texto sale del modulo canonico, no cableado en la pantalla.
+  assert.match(pantalla, /textoDeBloqueo/, 'el texto dejo de salir del modulo canonico');
+  // El importe mostrado es el saldo con el que se decidio el bloqueo.
+  assert.match(pantalla, /t\.importe/, 'no muestra el saldo adeudado');
+  assert.ok(!/faltaPagarCentavos/.test(pantalla), 'muestra el minimo para zafar, no la deuda');
+  // La rama de "no verificable" conserva REINTENTAR; la de corte, solo SALIR.
+  const iCorte = pantalla.indexOf('// --- Bloqueo por corte');
+  assert.ok(iCorte > 0, 'no se encontro la rama de bloqueo');
+  const ramaCorte = pantalla.slice(iCorte);
+  assert.ok(!/REINTENTAR|onReintentar/.test(ramaCorte), 'la rama de corte tiene un reintento');
+  // El boton sigue estando, y CIERRA LA APLICACION (no vuelve al login).
+  assert.match(ramaCorte, /SALIR/, 'la rama de corte perdio el boton SALIR');
+  assert.match(ramaCorte, /onClick=\{salir\}/, 'el SALIR de la rama de corte no cierra la app');
+  assert.match(pantalla, /cerrarAplicacion/, 'la pantalla ya no pide cerrar la aplicacion');
+  assert.ok(!/window\.close\(\)/.test(pantalla), 'window.close() no termina el proceso');
+});
+
+check('el cierre real usa el mecanismo nativo, nunca window.close()', () => {
+  const cerrar = readFileSync(new URL('../../native/cerrarAplicacion.js', import.meta.url), 'utf8');
+  // Se mira el CODIGO, sin comentarios: la cabecera nombra a proposito lo que NO
+  // hay que usar, para que nadie lo reintroduzca por desconocimiento.
+  const codigo = cerrar.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert.ok(!/window\.close\s*\(/.test(codigo), 'window.close() no termina el proceso');
+  // Desktop cierra por el IPC de Electron; Tablet por Capacitor. Cada repo trae
+  // el suyo y este contrato vale para los dos.
+  assert.match(codigo, /electronAPI\??\.quitApp|exitApp/, 'no usa el mecanismo nativo de cierre');
+  assert.match(cerrar, /export const cerrarAplicacion/, 'cambio el nombre del contrato');
 });
 
 check('CAMINO UNICO DE PAGO: solo processCommissionPayment llama a registrarPagoComision', () => {

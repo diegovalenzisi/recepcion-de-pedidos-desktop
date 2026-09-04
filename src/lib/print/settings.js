@@ -1,4 +1,5 @@
 import { fetchSettings } from '@/lib/api/settingsApi';
+import { ANCHO_POR_DEFECTO, normalizarAncho } from './paper';
 
 export let cachedPrintSettings = {
     printFontSize: 16,
@@ -11,6 +12,8 @@ export let cachedPrintSettings = {
     printerName: '',
     printTone: 5,
     printHorizontalOffset: 0,
+    // Ancho del rollo térmico, en mm. Ausente o inválido = 80 = lo de siempre.
+    printPaperWidth: ANCHO_POR_DEFECTO,
 };
 
 export const reloadPrintSettings = async () => {
@@ -25,6 +28,9 @@ export const reloadPrintSettings = async () => {
                 printerName: settings.printerName || '',
                 printTone: settings.printTone || 5,
                 printHorizontalOffset: Math.max(-20, Math.min(settings.printHorizontalOffset ?? 0, 20)),
+                // `normalizarAncho` ya devuelve 80 ante ausente/inválido: un local
+                // que nunca tocó esta opción imprime exactamente como antes.
+                printPaperWidth: normalizarAncho(settings.printPaperWidth),
             };
         }
     } catch (error) {

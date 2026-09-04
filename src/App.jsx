@@ -42,7 +42,7 @@ import { perfMonitor } from '@/lib/performanceMonitor';
 import InstallPrompt from '@/components/InstallPrompt.jsx';
 import { useCommissionAlarm } from '@/hooks/useCommissionAlarm.js';
 import CommissionAlarmModal from '@/components/CommissionAlarmModal.jsx';
-import { useCommissionTotal, useCommissionBalance } from '@/hooks/useCommissionTotal.js';
+import { useCommissionTotal } from '@/hooks/useCommissionTotal.js';
 import { useGateComision } from '@/hooks/useGateComision.js';
 import { ESTADO_SESION } from '@/lib/api/comisionCorte.js';
 import CommissionBlockScreen from '@/components/CommissionBlockScreen.jsx';
@@ -251,7 +251,6 @@ function AppContent() {
   // Badge de comisión pendiente (tiempo real) — única fuente de verdad para el saldo de
   // comisión a pagar, compartida entre el indicador del footer y el aviso al entrar al local.
   const commissionPending = useCommissionTotal(!!user && !!localId);
-  const commissionBalance = useCommissionBalance(!!user && !!localId);
 
   // Gate de inicio por limite de corte: evaluacion UNICA por sesion real.
   const gateComision = useGateComision();
@@ -805,7 +804,7 @@ function AppContent() {
   // -------------------------------------------------------------------------
   // GATE DE INICIO POR LÍMITE DE CORTE.
   //
-  // Va DESPUÉS del login (se necesita sesión para poder pagar) y ANTES del área
+  // Va DESPUÉS del login (hace falta saber qué local es) y ANTES del área
   // operativa. Se evalúa UNA sola vez, con una lectura puntual: no hay listener,
   // así que una sesión ya autorizada no puede volver a bloquearse aunque la
   // deuda supere el límite durante el turno. El límite se vuelve a mirar recién
@@ -821,8 +820,6 @@ function AppContent() {
       <CommissionBlockScreen
         estado={gateComision.estado}
         evaluacion={gateComision.evaluacion}
-        balance={commissionBalance}
-        onPagoExitoso={gateComision.reevaluarTrasPago}
         onReintentar={gateComision.evaluar}
         onSalir={logout}
       />

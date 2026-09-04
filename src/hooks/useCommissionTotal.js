@@ -66,6 +66,34 @@ const isRegistroValido = (reg) => {
 };
 
 /**
+ * SALDO DEL LEDGER ACTUAL, EN CENTAVOS. Función pura.
+ *
+ * Es la MISMA cuenta que hace el hook de abajo en su camino legado —
+ * Σ REGISTRO válidos − Σ PAGOS aprobados, con piso en 0 — expuesta para que el
+ * corte por comisión impaga (`useGateComision`) no tenga que reimplementarla.
+ *
+ * Se comparte a propósito: si las reglas de "pago aprobado" o "registro
+ * cancelado" vivieran en dos lados, el aviso y el bloqueo podrían mostrar
+ * números distintos sobre la misma deuda, que es exactamente el problema que
+ * ya apareció una vez con RESUMEN_CUENTA.
+ *
+ * @param {object|null} registros snapshot.val() de COMISIONES/REGISTRO
+ * @param {object|null} pagos     snapshot.val() de COMISIONES/PAGOS
+ */
+export const calcularSaldoLegadoCentavos = (registros, pagos) => {
+  let generado = 0;
+  for (const reg of Object.values(registros || {})) {
+    if (reg && isRegistroValido(reg)) generado += toNumber(reg.comisionGenerada);
+  }
+  let pagado = 0;
+  for (const pago of Object.values(pagos || {})) {
+    if (pago && isPagoAprobado(pago)) pagado += toNumber(pago.montoPago);
+  }
+  const pendiente = generado - pagado;
+  return aCentavos(pendiente > 0 ? pendiente : 0);
+};
+
+/**
  * Fuente ÚNICA y compartida del balance de comisión. Devuelve las tres cifras
  * (generado, pagado, pendiente) en tiempo real, para que cualquier pantalla que
  * necesite mostrar más de un número (ej. el panel de Configuración → Pago de

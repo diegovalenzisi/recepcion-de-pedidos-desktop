@@ -66,7 +66,9 @@ check('las tres plataformas tienen etiqueta para la UI', () => {
   assert.deepStrictEqual(PLATAFORMAS, ['PEDIDOSYA', 'RAPPI', 'MPAGO']);
   assert.strictEqual(ETIQUETA_PLATAFORMA.PEDIDOSYA, 'PedidosYa');
   assert.strictEqual(ETIQUETA_PLATAFORMA.RAPPI, 'Rappi');
-  assert.strictEqual(ETIQUETA_PLATAFORMA.MPAGO, 'M.PAGO');
+  // La plataforma se renombró a M.LIBRE: cambia el RÓTULO, no la clave
+  // interna ni el nombre de cuenta guardado en Firebase.
+  assert.strictEqual(ETIQUETA_PLATAFORMA.MPAGO, 'M.LIBRE');
 });
 
 check('M.PAGO se reconoce y NO se confunde con la cuenta "Mercado Pago"', () => {

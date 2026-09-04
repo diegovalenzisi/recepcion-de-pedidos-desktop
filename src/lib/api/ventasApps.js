@@ -22,7 +22,12 @@
 /** Plataformas soportadas. El orden es el de las pestañas. */
 export const PLATAFORMAS = Object.freeze(['PEDIDOSYA', 'RAPPI', 'MPAGO']);
 
-export const ETIQUETA_PLATAFORMA = Object.freeze({ PEDIDOSYA: 'PedidosYa', RAPPI: 'Rappi', MPAGO: 'M.PAGO' });
+// Etiquetas VISIBLES. La clave interna sigue siendo 'MPAGO' porque así está
+// guardado el histórico en Firebase (cuenta "PREPAGO MPAGO", ledger
+// PREPAGO_MPAGO, medio de pago "PREPAGO M.PAGO"): renombrar la clave obligaría
+// a migrar datos. Lo que cambia es SOLO el rótulo con el que se muestra la
+// plataforma, que pasó a llamarse M.LIBRE.
+export const ETIQUETA_PLATAFORMA = Object.freeze({ PEDIDOSYA: 'PedidosYa', RAPPI: 'Rappi', MPAGO: 'M.LIBRE' });
 
 /** Estados que NO son una venta cobrada: no suman ni se listan. */
 const ESTADOS_ANULADOS = new Set(['CANCELADO', 'CANCELADOS', 'ANULADO', 'RECHAZADO']);
@@ -47,6 +52,12 @@ export function normalizarPlataforma(valor) {
   // "PREPAGO M.PAGO" normaliza a PREPAGOMPAGO (el punto ya se saca arriba).
   // No colisiona con la cuenta "Mercado Pago" (MERCADOPAGO), que no contiene
   // la secuencia MPAGO y sigue sin ser una app.
+  //
+  // COMPATIBILIDAD DE LECTURA: la plataforma hoy se llama M.LIBRE, pero el
+  // histórico está guardado como "PREPAGO M.PAGO" / "PREPAGO MPAGO". Las tres
+  // formas resuelven a la MISMA clave interna 'MPAGO', así que ningún registro
+  // viejo se pierde y no hace falta migrar nada en Firebase.
+  if (s.includes('MLIBRE')) return 'MPAGO';
   if (s.includes('MPAGO')) return 'MPAGO';
   return null;
 }

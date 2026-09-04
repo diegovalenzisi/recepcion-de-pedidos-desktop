@@ -12,6 +12,7 @@ import UpdateUploader from '@/components/settings/local/admin/UpdateUploader.jsx
 import FacturacionManager from '@/components/settings/local/admin/FacturacionManager.jsx';
 import SystemHealthPanel from '@/components/settings/local/admin/SystemHealthPanel.jsx';
 import LocalNewManager from '@/components/settings/local/admin/LocalNewManager.jsx';
+import PeriodoPruebaManager from '@/components/settings/local/admin/PeriodoPruebaManager.jsx';
 import { Separator } from '@/components/ui/separator';
 import { processCommissionPayment } from '@/lib/api/settingsApi.js';
 import { useCommissionBalance } from '@/hooks/useCommissionTotal.js';
@@ -84,6 +85,13 @@ const AdminPanel = ({ settings, onSettingsChange, applySettings }) => {
       <Separator />
 
       <FacturacionManager />
+
+      <Separator />
+
+      {/* Período de prueba y "Local nuevo" son operaciones DISTINTAS:
+          una conserva el local y limpia la actividad, la otra prepara la PC
+          para otro comercio. Van separadas a propósito. */}
+      <PeriodoPruebaManager />
 
       <Separator />
 

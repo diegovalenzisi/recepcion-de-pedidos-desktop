@@ -2,6 +2,7 @@ import { reloadPrintSettings, cachedPrintSettings } from './settings';
 import { printElectron } from './electronPrint';
 import { getLocalId } from '@/lib/firebase/core';
 import { getBusinessNameUppercase } from '@/lib/businessNameUtils';
+import { medidasDePapel, cssExtraAngosto } from './paper';
 
 export const printSafeTicket = async (ticketData) => {
     await reloadPrintSettings();
@@ -28,19 +29,24 @@ export const printSafeTicket = async (ticketData) => {
     // Get location-specific business name
     const businessName = getBusinessNameUppercase();
 
+    // Medidas del rollo. Este ticket usa tamaños en px fijos, así que la escala
+    // se aplica a cada uno; con 80 mm la escala es 1 y quedan los de siempre.
+    const papel = medidasDePapel(settings.printPaperWidth);
+    const px = (n) => Math.round(n * papel.escala);
+
     const content = `
         <html>
             <head>
                 <title>Comprobante Caja Fuerte</title>
                 <style>
-                    @media print { @page { size: 80mm auto; margin: 0; } }
+                    @media print { @page { size: ${papel.anchoMm}mm auto; margin: 0; } }
                     body {
                         font-family: ${settings.printFontFamily}, sans-serif;
-                        width: 80mm;
+                        width: ${papel.anchoMm}mm;
                         box-sizing: border-box;
                         margin: 0;
                         margin-left: ${settings.printHorizontalOffset || 0}mm;
-                        padding: 5mm;
+                        padding: ${papel.anchoMm === 80 ? 5 : 3}mm;
                         color: black !important;
                         -webkit-print-color-adjust: exact;
                         print-color-adjust: exact;
@@ -49,38 +55,38 @@ export const printSafeTicket = async (ticketData) => {
                     * { font-weight: bold !important; color: black !important; }
                     .ticket-header {
                         text-align: center;
-                        font-size: 24px;
+                        font-size: ${px(24)}px;
                         margin-bottom: 10px;
                         text-transform: uppercase;
                     }
                     .ticket-item {
-                        font-size: 20px;
+                        font-size: ${px(20)}px;
                         line-height: 1.2;
                         margin: 5px 0;
                         text-transform: uppercase;
                     }
                     .value {
-                        font-size: 24px;
+                        font-size: ${px(24)}px;
                     }
                     .signature-line {
                         margin-top: 20px;
-                        font-size: 18px;
+                        font-size: ${px(18)}px;
                         text-align: center;
                     }
                     .ticket-footer {
                         text-align: center;
-                        font-size: 16px;
+                        font-size: ${px(16)}px;
                         margin-top: 10px;
                         text-transform: uppercase;
                     }
                     .dot-line {
                         text-align: center;
                         line-height: 0.5;
-                        font-size: 20px;
+                        font-size: ${px(20)}px;
                     }
                     .footer-container {
                         margin-top: 20px;
-                    }
+                    }${cssExtraAngosto(settings.printPaperWidth)}
                 </style>
             </head>
             <body>

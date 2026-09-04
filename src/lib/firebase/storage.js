@@ -1,6 +1,6 @@
 import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getFirebaseApp, getLocationSpecificStorageBucket, getLocationSpecificStorageBasePath, getLocalId, getCurrentLocalId } from './core';
-import { construirRutaStorageLocal, normalizarLocalId } from '@/lib/api/rutasLocales';
+import { construirRutaStorageLocal, normalizarLocalId, rutaPerteneceAlLocal } from '@/lib/api/rutasLocales';
 
 // REGLA DE ALMACENAMIENTO POR LOCAL (Firebase Storage):
 //
@@ -136,8 +136,29 @@ export const deleteArticleImage = async (imageUrl) => {
     }
     
     const filePath = decodeURIComponent(urlParts.split('?')[0]);
+
+    // GUARDA DE PERTENENCIA — NO SE BORRA FUERA DE LA CARPETA DEL LOCAL.
+    //
+    // Varios locales comparten un mismo bucket (los que no tienen Firebase
+    // propio caen por fallback al proyecto por defecto), y hasta acá se borraba
+    // la ruta que viniera en la URL, sin mirar de quién era. Un artículo cuya
+    // `foto` apuntara a la carpeta de otro local destruía el archivo del otro.
+    //
+    // La raíz sale de `raizStorage` — la MISMA que usan las subidas — y la
+    // comprobación es `rutaPerteneceAlLocal`, la guarda canónica de
+    // rutasLocales.js. No se hardcodea ningún local.
+    const raiz = raizStorage(localId);
+    if (!raiz || !rutaPerteneceAlLocal(filePath, raiz)) {
+      console.warn(
+        `[Storage] BORRADO OMITIDO: "${filePath}" no pertenece a la raíz del local actual ` +
+        `("${raiz || 'sin local'}"). El archivo NO se tocó: puede ser de otro local del ` +
+        'mismo bucket.',
+      );
+      return;
+    }
+
     const imageRef = ref(storage, filePath);
-    
+
     await deleteObject(imageRef);
     console.log(`Image deleted successfully from bucket: ${storageBucket}`);
   } catch (error) {

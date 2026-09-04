@@ -1,7 +1,11 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId } from '@/lib/firebase/core';
+import { asegurarOperable } from '@/lib/api/mantenimientoApi';
 import { formatDateForFirebase } from '@/lib/utils';
 
 export const setInitialCashFund = async (shiftId, amount, dateString) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('el fondo inicial de caja');
   checkLocalId();
   const API_URL = getFirebaseUrl();
   const LOCAL_ID = getCurrentDatabasePath();

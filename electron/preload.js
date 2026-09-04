@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   relaunchApp:  () => ipcRenderer.invoke('app:relaunch'),
+  quitApp:      () => ipcRenderer.invoke('app:quit'),
   getBootFlags: () => ipcRenderer.invoke('app:boot-flags'),
   // Caché local de imágenes de artículos (proceso principal). El renderer solo
   // recibe URLs dlvimg://... o el placeholder — nunca rutas físicas de Windows.

@@ -93,11 +93,12 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
             />
             <OperationalToggles settings={settings} onSettingsChange={handleSwitchChange} />
             <AppearanceSettings settings={settings} onSettingsChange={handleDirectChange} />
-            <PrintingSettings 
+            <PrintingSettings
                 settings={settings}
                 handleChange={handleChange}
                 handleSliderChange={handleSliderChange}
                 handleFontChange={handleFontChange}
+                handleDirectChange={handleDirectChange}
             />
             <AudioSettings
                 onAudioChange={handleAudioChange}

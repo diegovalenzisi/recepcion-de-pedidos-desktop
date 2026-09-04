@@ -1,0 +1,7 @@
+{
+  "version": "1.3.99",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.99.exe",
+  "releaseDate": "2026-09-04",
+  "sha256": "f6bd47142e9c90d1a2d21457f877e8e64fca415aabcdba8bc2b0b8b9c33a4be1",
+  "notes": "Nueva herramienta para preparar un comercio nuevo: Imagen para periodo de prueba, en Configuracion - Panel de Administracion. Antes de que el cliente empiece a probar el sistema se crea una imagen completa de la base de datos del local; cuando termina de probar, un solo boton la devuelve exactamente al estado que tenia en ese momento. Todo lo que se hizo durante las pruebas (ventas, pedidos, cajas, turnos, stock, clientes, estadisticas) desaparece, y la configuracion completa se conserva. La copia se guarda fuera del local y no se borra al restaurar. Mientras dura la restauracion el sistema bloquea ventas, pedidos, caja, stock y facturacion para que no entre una operacion a mitad de camino; un pedido externo que llegue en ese momento no se pierde ni se marca como procesado. Incluye ademas soporte de impresoras termicas de 58 mm (Configuracion - Datos de Impresion - Ancho del Papel), el limite de corte por comision impaga configurable, y correcciones en los reportes de prepago y en el borrado de imagenes entre locales que comparten Storage."
+}

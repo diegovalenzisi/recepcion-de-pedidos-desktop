@@ -12,15 +12,17 @@
 // COMPATIBILIDAD: los seis nombres originales (orange, blue, green, magenta,
 // red, golden) conservan EXACTAMENTE sus valores HSL. Están guardados en
 // CONFIGURACION/themeColor de los locales y no pueden cambiar de aspecto.
+// Ningún nombre existente se renombra nunca: la clave guardada en Firebase es
+// la identidad del tema.
 // ---------------------------------------------------------------------------
 
 /**
- * Cada tema: nombre guardado en Firebase, etiqueta visible, HSL de la variable
- * primaria y la clase Tailwind del círculo del selector.
+ * Los temas BASE. Cada uno genera además su versión pastel (ver abajo), así que
+ * agregar un color acá agrega automáticamente los dos.
  *
  * Los 6 primeros son los históricos, con sus valores originales intactos.
  */
-export const TEMAS = Object.freeze([
+const BASE = [
   // ---- históricos: NO cambiar los HSL ----
   { nombre: 'orange',    etiqueta: 'Naranja',        h: 24,  s: 95, l: 53, clase: 'bg-orange-500' },
   { nombre: 'blue',      etiqueta: 'Azul',           h: 217, s: 91, l: 60, clase: 'bg-blue-500' },
@@ -28,7 +30,7 @@ export const TEMAS = Object.freeze([
   { nombre: 'golden',    etiqueta: 'Dorado',         h: 45,  s: 93, l: 47, clase: 'bg-amber-500' },
   { nombre: 'magenta',   etiqueta: 'Magenta',        h: 312, s: 84, l: 51, clase: 'bg-fuchsia-600' },
   { nombre: 'red',       etiqueta: 'Rojo',           h: 0,   s: 84, l: 60, clase: 'bg-red-600' },
-  // ---- nuevos ----
+  // ---- agregados después ----
   { nombre: 'orangeDark', etiqueta: 'Naranja oscuro', h: 18,  s: 88, l: 42, clase: 'bg-orange-700' },
   { nombre: 'yellow',     etiqueta: 'Amarillo',       h: 52,  s: 96, l: 50, clase: 'bg-yellow-400' },
   { nombre: 'greenDark',  etiqueta: 'Verde oscuro',   h: 152, s: 65, l: 30, clase: 'bg-green-800' },
@@ -44,7 +46,46 @@ export const TEMAS = Object.freeze([
   { nombre: 'wine',       etiqueta: 'Bordó',          h: 348, s: 72, l: 36, clase: 'bg-rose-900' },
   { nombre: 'brown',      etiqueta: 'Marrón',         h: 25,  s: 45, l: 34, clase: 'bg-amber-900' },
   { nombre: 'slate',      etiqueta: 'Gris',           h: 215, s: 16, l: 42, clase: 'bg-slate-600' },
-]);
+  // Almendra: beige cálido. Se separa del marrón por ser mucho más claro y
+  // menos saturado, y del dorado/amarillo por tener el tono bastante más rojo.
+  { nombre: 'almond',     etiqueta: 'Almendra',       h: 34,  s: 42, l: 62, clase: 'bg-[hsl(34,42%,62%)]' },
+];
+
+// ---------------------------------------------------------------------------
+// VERSIÓN PASTEL
+//
+// No es opacidad: es un HSL propio. Se conserva el TONO —que es lo que hace
+// reconocible al color— y se baja la saturación y se sube la luminosidad hasta
+// una banda pastel común, para que los 22 pasteles se vean como una familia.
+//
+// La luminosidad es fija (84%) a propósito: si cada pastel heredara la del
+// original, "Verde oscuro pastel" quedaría oscuro y no sería un pastel.
+//
+// La saturación se limita a [25, 65]: por debajo el color se vuelve gris y deja
+// de distinguirse del resto; por encima deja de ser pastel. Pero nunca sube por
+// encima de la del original: el pastel de un gris tiene que seguir siendo gris,
+// no un gris MÁS colorido que el tema base.
+// ---------------------------------------------------------------------------
+
+const LUMINOSIDAD_PASTEL = 84;
+const limitar = (v, min, max) => Math.min(max, Math.max(min, v));
+
+/** El pastel de un tema base. */
+const pastelDe = (t) => ({
+  nombre: `${t.nombre}Pastel`,
+  etiqueta: `${t.etiqueta} pastel`,
+  h: t.h,
+  s: Math.min(t.s, limitar(Math.round(t.s * 0.55), 25, 65)),
+  l: LUMINOSIDAD_PASTEL,
+  clase: `bg-[hsl(${t.h},${Math.min(t.s, limitar(Math.round(t.s * 0.55), 25, 65))}%,${LUMINOSIDAD_PASTEL}%)]`,
+  pastel: true,
+});
+
+/**
+ * Los 22 base seguidos de sus 22 pasteles. Cada base aparece junto a su pastel
+ * en el selector, para poder compararlos de un vistazo.
+ */
+export const TEMAS = Object.freeze(BASE.flatMap((t) => [Object.freeze({ ...t, pastel: false }), Object.freeze(pastelDe(t))]));
 
 /** Nombre por defecto si el local no tiene tema configurado. */
 export const TEMA_POR_DEFECTO = 'orange';
@@ -61,10 +102,29 @@ export const temaPorNombre = (nombre) => PORNOMBRE.get(String(nombre ?? '')) || 
 /** ¿Es un nombre de tema conocido? */
 export const esTemaValido = (nombre) => PORNOMBRE.has(String(nombre ?? ''));
 
+/** ¿Este tema es una versión pastel? */
+export const esPastel = (nombre) => temaPorNombre(nombre).pastel === true;
+
 /** `hsl(24, 95%, 53%)` — el color primario del tema, para uso inline. */
 export const colorDeTema = (nombre) => {
   const t = temaPorNombre(nombre);
   return `hsl(${t.h}, ${t.s}%, ${t.l}%)`;
+};
+
+/**
+ * CONTRASTE DEL TEXTO SOBRE EL COLOR PRIMARIO.
+ *
+ * Los temas normales son oscuros y llevan texto casi blanco, como siempre. Un
+ * pastel es claro: con texto blanco encima no se leería nada. Por eso cada
+ * pastel define su propio `--primary-foreground`, un tono muy oscuro del MISMO
+ * color, que además queda más elegante que un negro plano.
+ *
+ * Se devuelve en el formato de canales sueltos que usa Tailwind/shadcn
+ * (`H S% L%`, sin `hsl()`), igual que el resto de las variables del tema.
+ */
+export const foregroundDeTema = (nombre) => {
+  const t = temaPorNombre(nombre);
+  return t.pastel ? `${t.h} 45% 20%` : '210 40% 98%';
 };
 
 /**
@@ -80,11 +140,15 @@ export const mapaDeColores = () =>
  * Se genera con esta función y se pega en el archivo: el test compara el CSS
  * real contra esta salida, así que si alguien agrega un tema y no regenera el
  * CSS, la prueba falla.
+ *
+ * Los pasteles agregan `--primary-foreground` para que el texto sobre el color
+ * primario siga siendo legible.
  */
 export const cssDeTemas = () =>
   TEMAS.map((t) => `  body[data-theme='${t.nombre}'] {
     --primary-hue: ${t.h};
     --primary-saturation: ${t.s}%;
     --primary-lightness: ${t.l}%;
-    --primary-dark-lightness: ${t.l}%;
+    --primary-dark-lightness: ${t.l}%;${t.pastel ? `
+    --primary-foreground: ${foregroundDeTema(t.nombre)};` : ''}
   }`).join('\n');

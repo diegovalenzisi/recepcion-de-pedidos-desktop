@@ -133,7 +133,15 @@ export const saveSettings = async (settingsData) => {
   // que escriben directo a CONFIGURACION/porcentaje y CONFIGURACION/alarmaPago.
   // El guardado general recibía estos valores desde un estado viejo (cargado al montar la
   // pantalla) y los pisaba. Los excluimos para no sobreescribir lo recién guardado.
-  const COMMISSION_KEYS = new Set(['porcentaje', 'alarmaPago', 'salesPercentage']);
+  //
+  // 'limiteCorte' va en la MISMA lista y por el MISMO motivo: se graba con su
+  // propio botón (saveLimiteCorte) desde el panel de Administración, mientras
+  // que `fetchSettings` trae el nodo CONFIGURACION entero — limiteCorte
+  // incluido — y este guardado general lo reescribiría con el valor cargado al
+  // montar la pantalla. Sin esta exclusión, cualquier usuario con permiso
+  // 'configuracion' (no hace falta ser DiegoL) que apretara "Guardar" revertiría
+  // un límite recién cambiado.
+  const COMMISSION_KEYS = new Set(['porcentaje', 'alarmaPago', 'salesPercentage', 'limiteCorte']);
 
   // gridViewSettings (preferencias de Vista Cuadrilla) se guarda EXCLUSIVAMENTE desde
   // GridViewSettingsManager con saveGridViewSettings (escribe CONFIGURACION/gridViewSettings).
@@ -582,6 +590,24 @@ export const fetchAlarmaPagoVerificable = async () => {
   }
 };
 
+/**
+ * Guarda el LÍMITE DE CORTE. En PESOS, misma unidad y misma ruta que lee
+ * `fetchLimiteCorte` — no hay una segunda ruta ni una segunda unidad.
+ *
+ *     /{localId}/CONFIGURACION/limiteCorte
+ *
+ * 0 (o vacío) = corte DESACTIVADO. Es la forma explícita de apagarlo.
+ *
+ * Mismo patrón que `saveAlarmaPago`: PUT directo al campo, sin pasar por
+ * `saveSettings`. Por eso `limiteCorte` está en COMMISSION_KEYS — el guardado
+ * general de Configuración NO debe tocarlo, o pisaría con un valor viejo lo que
+ * se acaba de grabar acá.
+ *
+ * QUIÉN PUEDE LLAMARLA: el único llamador es SalesPercentageManager, que se
+ * monta dentro de AdminPanel, y AdminPanel solo se renderiza para el usuario
+ * DiegoL (ver LocalSettings.jsx). Es el mismo alcance que ya tienen el
+ * porcentaje de comisión y el registro de pagos.
+ */
 export const saveLimiteCorte = async (amount) => {
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();

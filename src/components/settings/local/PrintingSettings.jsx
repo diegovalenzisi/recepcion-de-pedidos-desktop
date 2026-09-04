@@ -2,9 +2,10 @@ import React from 'react';
 import { SettingsField, FontSelector } from './common';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { ScrollText, Type, Palette, Printer, ScrollText as FontSize, MoveHorizontal } from 'lucide-react';
+import { ScrollText, Type, Palette, Printer, ScrollText as FontSize, MoveHorizontal, Ruler } from 'lucide-react';
+import { ANCHOS_SOPORTADOS, normalizarAncho } from '@/lib/print/paper';
 
-const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFontChange }) => {
+const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFontChange, handleDirectChange }) => {
     const printFontOptions = [
         { value: 'sans-serif', label: 'Sans Serif' },
         { value: 'serif', label: 'Serif' },
@@ -67,6 +68,45 @@ const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFo
                         <span className="font-bold w-10 text-center">{(settings.printHorizontalOffset ?? 0) > 0 ? '+' : ''}{settings.printHorizontalOffset ?? 0}mm</span>
                     </div>
                     <p className="text-xs text-gray-400">Valor 0 = posición normal. Negativo mueve hacia la izquierda, positivo hacia la derecha.</p>
+                </div>
+
+                {/*
+                    ANCHO DEL ROLLO. Va junto al ajuste horizontal porque son los
+                    dos parámetros físicos del papel. Se guarda en CONFIGURACION
+                    como el resto de los ajustes de impresión, con el mismo botón
+                    "Guardar" de la pantalla.
+
+                    80 mm es el valor por defecto y el comportamiento actual: un
+                    local que no toque esto imprime exactamente como hasta ahora.
+                */}
+                <div className="space-y-2">
+                    <Label htmlFor="printPaperWidth" className="flex items-center text-gray-700 font-semibold">
+                        <Ruler className="mr-2 h-5 w-5 text-orange-500" /> Ancho del Papel
+                    </Label>
+                    <div className="flex items-center space-x-2">
+                        {ANCHOS_SOPORTADOS.map((ancho) => {
+                            const activo = normalizarAncho(settings.printPaperWidth) === ancho;
+                            return (
+                                <button
+                                    key={ancho}
+                                    type="button"
+                                    id={ancho === 80 ? 'printPaperWidth' : undefined}
+                                    onClick={() => handleDirectChange?.('printPaperWidth', ancho)}
+                                    className={`px-6 py-2 rounded-md border font-bold transition-colors ${
+                                        activo
+                                            ? 'bg-orange-500 text-white border-orange-500'
+                                            : 'bg-white text-gray-700 border-gray-300 hover:border-orange-400'
+                                    }`}
+                                >
+                                    {ancho} mm
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <p className="text-xs text-gray-400">
+                        Ancho del rollo de la impresora térmica. 80 mm es el valor habitual; elegí 58 mm solo si
+                        la impresora usa rollo angosto.
+                    </p>
                 </div>
             </div>
         </>

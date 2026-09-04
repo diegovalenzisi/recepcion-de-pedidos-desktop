@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { colorDeTema } from '@/lib/api/temaColores';
 
 /**
  * Hook to get the current theme color and provide utility functions for button styling
@@ -30,16 +31,10 @@ export const useThemeButtonColors = () => {
   }, []);
 
   // Map theme names to their actual color values for inline usage if needed
-  const themeColorMap = {
-    orange: 'hsl(24, 95%, 53%)',
-    blue: 'hsl(217, 91%, 60%)',
-    green: 'hsl(142, 71%, 45%)',
-    magenta: 'hsl(312, 84%, 51%)',
-    red: 'hsl(0, 84%, 60%)',
-    golden: 'hsl(45, 93%, 47%)'
-  };
+  // Los HSL salen de la paleta unica (src/lib/api/temaColores.js) en vez de
+  // estar repetidos aca: un color nuevo ya no obliga a tocar este archivo.
 
-  const activeColor = themeColorMap[themeColor] || themeColorMap.magenta;
+  const activeColor = colorDeTema(themeColor);
   const inactiveColor = 'hsl(0, 0%, 83%)'; // Light gray for disabled buttons
 
   /**
@@ -55,10 +50,10 @@ export const useThemeButtonColors = () => {
     }
     
     if (isActive) {
-      return "bg-primary text-white border-primary shadow-md hover:bg-primary/90 font-semibold";
+      return "bg-primary text-primary-foreground border-primary shadow-md hover:bg-primary/90 font-semibold";
     }
     
-    return "bg-primary text-white border-primary shadow-sm hover:bg-primary/90 hover:shadow-md";
+    return "bg-primary text-primary-foreground border-primary shadow-sm hover:bg-primary/90 hover:shadow-md";
   };
 
   /**

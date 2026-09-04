@@ -325,12 +325,67 @@ async function processNext() {
   }
 }
 
+
+/* =======================
+   ⏸️ Bloqueo de mantenimiento
+   ======================= */
+
+// El reset de "Finalizar pruebas" levanta este flag por unos segundos. Se lee
+// puntualmente, al empezar cada pedido: es un booleano y no justifica un
+// listener propio. Si no se puede leer, se sigue trabajando — dejar de facturar
+// por un error de red sería peor que el riesgo que evita.
+async function hayMantenimiento() {
+  if (!LOCAL_ID) return false;
+  try {
+    // El flag vive FUERA del local: la restauracion reemplaza /{localId} entero
+    // y un flag adentro se borraria a si mismo a mitad de camino.
+    const snap = await db.ref(`BACKUP/${LOCAL_ID}/MANTENIMIENTO`).once('value');
+    const v = snap.val();
+    return v === true || (!!v && typeof v === 'object' && v.activo === true);
+  } catch {
+    return false;
+  }
+}
+
+// Cuántas veces se reintenta un pedido que llegó durante el mantenimiento.
+// El reset dura segundos; 30 intentos cada 10 s son 5 minutos de margen.
+const MANTENIMIENTO_REINTENTOS = 30;
+const MANTENIMIENTO_ESPERA_MS = 10 * 1000;
+const reintentosPorPedido = new Map();
+
+function reintentarTrasMantenimiento(snapshot) {
+  const id = snapshot.key;
+  const n = (reintentosPorPedido.get(id) || 0) + 1;
+  if (n > MANTENIMIENTO_REINTENTOS) {
+    console.warn(`[MANTENIMIENTO] ${id}: se agotaron los reintentos. Queda en la cola.`);
+    reintentosPorPedido.delete(id);
+    return;
+  }
+  reintentosPorPedido.set(id, n);
+  setTimeout(() => {
+    reintentosPorPedido.delete(id);
+    procesarSnapshot(snapshot).catch((e) =>
+      console.error(`[MANTENIMIENTO] Reintento de ${id} falló:`, e && e.message));
+  }, MANTENIMIENTO_ESPERA_MS);
+}
+
 /* =======================
    🧠 Lógica de facturación
    ======================= */
 
 async function procesarSnapshot(snapshot) {
   const pedidoId = snapshot.key;
+
+  // ── MANTENIMIENTO ────────────────────────────────────────────────────────
+  // Mientras el local está en mantenimiento (el reset de "Finalizar pruebas"),
+  // este pedido NO se toca: no se reclama, no se emite y NO se marca como
+  // procesado. Queda donde está y se reintenta cuando el mantenimiento termina,
+  // así no se pierde ninguna factura por haber llegado en el momento justo.
+  if (await hayMantenimiento()) {
+    console.log(`⏸️ Pedido ${pedidoId} en espera: el local está en mantenimiento.`);
+    reintentarTrasMantenimiento(snapshot);
+    return;
+  }
 
   // Sigue en la cola? Si otra PC ya lo facturó y lo borró, no hay nada que hacer.
   const still = await snapshot.ref.once('value');

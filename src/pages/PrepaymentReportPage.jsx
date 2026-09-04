@@ -75,7 +75,7 @@ const PrepaymentReportPage = () => {
           title: 'Error de carga',
           description: error?.message?.includes('LOCAL_ID_REQUIRED')
             ? 'No hay un local configurado.'
-            : 'No se pudieron obtener las ventas de PedidosYa/Rappi/M.PAGO.',
+            : 'No se pudieron obtener las ventas de PedidosYa/Rappi/M.LIBRE.',
         });
       } finally {
         if (vigente && idConsulta === consultaRef.current) setLoading(false);
@@ -238,7 +238,7 @@ const PrepaymentReportPage = () => {
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-4 md:p-6 space-y-6">
       <Helmet>
         <title>Reportes de Prepago | DLV Sistemas</title>
-        <meta name="description" content="Ventas cobradas con PedidosYa, Rappi y M.PAGO, con su historial completo." />
+        <meta name="description" content="Ventas cobradas con PedidosYa, Rappi y M.LIBRE, con su historial completo." />
       </Helmet>
 
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -249,7 +249,7 @@ const PrepaymentReportPage = () => {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Reportes de Prepago</h1>
             <p className="text-sm text-muted-foreground">
-              Ventas cobradas con PedidosYa, Rappi y M.PAGO{localId ? ` · local ${localId}` : ''}
+              Ventas cobradas con PedidosYa, Rappi y M.LIBRE{localId ? ` · local ${localId}` : ''}
             </p>
           </div>
         </div>
@@ -305,7 +305,7 @@ const PrepaymentReportPage = () => {
             Rappi
           </TabsTrigger>
           <TabsTrigger value="MPAGO" className="data-[state=active]:bg-[#009EE3] data-[state=active]:text-white transition-colors duration-300">
-            M.PAGO
+            M.LIBRE
           </TabsTrigger>
         </TabsList>
 

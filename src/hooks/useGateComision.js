@@ -3,10 +3,33 @@ import { ref, get } from 'firebase/database';
 import { getCurrentDatabaseOrThrow, getCurrentLocalId } from '@/lib/firebase/core';
 import { fetchLimiteCorte, fetchAlarmaPagoVerificable } from '@/lib/api/settingsApi';
 import { rutaTotales, contabilidadActiva, leerAcumuladores } from '@/lib/api/comisionMovimiento';
+import { calcularSaldoLegadoCentavos } from '@/hooks/useCommissionTotal';
 import {
   ESTADO_SESION, evaluarInicioConLecturas, estadoDeSesion,
-  valorLeido, valorNoVerificable, liberaTrasPago,
+  valorLeido, valorNoVerificable,
 } from '@/lib/api/comisionCorte';
+
+/**
+ * La deuda según el ledger que funciona HOY: Σ COMISIONES/REGISTRO válidos −
+ * Σ COMISIONES/PAGOS aprobados, con piso en 0.
+ *
+ * Se usa mientras `migracionVersion` esté ausente o en 0, que es el estado de
+ * todos los locales. Antes el corte se auto-autorizaba en ese caso y por lo
+ * tanto NUNCA bloqueaba: quedaba atado a una migración que todavía no ocurrió.
+ *
+ * La cuenta NO se reimplementa acá: sale de `calcularSaldoLegadoCentavos`, la
+ * misma función que usa el aviso y el footer. Si viviera en dos lados, el aviso
+ * y el bloqueo podrían mostrar deudas distintas.
+ *
+ * No toca acumuladores, no migra nada y no usa la contabilidad nueva.
+ */
+const leerSaldoLegado = async (db, localId) => {
+  const [reg, pag] = await Promise.all([
+    get(ref(db, `${localId}/COMISIONES/REGISTRO`)),
+    get(ref(db, `${localId}/COMISIONES/PAGOS`)),
+  ]);
+  return calcularSaldoLegadoCentavos(reg.val(), pag.val());
+};
 
 /**
  * GATE DE INICIO POR LÍMITE DE CORTE.
@@ -51,14 +74,9 @@ export const useGateComision = () => {
       const db = getCurrentDatabaseOrThrow(localId);
       const snap = await get(ref(db, rutaTotales(localId)));
       const totales = snap.val();
-      // Dormido no hay deuda que controlar: el corte no aplica todavía.
-      if (!contabilidadActiva(totales)) {
-        yaEvaluadoRef.current = true;
-        setEvaluacion(null);
-        setEstado(ESTADO_SESION.AUTORIZADA);
-        return;
-      }
-      saldo = valorLeido(leerAcumuladores(totales).saldoPendienteCentavos);
+      saldo = contabilidadActiva(totales)
+        ? valorLeido(leerAcumuladores(totales).saldoPendienteCentavos)
+        : valorLeido(await leerSaldoLegado(db, localId));
     } catch (e) {
       saldo = valorNoVerificable(e?.message || 'no se pudo leer el saldo');
     }
@@ -70,36 +88,22 @@ export const useGateComision = () => {
     setEvaluacion(ev);
     setEstado(nuevo);
     // Solo se "fija" la decisión si la sesión quedó habilitada. Un bloqueo o un
-    // error tienen que poder reintentarse o resolverse con un pago.
+    // error NO se fijan: el próximo arranque los vuelve a evaluar.
     if (nuevo === ESTADO_SESION.AUTORIZADA) yaEvaluadoRef.current = true;
   }, []);
 
-  /**
-   * Tras un pago hecho desde la pantalla de bloqueo: UNA relectura del saldo.
-   * Si quedó por debajo del límite, la sesión se habilita y no se vuelve a
-   * evaluar el corte durante ese turno.
-   */
-  const reevaluarTrasPago = useCallback(async () => {
-    const localId = getCurrentLocalId();
-    if (!localId) return false;
-    try {
-      const db = getCurrentDatabaseOrThrow(localId);
-      const totales = (await get(ref(db, rutaTotales(localId)))).val();
-      const saldoDespues = leerAcumuladores(totales).saldoPendienteCentavos;
-      const limite = await fetchLimiteCorte();
-      if (!limite.ok) return false;   // no se pudo verificar: no se libera
-      if (liberaTrasPago({ saldoCentavosDespues: saldoDespues, limiteCortePesos: limite.pesos })) {
-        yaEvaluadoRef.current = true;      // desde acá, definitiva
-        setEstado(ESTADO_SESION.AUTORIZADA);
-        return true;
-      }
-      // Sigue por encima: se refresca el importe que se muestra.
-      setEvaluacion((prev) => (prev ? { ...prev, saldoCentavos: saldoDespues } : prev));
-      return false;
-    } catch {
-      return false;
-    }
-  }, []);
+  // NO HAY DESBLOQUEO DESDE LA APLICACIÓN.
+  //
+  // Acá vivía `reevaluarTrasPago`: tras un pago hecho en la propia pantalla de
+  // bloqueo releía el saldo y, si había bajado del límite, habilitaba la sesión
+  // en el acto. Junto con el formulario de pago de esa pantalla, le daba al
+  // local una forma de desbloquearse solo — el pago se escribía de verdad en
+  // COMISIONES/PAGOS y era indistinguible de un pago real.
+  //
+  // Se eliminó. La única salida del bloqueo es que la administración central
+  // registre el pago y el saldo del ledger baje del límite: en el próximo
+  // arranque `evaluar()` lo lee y autoriza. Sin polling, sin listener y sin
+  // reintento automático, a propósito.
 
-  return { estado, evaluacion, evaluar, reevaluarTrasPago, yaAutorizada: yaEvaluadoRef };
+  return { estado, evaluacion, evaluar, yaAutorizada: yaEvaluadoRef };
 };

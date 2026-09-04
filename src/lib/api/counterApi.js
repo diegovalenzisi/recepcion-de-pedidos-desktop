@@ -1,5 +1,6 @@
 
 import { getDatabase, ref, runTransaction, get, update, set } from 'firebase/database';
+import { asegurarOperable } from './mantenimientoApi';
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary, reversarVentaCuenta } from '@/lib/api/myAccountApi';
 import { cancelarComision } from '@/lib/api/comisionesApi';
@@ -94,6 +95,9 @@ const saveCounterSaleToFacturacion = async (db, localId, saleId, saleData, encol
  * forzarla desde la pantalla y no se le pregunta nada al cajero.
  */
 export const saveCounterSale = async (saleData, shift) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('la venta de mostrador');
   const t0 = Date.now();
   console.log('[VENTA MOSTRADOR] inicio confirmar venta');
 
@@ -330,6 +334,9 @@ export const saveCounterSale = async (saleData, shift) => {
 };
 
 export const cancelCounterSale = async (sale, shift) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('la anulacion de una venta de mostrador');
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
   const db = getDatabase();

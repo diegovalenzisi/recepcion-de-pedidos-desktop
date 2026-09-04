@@ -1,5 +1,6 @@
 
 import { getDatabase, ref, onValue, set, get, runTransaction, update, push, query, orderByKey, limitToLast } from 'firebase/database';
+import { asegurarOperable } from './mantenimientoApi';
 import { getFirebaseUrl, getCurrentDatabasePath, getLocationSpecificDatabasePath, checkLocalId, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { saveSaleToAccountSummary } from '@/lib/api/myAccountApi';
 import { cancelarComision } from '@/lib/api/comisionesApi';
@@ -273,6 +274,9 @@ const saveMostradorDeposit = async (db, localId, shift, orderId, deposit, client
 };
 
 export const saveOrder = async (orderData, shift) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('el alta de un pedido');
   checkLocalId();
   const LOCAL_ID = getCurrentDatabasePath();
   // beginFirebaseOperation() captura local+generación ACÁ, antes de getNextOrderId()

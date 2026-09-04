@@ -1,6 +1,7 @@
 import { getDatabase, ref, get, set, push, remove, runTransaction, onValue } from 'firebase/database';
 import { getFirebaseUrl, checkLocalId, getCurrentDatabasePath, getCurrentDatabaseOrThrow, beginFirebaseOperation } from '@/lib/firebase/core';
 import { format } from 'date-fns';
+import { asegurarOperable } from '@/lib/api/mantenimientoApi';
 
 const getShiftExpensesRef = (shiftDate, shiftId, path = '') => {
     const localId = getCurrentDatabasePath();
@@ -22,6 +23,9 @@ const getNextExpenseId = async (db, localId) => {
 };
 
 export const addExpenseToShift = async (shift, expenseData) => {
+    // No se inicia una operacion comercial durante el mantenimiento: un
+    // movimiento creado a mitad del reset no entra al respaldo.
+    await asegurarOperable('un movimiento de caja');
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
@@ -63,6 +67,9 @@ export const addExpenseToShift = async (shift, expenseData) => {
 };
 
 export const deleteExpenseFromShift = async (shift, expenseId) => {
+    // No se inicia una operacion comercial durante el mantenimiento: un
+    // movimiento creado a mitad del reset no entra al respaldo.
+    await asegurarOperable('la baja de un movimiento de caja');
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();

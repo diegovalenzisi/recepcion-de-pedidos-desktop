@@ -3329,6 +3329,22 @@ ipcMain.handle('app:relaunch', () => {
   app.exit(0);
 });
 
+// Cierre real de la aplicación pedido por el renderer.
+//
+// Lo usa el botón SALIR de la pantalla de bloqueo por comisión impaga: ahí
+// "salir" tiene que dejar la aplicación cerrada, no devolver al login con la
+// ventana abierta.
+//
+// Mismo patrón que `app:relaunch` de acá arriba: el renderer no cierra nada por
+// su cuenta (window.close() no termina el proceso), se lo pide al proceso
+// principal. `app.quit()` en vez de `app.exit()` para que corran los handlers de
+// `before-quit`, que detienen el backend de Mercado Pago y los procesos de
+// facturación.
+ipcMain.handle('app:quit', () => {
+  console.log('[APP] Cierre solicitado por el renderer.');
+  app.quit();
+});
+
 // Flags del arranque (para que el renderer sepa si viene de un reinicio post-instalación).
 ipcMain.handle('app:boot-flags', () => ({
   depsBootstrapped: process.argv.includes('--deps-bootstrapped'),

@@ -182,14 +182,25 @@ export const validarConfiguracion = ({ alarmaPagoPesos, limiteCortePesos }) => {
   return { ok: true, motivo: '' };
 };
 
-/** Texto de la pantalla de bloqueo. */
+/**
+ * Texto de la pantalla de bloqueo.
+ *
+ * `importe` es el SALDO TOTAL ADEUDADO — el mismo `saldoCentavos` con el que se
+ * decidió el bloqueo, y NO `faltaPagarCentavos` (el mínimo para quedar por
+ * debajo del límite). Al local se le pide la deuda completa, no lo justo para
+ * zafar del corte.
+ *
+ * Ya no se nombra el límite ni se describe ninguna acción: la pantalla no
+ * ofrece forma de continuar. El desbloqueo ocurre cuando la administración
+ * registra el pago real y el saldo baja, no acá.
+ */
 export const textoDeBloqueo = (evaluacion) => {
   const p = (c) => `$${aPesos(c).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
   return {
-    titulo: 'LÍMITE DE COMISIÓN ALCANZADO',
-    pendiente: `Comisión pendiente: ${p(evaluacion.saldoCentavos)}`,
-    limite: `Límite permitido: ${p(evaluacion.limiteCentavos)}`,
-    detalle: 'Para comenzar a utilizar el sistema debe realizar un pago de comisión '
-      + 'que reduzca la deuda por debajo del límite establecido.',
+    titulo: 'SISTEMA BLOQUEADO POR FALTA DE PAGO',
+    pedido: 'Por favor, realice el pago de:',
+    importe: p(evaluacion.saldoCentavos),
+    cierre: 'para seguir utilizando el servicio.',
+    gracias: 'Muchas gracias.',
   };
 };

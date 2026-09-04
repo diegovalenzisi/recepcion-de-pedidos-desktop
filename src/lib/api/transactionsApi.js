@@ -1,4 +1,5 @@
 import { getDatabase, ref, get, runTransaction, update, push, set } from 'firebase/database';
+import { asegurarOperable } from './mantenimientoApi';
 import { getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
 import { getOperationalDate, formatDateForFirebase } from '@/lib/utils';
 import { shouldAutoToggleDelivery, handleStockDepletion, handleStockReplenishment, validateInheritedStockStatus, reconciliarMateriaPrima } from './stockDeliveryAutomation';
@@ -448,6 +449,9 @@ const processStockUpdate = async (items, source = 'Venta Delivery', referenceId 
 };
 
 export const processStockForDeliveredOrder = async (order) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('el descuento de stock de un pedido');
     if (!order || !order.items || order.items.length === 0) return { success: true, message: 'No items to process' };
     const referenceId = order.id ? `DELIVERY_${order.id}` : null;
 
@@ -491,6 +495,9 @@ export const processStockForDeliveredOrder = async (order) => {
  *   estado: 'reversed' | 'already-reversed' | 'original-not-applied' | 'reversal-partial'
  */
 export const reverseStockForCounterSale = async (sale) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('la reversion de stock de mostrador');
     if (!sale || !sale.items || sale.items.length === 0) {
         return { success: true, estado: 'reversed', resultados: [], motivo: 'sin-items' };
     }
@@ -582,6 +589,9 @@ export const reverseStockForCounterSale = async (sale) => {
 };
 
 export const processStockForCounterSale = async (sale) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('el descuento de stock de mostrador');
     if (!sale || !sale.items || sale.items.length === 0) return { success: true };
     const referenceId = sale.id ? `MOSTRADOR_${sale.id}` : null;
     if (!referenceId) {

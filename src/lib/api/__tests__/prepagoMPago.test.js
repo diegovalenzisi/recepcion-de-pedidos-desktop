@@ -224,7 +224,10 @@ check('el nombre actual y el histórico caen en el MISMO ledger', () => {
 
 check('la pestaña del historial usa el nombre actual', () => {
   const modal = readFileSync(new URL('../../../components/prepayment/PrepaymentHistoryModal.jsx', import.meta.url), 'utf8');
-  assert.match(modal, /TabsTrigger value="PREPAGO MPAGO">M\.PAGO<\/TabsTrigger>/,
+  // El VALUE es el nombre de cuenta guardado ("PREPAGO MPAGO") y NO cambia: es
+  // la clave con la que se lee el nodo. Lo que cambió es el RÓTULO visible, que
+  // ahora dice M.LIBRE.
+  assert.match(modal, /TabsTrigger value="PREPAGO MPAGO">M\.LIBRE<\/TabsTrigger>/,
     'la pestaña dejó de usar el nombre de cuenta actual, o cambió la etiqueta visible');
 });
 
@@ -235,7 +238,7 @@ check('las pestañas de PEDIDOSYA y RAPPI apuntan al mismo nodo de siempre', () 
 
 check('M.PAGO es una plataforma más del reporte, con su etiqueta', () => {
   assert.deepStrictEqual(PLATAFORMAS, ['PEDIDOSYA', 'RAPPI', 'MPAGO']);
-  assert.strictEqual(ETIQUETA_PLATAFORMA.MPAGO, 'M.PAGO');
+  assert.strictEqual(ETIQUETA_PLATAFORMA.MPAGO, 'M.LIBRE');
 });
 
 check('cada medio se contabiliza SOLO en su plataforma', () => {
@@ -292,7 +295,7 @@ check('cada plataforma tiene su propio conjunto de filas filtradas', () => {
 });
 
 check('el subtítulo nombra a las tres', () => {
-  assert.match(fuentePagina, /Ventas cobradas con PedidosYa, Rappi y M\.PAGO/);
+  assert.match(fuentePagina, /Ventas cobradas con PedidosYa, Rappi y M\.LIBRE/);
 });
 
 check('el ledger se lee por PLATAFORMAS, así que MPAGO llega solo', () => {

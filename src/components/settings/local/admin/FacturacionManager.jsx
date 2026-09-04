@@ -11,7 +11,7 @@ import {
   Stethoscope, XCircle, ExternalLink,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { getCurrentLocalId } from '@/lib/firebase/core';
+import { getCurrentLocalId, getLocationSpecificDatabaseURL } from '@/lib/firebase/core';
 import { uploadAfipFile } from '@/lib/firebase/storage';
 import { saveAfipConfigToFirebase, fetchAfipConfigFromFirebase } from '@/lib/api/afipConfigApi';
 import { useFacturacionOwnership } from '@/hooks/useFacturacionOwnership';
@@ -54,15 +54,69 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CUENTA = (id) => ({ id, ...DEFAULT_FIELDS('Monotributista') });
 
+/**
+ * BASE DE DATOS DEL LOCAL — se deriva, no se escribe a mano.
+ *
+ * `FIREBASE_DB` es la URL de la RTDB del local que está abierto. No es una
+ * decisión: siempre es la misma base a la que ya está conectada la aplicación.
+ * Pedirla como texto libre hizo que la cuenta RI de un local se creara con el
+ * campo VACÍO, y el motor de facturación murió al arrancar con
+ * "Database URL must be a valid, non-empty URL string" (admin.database(), sin
+ * llegar nunca a ARCA).
+ *
+ * RETROCOMPATIBLE A PROPÓSITO: solo actúa cuando el campo está vacío. Una cuenta
+ * que ya tiene la URL cargada conserva EXACTAMENTE la suya, incluso si apunta a
+ * otra base. No se corrige ni se pisa ninguna configuración existente.
+ */
+function resolverFirebaseDb(fields) {
+  const cargado = String(fields.firebaseDb || '').trim();
+  if (cargado) return cargado;
+  try {
+    const localId = getCurrentLocalId();
+    return localId ? (getLocationSpecificDatabaseURL(localId) || '') : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * RUTA DONDE SE ARCHIVA LA FACTURA. Convención del sistema: `{localId}/VENTAS`.
+ * Igual que arriba, solo se completa si está vacía.
+ */
+function resolverFirebaseHistorial(fields) {
+  const cargado = String(fields.firebaseHistorial || '').trim();
+  if (cargado) return cargado;
+  try {
+    const localId = getCurrentLocalId();
+    return localId ? `${localId}/VENTAS` : '';
+  } catch {
+    return '';
+  }
+}
+
 function buildEnvData(fields, tipo, machineId) {
+  // LA COLA NO SE DERIVA: SE EXIGE.
+  //
+  // `FIREBASE_PATH` dice QUÉ cola atiende esta cuenta ({localId}/FACTURACION_N),
+  // y cada cola es un contribuyente distinto. Adivinarla sería asignarle ventas
+  // de otro CUIT. Pero escribir un .env sin ella produce un motor que arranca y
+  // muere sin decir por qué, así que se corta acá, con un mensaje que se ve.
+  if (!String(fields.firebasePath || '').trim()) {
+    throw new Error(
+      'Falta la "Ruta de la cola (Firebase)" de esta cuenta fiscal. Sin ella el '
+      + 'motor de facturación no sabe qué cola atender y no puede iniciarse. '
+      + 'Cargala con la forma {localId}/FACTURACION_N y volvé a guardar.',
+    );
+  }
+
   return {
     CUIT:                          fields.cuit                || '',
     PTO_VTA:                       fields.ptoVta              || '',
     CERT:                          './cert/certificado.crt',
     KEY:                           './cert/clave.key',
-    FIREBASE_DB:                   fields.firebaseDb          || '',
+    FIREBASE_DB:                   resolverFirebaseDb(fields),
     FIREBASE_PATH:                 fields.firebasePath        || '',
-    FIREBASE_HISTORIAL:            fields.firebaseHistorial   || '',
+    FIREBASE_HISTORIAL:            resolverFirebaseHistorial(fields),
     GOOGLE_APPLICATION_CREDENTIALS: './serviceAccount.json',
     EMISOR_RAZON_SOCIAL:           fields.razonSocial         || '',
     EMISOR_FANTASIA:               fields.fantasia            || '',

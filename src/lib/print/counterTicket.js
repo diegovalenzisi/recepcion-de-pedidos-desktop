@@ -5,6 +5,7 @@ import { reloadPrintSettings, cachedPrintSettings } from './settings';
 import { printElectron } from './electronPrint';
 import { getBusinessNameUppercase } from '@/lib/businessNameUtils';
 import { buildCounterTicketBody, COUNTER_TICKET_DETAIL_CSS } from './counterTicketHtml';
+import { medidasDePapel, cssExtraAngosto } from './paper';
 
 export const printCounterTicket = async (sale) => {
   await reloadPrintSettings();
@@ -16,7 +17,10 @@ export const printCounterTicket = async (sale) => {
   const { itemsHtml, totalHtml } = buildCounterTicketBody(sale);
 
   // Generate QR Code SVG String
-  const qrElement = React.createElement(QRCodeSVG, { value: String(sale.id), size: 130 });
+  // Medidas del rollo. Con 80 mm (el default) queda todo igual que antes.
+  const papel = medidasDePapel(settings.printPaperWidth);
+
+  const qrElement = React.createElement(QRCodeSVG, { value: String(sale.id), size: papel.anchoQrPx });
   const qrSvg = renderToString(qrElement);
   
   // Get location-specific business name
@@ -27,15 +31,15 @@ export const printCounterTicket = async (sale) => {
       <head>
         <title>Comanda Mostrador #${sale.id}</title>
         <style>
-          @media print { @page { size: 80mm auto; margin: 0; } }
+          @media print { @page { size: ${papel.anchoMm}mm auto; margin: 0; } }
           body {
             font-family: ${settings.printFontFamily}, sans-serif;
-            width: 80mm;
+            width: ${papel.anchoMm}mm;
             box-sizing: border-box;
-            font-size: ${settings.printFontSize}px;
+            font-size: ${Math.round(settings.printFontSize * papel.escala)}px;
             margin: 0;
             margin-left: ${settings.printHorizontalOffset || 0}mm;
-            padding: 3mm;
+            padding: ${papel.paddingMm}mm;
             color: black !important;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
@@ -66,7 +70,7 @@ export const printCounterTicket = async (sale) => {
           .qr-label {
             font-size: 1.2em;
             margin-top: 5px;
-          }
+          }${cssExtraAngosto(settings.printPaperWidth)}
         </style>
       </head>
       <body>

@@ -1,4 +1,5 @@
 import { getFirebaseUrl, getCurrentDatabasePath, checkLocalId, beginFirebaseOperation } from '@/lib/firebase/core';
+import { asegurarOperable } from '@/lib/api/mantenimientoApi';
 import { getDatabase, ref, runTransaction } from 'firebase/database';
 
 const getNextExpenseId = async (db, localId) => {
@@ -14,6 +15,9 @@ const getNextExpenseId = async (db, localId) => {
 };
 
 export const addExpenseToShift = async (shift, expenseData) => {
+    // No se inicia una operacion comercial durante el mantenimiento: una venta
+    // creada a mitad del reset no entra al respaldo y descuadra el stock.
+    await asegurarOperable('un movimiento de caja');
     checkLocalId();
     const API_URL = getFirebaseUrl();
     const LOCAL_ID = getCurrentDatabasePath();
