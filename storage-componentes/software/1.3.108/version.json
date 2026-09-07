@@ -1,9 +1,7 @@
 {
-  "latest": "1.3.108",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.108%2FRecepcion-de-Pedidos-Setup-1.3.108.exe?alt=media",
-  "sha256": "1e87256ca928fbfdd7c9fbab4f9747143d57427917d4fbd38ff175512a403e25",
-  "size": 125275438,
-  "mandatory": false,
+  "version": "1.3.108",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.108.exe",
   "releaseDate": "2026-09-07",
+  "sha256": "1e87256ca928fbfdd7c9fbab4f9747143d57427917d4fbd38ff175512a403e25",
   "notes": "Conexion de Mercado Pago por OAuth desde Configuracion (Aviso de cobros por voz): cada comercio conecta hasta 5 cuentas propias de Mercado Pago, cada una con su alias editable, sin pegar tokens a mano; las credenciales nunca se guardan en Firebase ni en la PC. El aviso por voz menciona la cuenta que recibio el pago cuando el local tiene mas de una conectada. Ademas, el aviso de limite de comision impaga ahora muestra tambien el limite de corte configurado, junto con el importe pendiente."
 }

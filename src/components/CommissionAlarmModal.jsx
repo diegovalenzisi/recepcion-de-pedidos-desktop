@@ -13,7 +13,7 @@ import { AlertTriangle } from 'lucide-react';
 const formatCurrency = (v) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(v || 0);
 
-const CommissionAlarmModal = ({ isOpen, alarmAmount, onAccept }) => (
+const CommissionAlarmModal = ({ isOpen, alarmAmount, cutoffLimit, onAccept }) => (
   <Dialog open={isOpen} onOpenChange={() => {}}>
     <DialogContent
       onPointerDownOutside={(e) => e.preventDefault()}
@@ -29,7 +29,9 @@ const CommissionAlarmModal = ({ isOpen, alarmAmount, onAccept }) => (
       <p className="text-sm text-gray-700 py-4 leading-relaxed">
         Por favor realice el pago de{' '}
         <span className="font-bold text-orange-700">{formatCurrency(alarmAmount)}</span>{' '}
-        antes de que se bloquee el sistema.
+        antes de que el sistema llegue a{' '}
+        <span className="font-bold text-orange-700">{formatCurrency(cutoffLimit)}</span>{' '}
+        y se bloquee, Gracias!!
       </p>
       <DialogFooter>
         <Button onClick={onAccept} className="w-full bg-orange-600 hover:bg-orange-700">

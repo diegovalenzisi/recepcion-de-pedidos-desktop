@@ -9,6 +9,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { fetchAccounts } from '@/lib/api/accountsApi';
 import { fetchEmployees, fetchCategories } from '@/lib/api/hrApi';
+import { fetchData } from '@/lib/api/firebaseApi';
+import { resolverMediosDePago } from '@/lib/api/mediosDePagoMostrador';
 import PaymentMethodSlider from '@/components/attention/PaymentMethodSlider';
 import ResponsibleEmployeeModal from './ResponsibleEmployeeModal';
 
@@ -17,7 +19,13 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
   const [amount, setAmount] = useState('');
   const [paysWith, setPaysWith] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('Efectivo');
-  const [availablePaymentMethods, setAvailablePaymentMethods] = useState(['Efectivo']);
+  // Ingredientes crudos para resolverMediosDePago(): el departamento real de
+  // cada artículo del carrito y los medios normales del local. La lista FINAL
+  // (`availablePaymentMethods` más abajo) se deriva de esto + el estado del
+  // pago (payments/remainingBalance) — nunca se guarda como estado propio,
+  // para que un pago parcial la recalcule sola.
+  const [itemDepartments, setItemDepartments] = useState([]);
+  const [mediosDelLocal, setMediosDelLocal] = useState(['Efectivo']);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
   
@@ -34,23 +42,54 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
   
   const loadPaymentMethods = useCallback(async () => {
     try {
-        const [accountsData, emp, cat] = await Promise.all([
+        const [accountsData, emp, cat, departamentos] = await Promise.all([
           fetchAccounts(),
           fetchEmployees(),
-          fetchCategories()
+          fetchCategories(),
+          fetchData('departamentos'),
         ]);
         const electronicPaymentMethods = (accountsData || []).map(acc => acc.nombre).filter(Boolean);
-        const allMethods = ['Efectivo', ...new Set(electronicPaymentMethods)];
-        setAvailablePaymentMethods(allMethods);
-        if (allMethods.length > 0 && !allMethods.includes(selectedPaymentMethod)) {
-            setSelectedPaymentMethod(allMethods[0]);
-        }
+
+        // MISMA función que NewOrderModal.jsx/ConfirmOrderModal (Delivery) —
+        // ver mediosDePagoMostrador.js. `orderItems` ya trae el id real del
+        // departamento de cada artículo (`item.departamento`, congelado desde
+        // el catálogo al agregarlo al carrito); acá se resuelve contra el
+        // DEPARTAMENTOS actual del local para tener nombre + flags reales.
+        // Sólo se guardan los INGREDIENTES: la lista final se deriva más abajo
+        // (useMemo `availablePaymentMethods`), que también mira el pago en curso.
+        const resueltos = (orderItems || [])
+          .map((item) => departamentos.find((d) => d.id === item?.departamento))
+          .filter(Boolean);
+        setItemDepartments(resueltos);
+        setMediosDelLocal(['Efectivo', ...new Set(electronicPaymentMethods)]);
         setEmployees(emp);
         setCategories(cat);
     } catch(error) {
         toast({ variant: 'destructive', title: 'Error', description: 'No se pudieron cargar los datos necesarios.' });
     }
-  }, [toast, selectedPaymentMethod]);
+  }, [toast, orderItems]);
+
+  // ÚNICA fuente de verdad de los medios a ofrecer — misma función que
+  // NewOrderModal.jsx. Para una venta de PLATAFORMA (PEDIDOSYA/RAPPI/M.LIBRE)
+  // el resultado NUNCA cambia por un pago parcial (2 opciones fijas). Para una
+  // venta COMÚN: sin pagos respeta la restricción del departamento (ej.
+  // efectivo-only); con un pago en Efectivo ya registrado y saldo pendiente,
+  // habilita el resto de las cuentas normales del local para completar la
+  // diferencia — nunca ningún PREPAGO de plataforma (filtrarPrepagosDePlataforma
+  // dentro de resolverMediosDePago se encarga, no hay comparación paralela).
+  const availablePaymentMethods = useMemo(
+    () => resolverMediosDePago(itemDepartments, mediosDelLocal, { payments, remainingBalance }).medios,
+    [itemDepartments, mediosDelLocal, payments, remainingBalance]
+  );
+
+  // Si el medio seleccionado deja de estar disponible (o todavía no hay
+  // ninguno elegido y ya sabemos cuáles corresponden), cae al primero de la
+  // lista — mismo criterio que tenía el fetch antes de este cambio.
+  useEffect(() => {
+    if (availablePaymentMethods.length > 0 && !availablePaymentMethods.includes(selectedPaymentMethod)) {
+      setSelectedPaymentMethod(availablePaymentMethods[0]);
+    }
+  }, [availablePaymentMethods, selectedPaymentMethod]);
 
   useEffect(() => {
     if (isOpen) {

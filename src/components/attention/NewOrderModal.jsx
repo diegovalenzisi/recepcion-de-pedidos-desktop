@@ -31,6 +31,8 @@ import { getLocalId } from '@/lib/firebase/core';
 import { useStockVerification } from '@/hooks/useStockVerification';
 import { validarStockDeCarrito, MENSAJE_STOCK_NO_VERIFICABLE } from '@/lib/api/validacionStockVentaApi';
 import { usePromotionStockAutomation } from '@/hooks/usePromotionStockAutomation';
+import { filtrarDepartamentosVisiblesEnMostrador } from '@/lib/api/departamentosCanonicos';
+import { resolverMediosDePago } from '@/lib/api/mediosDePagoMostrador';
 
 function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false, orderToEdit = null, context = 'delivery', isCounterMode = false, currentShift, settings }) {
   const [departments, setDepartments] = useState([]);
@@ -136,11 +138,17 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         fetchAccounts()
       ]);
 
-      const activeDepartments = fetchedDepartments.filter(d => {
-        if (context === 'delivery') return d.activoDelivery;
-        if (context === 'counter') return d.activoMostrador;
-        return true;
-      }).sort((a,b) => (a.ordenWeb || 999) - (b.ordenWeb || 999));
+      // En Mostrador, los tres departamentos canónicos (PEDIDOSYA/RAPPI/M.LIBRE)
+      // sólo se listan si tienen algún artículo asignado — existen siempre en
+      // Firebase, esto es puro filtro de visualización (ver departamentosCanonicos.js).
+      // Al resto de los departamentos no los afecta.
+      const activeDepartments = (
+        context === 'delivery' ? fetchedDepartments.filter(d => d.activoDelivery)
+          : context === 'counter' ? filtrarDepartamentosVisiblesEnMostrador(
+              fetchedDepartments.filter(d => d.activoMostrador), fetchedArticles,
+            )
+            : fetchedDepartments
+      ).sort((a,b) => (a.ordenWeb || 999) - (b.ordenWeb || 999));
 
       setDepartments(activeDepartments);
       setAllArticles(fetchedArticles);
@@ -356,31 +364,30 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
     [orderItems]
   );
 
-  const allowedPaymentMethods = useMemo(() => {
-    if (!orderItems.length || !departments.length || !paymentMethods.length) {
-        return paymentMethods;
-    }
-
-    const itemDepartments = orderItems.map(item => {
+  // Departamento real de cada línea del carrito (resuelto una sola vez; lo
+  // usan tanto la plataforma del carrito como el resto de las reglas de
+  // medios de pago de abajo).
+  const itemDepartments = useMemo(() => {
+    if (!orderItems.length || !departments.length) return [];
+    return orderItems.map(item => {
         const article = allArticles.find(a => a.id === item.id);
         return departments.find(d => d.id === article?.departamento);
     }).filter(Boolean);
+  }, [orderItems, departments, allArticles]);
 
-    if (!itemDepartments.length) return paymentMethods;
+  // ÚNICA fuente de verdad de "qué medios de pago corresponden a este
+  // carrito" — la misma función que usa CounterPaymentModal.jsx (Mostrador).
+  // Decide, en un solo lugar: plataforma (PEDIDOSYA/RAPPI/M.LIBRE) → Efectivo
+  // + su propio prepago; común → medios normales del local restringidos a lo
+  // que sus departamentos reales permiten (permiteVentaEfectivo/
+  // permiteVentaElectronica), siempre sin ningún PREPAGO de plataforma;
+  // plataformas mezcladas en el carrito → bloquear (sin medios).
+  const carritoPlataforma = useMemo(
+    () => resolverMediosDePago(itemDepartments, paymentMethods),
+    [itemDepartments, paymentMethods]
+  );
 
-    const allAcceptCash = itemDepartments.every(d => d.aceptaEfectivo);
-    const allAcceptElectronic = itemDepartments.every(d => d.aceptaPagoElectronico);
-
-    if (allAcceptCash && !allAcceptElectronic) {
-        return ['Efectivo'];
-    }
-    
-    if (!allAcceptCash && allAcceptElectronic) {
-        return paymentMethods.filter(pm => pm !== 'Efectivo');
-    }
-
-    return paymentMethods;
-  }, [orderItems, departments, allArticles, paymentMethods]);
+  const allowedPaymentMethods = paymentMethods.length ? carritoPlataforma.medios : paymentMethods;
 
   /**
    * Revalida el stock del carrito contra un snapshot FRESCO, con la cantidad
@@ -426,6 +433,16 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         title: "Pedido vacío",
         description: "Debes añadir al menos un artículo al pedido.",
       });
+      return;
+    }
+
+    // Carrito con artículos de DOS plataformas distintas (PEDIDOSYA/RAPPI/
+    // M.LIBRE) a la vez: no puede pasar por diseño comercial (una venta nunca
+    // mezcla plataformas), pero si un error de datos lo produce, se bloquea
+    // la confirmación en vez de inventar una combinación de prepagos que no
+    // existe.
+    if (carritoPlataforma.bloquear) {
+      toast({ variant: "destructive", title: carritoPlataforma.titulo, description: carritoPlataforma.mensaje });
       return;
     }
 

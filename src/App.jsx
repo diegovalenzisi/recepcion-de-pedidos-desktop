@@ -49,6 +49,7 @@ import CommissionBlockScreen from '@/components/CommissionBlockScreen.jsx';
 import { useImpresionFiscalPendiente } from '@/hooks/useImpresionFiscalPendiente.js';
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import { registrarDispositivo } from '@/lib/api/deviceIdentity.js';
+import { asegurarDepartamentosCanonicos } from '@/lib/api/departamentosCanonicosApi.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
 import DepsBootstrapScreen from '@/components/DepsBootstrapScreen.jsx';
 
@@ -545,6 +546,16 @@ function AppContent() {
         }
         markFirebaseReady();
 
+        // Garantiza los tres departamentos canónicos (PEDIDOSYA/RAPPI/M.LIBRE) de
+        // ESTE local: adapta cualquier variante ya escrita (reusa su id, nunca
+        // duplica) o los crea si faltan. En segundo plano y best-effort — no
+        // bloquea el arranque ni rompe nada si falla (se reintenta solo, la
+        // próxima vez que la app abra este local). Sin hardcodear ningún
+        // localId: cubre igual a cualquier local nuevo que se dé de alta.
+        asegurarDepartamentosCanonicos().catch((e) =>
+          console.warn('[App] No se pudo asegurar los departamentos canónicos:', e?.message || e)
+        );
+
         const fetchedSettings = await fetchSettings();
         if (fetchedSettings) {
           applySettings(fetchedSettings);
@@ -1021,6 +1032,7 @@ function AppContent() {
       <CommissionAlarmModal
         isOpen={showAlarmModal}
         alarmAmount={commissionPending}
+        cutoffLimit={settings?.limiteCorte}
         onAccept={dismissAlarm}
       />
       <Toaster />

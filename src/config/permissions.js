@@ -81,7 +81,10 @@ export const permissionsList = [
         id: 'configuracion',
         group: 'Configuración',
         navPath: '/configuracion',
-        items: [{ id: 'configuracion', label: 'Acceso General' }]
+        items: [
+            { id: 'configuracion', label: 'Acceso General' },
+            { id: 'configuracion_mercadopago', label: 'Mercado Pago (conectar / desconectar)' },
+        ]
     },
     {
         id: 'mi_cuenta',

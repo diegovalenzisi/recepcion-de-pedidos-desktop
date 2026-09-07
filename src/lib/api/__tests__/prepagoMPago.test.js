@@ -21,6 +21,7 @@ import {
   COMPROBANTE_FACTURA,
 } from '../facturaORemito.js';
 import { PLATAFORMAS, ETIQUETA_PLATAFORMA, normalizarPlataforma, esMedioDeApp } from '../ventasApps.js';
+import { CLAVES_CANONICAS } from '../departamentosCanonicos.js';
 
 let passed = 0;
 function check(name, fn) {
@@ -269,28 +270,31 @@ check('compatibilidad: los registros históricos se siguen leyendo igual', () =>
 // constante no alcanzaba: hay que atar la pantalla a la lista.
 // ---------------------------------------------------------------------------
 console.log('\n6. La pantalla de Reportes Prepago muestra las tres:');
+console.log('   (desde que clasifica por DEPARTAMENTO del artículo, no por medio de pago:');
+console.log('   las claves de pestaña son CLAVES_CANONICAS de departamentosCanonicos.js,');
+console.log('   ya no PLATAFORMAS de ventasApps.js — ver ventasPorDepartamento.js)');
 
 const fuentePagina = readFileSync(
   new URL('../../../pages/PrepaymentReportPage.jsx', import.meta.url), 'utf8',
 );
 
-check('hay una pestaña por cada plataforma de PLATAFORMAS', () => {
-  for (const p of PLATAFORMAS) {
-    assert.match(fuentePagina, new RegExp(`TabsTrigger value="${p}"`), `falta la pestaña de ${p}`);
-    assert.match(fuentePagina, new RegExp(`renderTab\\('${p}'`), `falta el contenido de ${p}`);
+check('hay una pestaña por cada clave canónica de departamento', () => {
+  for (const c of CLAVES_CANONICAS) {
+    assert.match(fuentePagina, new RegExp(`TabsTrigger value="${c}"`), `falta la pestaña de ${c}`);
+    assert.match(fuentePagina, new RegExp(`renderTab\\('${c}'`), `falta el contenido de ${c}`);
   }
 });
 
-check('la grilla de pestañas tiene tantas columnas como plataformas', () => {
+check('la grilla de pestañas tiene tantas columnas como claves canónicas', () => {
   const m = fuentePagina.match(/TabsList className="grid w-full max-w-\[400px\] grid-cols-(\d)/);
   assert.ok(m, 'no se encontró la grilla de pestañas');
-  assert.strictEqual(Number(m[1]), PLATAFORMAS.length, 'la grilla quedó desalineada con PLATAFORMAS');
+  assert.strictEqual(Number(m[1]), CLAVES_CANONICAS.length, 'la grilla quedó desalineada con CLAVES_CANONICAS');
 });
 
-check('cada plataforma tiene su propio conjunto de filas filtradas', () => {
+check('cada clave tiene su propio conjunto de filas filtradas por departamento', () => {
   // Si faltara, la pestaña mostraría los datos de otra.
-  for (const p of PLATAFORMAS) {
-    assert.match(fuentePagina, new RegExp(`filtrarPorPlataforma\\(filasDelRango, '${p}'\\)`), `${p} no filtra sus filas`);
+  for (const c of CLAVES_CANONICAS) {
+    assert.match(fuentePagina, new RegExp(`filtrarPorClave\\(filasDelRango, '${c}'\\)`), `${c} no filtra sus filas`);
   }
 });
 
@@ -298,7 +302,11 @@ check('el subtítulo nombra a las tres', () => {
   assert.match(fuentePagina, /Ventas cobradas con PedidosYa, Rappi y M\.LIBRE/);
 });
 
-check('el ledger se lee por PLATAFORMAS, así que MPAGO llega solo', () => {
+check('la pantalla ya NO clasifica por medio de pago/plataforma: no importa filtrarPorPlataforma', () => {
+  assert.doesNotMatch(fuentePagina, /filtrarPorPlataforma/, 'debería clasificar por departamento, no por medio de pago');
+});
+
+check('el ledger de PREPAGO_* (comisiones/facturación) se sigue leyendo por PLATAFORMAS, sin cambios', () => {
   const flujo = readFileSync(new URL('../ventasAppsFlujo.js', import.meta.url), 'utf8');
   assert.match(flujo, /for \(const plataforma of PLATAFORMAS\)/, 'el ledger dejó de recorrer PLATAFORMAS');
   assert.match(flujo, /PREPAGO_\$\{plataforma\}/, 'la ruta del ledger cambió');

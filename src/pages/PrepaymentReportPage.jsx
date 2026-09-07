@@ -9,14 +9,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { Loader2, Download, CreditCard, Calendar as CalendarIcon, Filter, History } from 'lucide-react';
-import { fetchVentasDeApps } from '@/lib/api/ventasAppsApi';
+import { fetchVentasPorDepartamento } from '@/lib/api/ventasPorDepartamentoApi';
 import {
-  ETIQUETA_PLATAFORMA,
-  calcularTotales,
+  ETIQUETA_CLAVE,
+  calcularTotalesFormaPago,
   filasParaExcel,
-  filtrarPorPlataforma,
-  filtrarPorRango,
-} from '@/lib/api/ventasApps';
+  filtrarPorClave,
+} from '@/lib/api/ventasPorDepartamento';
+import { filtrarPorRango } from '@/lib/api/ventasApps';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import * as XLSX from 'xlsx';
 
@@ -56,7 +56,7 @@ const PrepaymentReportPage = () => {
     const cargar = async () => {
       setLoading(true);
       try {
-        const { filas: datos, diagnostico: diag } = await fetchVentasDeApps({
+        const { filas: datos, diagnostico: diag } = await fetchVentasPorDepartamento({
           desde: rango.desde,
           hasta: rango.hasta,
           historialCompleto: rango.completo,
@@ -67,7 +67,7 @@ const PrepaymentReportPage = () => {
       } catch (error) {
         if (!vigente || idConsulta !== consultaRef.current) return;
         if (error?.code === 'LOCAL_CHANGED') return; // cambió el local: la carga del nuevo ya viene en camino
-        console.error('[PrepaymentReport] Error leyendo ventas por app:', error);
+        console.error('[PrepaymentReport] Error leyendo ventas por departamento:', error);
         setFilas([]);
         setDiagnostico(null);
         toast({
@@ -116,15 +116,13 @@ const PrepaymentReportPage = () => {
     [filas, rango]
   );
 
-  const filasPY = useMemo(() => filtrarPorPlataforma(filasDelRango, 'PEDIDOSYA'), [filasDelRango]);
-  const filasRP = useMemo(() => filtrarPorPlataforma(filasDelRango, 'RAPPI'), [filasDelRango]);
-  // M.PAGO usa exactamente el mismo filtro: `normalizarPlataforma` ya resuelve
-  // "PREPAGO M.PAGO" a MPAGO, y el ledger vive en {localId}/PREPAGO_MPAGO.
-  const filasMP = useMemo(() => filtrarPorPlataforma(filasDelRango, 'MPAGO'), [filasDelRango]);
+  const filasPY = useMemo(() => filtrarPorClave(filasDelRango, 'PEDIDOSYA'), [filasDelRango]);
+  const filasRP = useMemo(() => filtrarPorClave(filasDelRango, 'RAPPI'), [filasDelRango]);
+  const filasMP = useMemo(() => filtrarPorClave(filasDelRango, 'MLIBRE'), [filasDelRango]);
 
-  const statsPY = useMemo(() => calcularTotales(filasPY), [filasPY]);
-  const statsRP = useMemo(() => calcularTotales(filasRP), [filasRP]);
-  const statsMP = useMemo(() => calcularTotales(filasMP), [filasMP]);
+  const statsPY = useMemo(() => calcularTotalesFormaPago(filasPY), [filasPY]);
+  const statsRP = useMemo(() => calcularTotalesFormaPago(filasRP), [filasRP]);
+  const statsMP = useMemo(() => calcularTotalesFormaPago(filasMP), [filasMP]);
 
   const filasVisibles = activeTab === 'PEDIDOSYA' ? filasPY
     : activeTab === 'RAPPI' ? filasRP
@@ -155,25 +153,44 @@ const PrepaymentReportPage = () => {
   const formatCurrency = (amount) =>
     new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(amount || 0);
 
-  const renderStatsCards = (stats, brandColor) => (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      {[
-        ['Hoy', formatCurrency(stats.hoy)],
-        ['Esta Semana', formatCurrency(stats.semana)],
-        ['Este Mes', formatCurrency(stats.mes)],
-        ['Operaciones', String(stats.operaciones)],
-      ].map(([titulo, valor]) => (
-        <Card key={titulo} className="shadow-sm border-l-4" style={{ borderLeftColor: brandColor }}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{titulo}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold">{valor}</p>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
+  const renderStatsCards = (stats, brandColor) => {
+    // Los importes de estas tarjetas corresponden SIEMPRE al rango de fechas
+    // seleccionado arriba (no a hoy/semana/mes) — son las mismas filas que se
+    // listan debajo, así que TOTAL = EFECTIVO + PREPAGO + OTROS siempre
+    // reconcilia con la cantidad de OPERACIONES listadas.
+    const tarjetas = [
+      ['Efectivo', formatCurrency(stats.efectivo)],
+      ['Prepago', formatCurrency(stats.prepago)],
+      ['Total', formatCurrency(stats.total)],
+      ['Operaciones', String(stats.operaciones)],
+    ];
+    // Cualquier medio de pago que no sea Efectivo ni el prepago esperado de
+    // esta plataforma (transferencias, el prepago de otra app pagado por
+    // error, etc.) nunca se descarta: se suma y se muestra acá, con el
+    // detalle de qué medios son en el título de la tarjeta.
+    if (stats.otros > 0) {
+      tarjetas.splice(2, 0, ['Otros', formatCurrency(stats.otros)]);
+    }
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {tarjetas.map(([titulo, valor]) => (
+          <Card
+            key={titulo}
+            className="shadow-sm border-l-4"
+            style={{ borderLeftColor: brandColor }}
+            title={titulo === 'Otros' ? Object.entries(stats.otrosPorEtiqueta).map(([m, v]) => `${m}: ${formatCurrency(v)}`).join(' · ') : undefined}
+          >
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{titulo}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl font-bold">{valor}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  };
 
   const renderTable = (registros) => (
     <div className="bg-white rounded-md border shadow-sm overflow-x-auto relative min-h-[200px]">
@@ -188,8 +205,8 @@ const PrepaymentReportPage = () => {
             <TableHead className="font-bold">Fecha</TableHead>
             <TableHead className="font-bold">Hora</TableHead>
             <TableHead className="font-bold">Plataforma</TableHead>
+            <TableHead className="font-bold">Forma de pago</TableHead>
             <TableHead className="font-bold">Referencia</TableHead>
-            <TableHead className="font-bold">Canal</TableHead>
             <TableHead className="font-bold">Turno</TableHead>
             <TableHead className="text-right font-bold">Importe</TableHead>
           </TableRow>
@@ -200,9 +217,9 @@ const PrepaymentReportPage = () => {
               <TableRow key={r.id} className="hover:bg-muted/30 transition-colors">
                 <TableCell className="py-3">{r.fecha || '—'}</TableCell>
                 <TableCell className="py-3">{r.hora || '—'}</TableCell>
-                <TableCell className="py-3">{ETIQUETA_PLATAFORMA[r.plataforma] || r.plataforma}</TableCell>
+                <TableCell className="py-3">{ETIQUETA_CLAVE[r.clave] || r.clave}</TableCell>
+                <TableCell className="py-3">{r.metodoPago || '—'}</TableCell>
                 <TableCell className="py-3 font-mono text-xs">{r.referencia || '—'}</TableCell>
-                <TableCell className="py-3 text-muted-foreground text-sm">{r.canal}</TableCell>
                 <TableCell className="py-3 text-muted-foreground text-sm">{r.turno ?? '—'}</TableCell>
                 <TableCell className="py-3 text-right font-semibold text-primary">{formatCurrency(r.importe)}</TableCell>
               </TableRow>
@@ -292,7 +309,7 @@ const PrepaymentReportPage = () => {
         <p className="text-xs text-muted-foreground">
           Fuentes leídas: {diagnostico.vivas} ventas del turno abierto · {diagnostico.respaldadas} de turnos cerrados
           ({diagnostico.diasLeidos} días de BACKUP){diagnostico.planas ? ` · ${diagnostico.planas} del respaldo antiguo` : ''}
-          {' '}· {diagnostico.ledger} registros del ledger de prepagos.
+          {' '}· {diagnostico.departamentosMapeados} departamento(s) reconocido(s) como PedidosYa/Rappi/M.LIBRE.
         </p>
       )}
 
@@ -304,14 +321,14 @@ const PrepaymentReportPage = () => {
           <TabsTrigger value="RAPPI" className="data-[state=active]:bg-[#FF441F] data-[state=active]:text-white transition-colors duration-300">
             Rappi
           </TabsTrigger>
-          <TabsTrigger value="MPAGO" className="data-[state=active]:bg-[#009EE3] data-[state=active]:text-white transition-colors duration-300">
+          <TabsTrigger value="MLIBRE" className="data-[state=active]:bg-[#009EE3] data-[state=active]:text-white transition-colors duration-300">
             M.LIBRE
           </TabsTrigger>
         </TabsList>
 
         {renderTab('PEDIDOSYA', filasPY, statsPY, '#EA044E')}
         {renderTab('RAPPI', filasRP, statsRP, '#FF441F')}
-        {renderTab('MPAGO', filasMP, statsMP, '#009EE3')}
+        {renderTab('MLIBRE', filasMP, statsMP, '#009EE3')}
       </Tabs>
     </motion.div>
   );

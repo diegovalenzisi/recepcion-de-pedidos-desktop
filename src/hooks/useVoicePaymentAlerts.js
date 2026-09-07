@@ -7,12 +7,13 @@ import {
   createTestMercadoPagoPayment,
   readPaymentsDiagnostic,
 } from '@/lib/api/paymentAlertsApi';
+import { buildAnnouncementText } from '@/lib/api/voiceAnnouncementText';
 
 const ENABLED_STORAGE_KEY   = 'voicePaymentAlertsEnabled';
 const VOICE_STORAGE_KEY     = 'voicePaymentAlertsVoiceURI';
 const VOLUME_STORAGE_KEY    = 'voicePaymentVolume';
 const UNLOCKED_STORAGE_KEY  = 'voicePaymentSoundUnlocked';
-const SPEECH_LANG          = 'es-AR';
+export const SPEECH_LANG    = 'es-AR';
 const SPEAK_TIMEOUT_MS     = 20000; // máx 20s para onend; si no dispara, avanzamos
 const WATCHDOG_INTERVAL_MS = 15000; // cada 15s revisamos si la cola está atascada
 const HEARTBEAT_INTERVAL_MS = 60000; // log cada 1 min
@@ -43,18 +44,6 @@ export const setVoicePaymentVolume = (value) => {
   localStorage.setItem(VOLUME_STORAGE_KEY, String(clamped));
 };
 
-const buildAnnouncementText = (payment) => {
-  const monto = payment.monto ?? 0;
-  const clienteReal = payment.cliente?.trim();
-  const isPending = payment.estadoCliente === 'pendiente';
-
-  if (clienteReal && !isPending) {
-    return `Pago recibido de ${clienteReal} por ${monto} pesos.`;
-  }
-  const medio = payment.medio?.trim() || 'Mercado Pago';
-  return `Pago recibido de ${medio} por ${monto} pesos.`;
-};
-
 const FEMALE_VOICE_NAME_HINTS = [
   'female', 'mujer', 'femenina',
   'helena', 'sabina', 'dalia', 'paulina', 'monica', 'mónica', 'lucia', 'lucía',
@@ -70,7 +59,7 @@ const isFemaleVoice = (v) => {
 
 const matchesLang = (v, prefix) => v.lang?.toLowerCase().startsWith(prefix.toLowerCase());
 
-const selectBestSpanishVoice = () => {
+export const selectBestSpanishVoice = () => {
   if (typeof window === 'undefined' || !window.speechSynthesis) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices?.length) return null;
@@ -82,6 +71,31 @@ const selectBestSpanishVoice = () => {
     null
   );
 };
+
+/**
+ * Prueba de sonido AISLADA: NO toca Firebase, NO crea ningún pago ni
+ * dispara la cola real de avisos — sólo reutiliza la selección de voz/volumen
+ * ya elegida por el usuario para decir una frase fija. Pensada para el botón
+ * "Probar aviso por voz" de la conexión de Mercado Pago (confirmar que el
+ * sonido de la PC funciona, sin generar ninguna operación real).
+ */
+export function speakTestAnnouncement(
+  text = 'Prueba de Mercado Pago. Recibiste un pago de diez mil pesos.',
+) {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return false;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = SPEECH_LANG;
+  utterance.volume = getVoicePaymentVolume() / 100;
+
+  const voiceURI = localStorage.getItem(VOICE_STORAGE_KEY);
+  const voices = window.speechSynthesis.getVoices();
+  const voice = (voiceURI && voiceURI !== AUTO_VOICE_VALUE && voices.find((v) => v.voiceURI === voiceURI))
+    || selectBestSpanishVoice();
+  if (voice) utterance.voice = voice;
+
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
 
 export const useVoicePaymentAlerts = (isUserLoggedIn, activePaymentPath = null) => {
   const { ready: firebaseReady } = useFirebaseReadiness();

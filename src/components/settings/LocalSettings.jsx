@@ -12,6 +12,7 @@ import PrintingSettings from './local/PrintingSettings';
 import AudioSettings from './local/AudioSettings';
 import DeliveryScreenTypeSelector from './local/DeliveryScreenTypeSelector';
 import WhatsAppSettings from './local/WhatsAppSettings';
+import MercadoPagoOAuthManager from './local/admin/MercadoPagoOAuthManager.jsx';
 import { useAuth } from '@/hooks/useAuth';
 
 function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettings }) {
@@ -85,6 +86,16 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
                 onSettingsChange={onSettingsChange}
                 applySettings={applySettings}
               />
+            )}
+            {/* Independiente del Panel de Administración (arriba, exclusivo de
+                DiegoL): esta sección se gatea por el permiso puntual
+                `configuracion_mercadopago` (src/config/permissions.js), que
+                cualquier admin le puede asignar al usuario "dueño" de un
+                comercio desde Usuarios sin darle el resto de AdminPanel.
+                DiegoL la ve igual, porque su usuario ya tiene todos los
+                permisos (getAllPermissions() en useAuth.jsx). */}
+            {user && !!user.permissions?.configuracion_mercadopago && (
+              <MercadoPagoOAuthManager />
             )}
             <GeneralInfo settings={settings} handleChange={handleChange} handleFontChange={handleFontChange} />
             <DeliveryScreenTypeSelector 
