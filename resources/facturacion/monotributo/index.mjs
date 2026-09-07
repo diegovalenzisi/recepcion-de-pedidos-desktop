@@ -259,18 +259,27 @@ async function consultarComprobante(auth, nroCbte) {
   });
 }
 
+// RG 5616 (ARCA/WSFEv1): CondicionIVAReceptorId es obligatorio en cada
+// FECAEDetRequest. Este motor sólo emite a Consumidor Final —DocTipo 99 /
+// DocNro 0 ya lo asume en la misma línea, igual que el PDF y el historial—
+// así que el único valor correcto acá es 5 (Consumidor Final). No hay en
+// ningún lugar del sistema captura de CUIT/condición IVA del cliente: si eso
+// existiera, este valor debería salir de esos datos.
+const CONDICION_IVA_RECEPTOR_ID = 5; // 5 = Consumidor Final
+
 async function emitirFacturaC(auth, total, nroCbte) {
   const wsfeWsdl = 'https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL';
   return new Promise((resolve, reject) => {
     soap.createClient(wsfeWsdl, { wsdl_options: { agent: httpsAgent } }, (err, client) => {
       if (err) return reject(err);
+      console.log(`[ARCA] CondicionIVAReceptorId: ${CONDICION_IVA_RECEPTOR_ID} - Consumidor Final`);
       const data = {
         Auth: auth,
         FeCAEReq: {
           FeCabReq: { CantReg: 1, PtoVta: PTO_VTA, CbteTipo: 11 },
           FeDetReq: {
             FECAEDetRequest: [{
-              Concepto: 1, DocTipo: 99, DocNro: 0,
+              Concepto: 1, DocTipo: 99, DocNro: 0, CondicionIVAReceptorId: CONDICION_IVA_RECEPTOR_ID,
               CbteDesde: nroCbte, CbteHasta: nroCbte,
               CbteFch: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
               ImpTotal: total, ImpTotConc: 0, ImpNeto: total,

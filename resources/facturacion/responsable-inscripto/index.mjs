@@ -223,6 +223,15 @@ async function solicitarCAE(auth, client, pedido, cbteNro) {
   const neto = +(total / 1.21).toFixed(2);
   const iva = +(total - neto).toFixed(2);
 
+  // RG 5616 (ARCA/WSFEv1): CondicionIVAReceptorId es obligatorio en cada
+  // FECAEDetRequest. Este motor sólo emite a Consumidor Final —DocTipo 99 /
+  // DocNro 0 ya lo asume unas líneas más abajo, igual que el PDF y el
+  // historial— así que el único valor correcto acá es 5 (Consumidor Final).
+  // No hay en ningún lugar del sistema captura de CUIT/condición IVA del
+  // cliente: si eso existiera, este valor debería salir de esos datos.
+  const CONDICION_IVA_RECEPTOR_ID = 5; // 5 = Consumidor Final
+  console.log(`[ARCA] CondicionIVAReceptorId: ${CONDICION_IVA_RECEPTOR_ID} - Consumidor Final`);
+
   const [result] = await client.FECAESolicitarAsync({
     Auth: auth,
     FeCAEReq: {
@@ -232,6 +241,7 @@ async function solicitarCAE(auth, client, pedido, cbteNro) {
           Concepto: 1,
           DocTipo: 99,
           DocNro: 0,
+          CondicionIVAReceptorId: CONDICION_IVA_RECEPTOR_ID,
           CbteDesde: cbteNro,
           CbteHasta: cbteNro,
           CbteFch: moment().format("YYYYMMDD"),
