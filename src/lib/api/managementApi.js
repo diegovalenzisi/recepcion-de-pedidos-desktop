@@ -138,6 +138,53 @@ const removeOptionalFromArticles = async (groupCode, optionalCode) => {
         console.error('[Optional Cleanup] Error removing optional from articles:', error);
         throw error;
     }
+}
+
+/**
+ * Borra la referencia a un GRUPO completo de opcionales (`opcionalesConfig/{groupCode}`)
+ * de todos los artículos que la tengan. Mismo patrón que `removeOptionalFromArticles`:
+ * una lectura de ARTICULOS, un solo `update()` con todos los borrados.
+ *
+ * Sin esto, borrar un grupo desde Configuración solo quitaba el nodo de
+ * GRUPOS_OPCIONALES y dejaba en cada artículo un `opcionalesConfig/{groupCode}`
+ * huérfano (activo/min/max sin ningún `opcionales` real detrás, porque el grupo
+ * ya no existe) — invisible para el catálogo pero acumulando basura sin límite.
+ */
+const removeOptionalGroupFromArticles = async (groupCode) => {
+    checkLocalId();
+    const LOCAL_ID = getCurrentDatabasePath();
+    const op = beginFirebaseOperation();
+    const db = op.getDatabaseOrAbort();
+
+    try {
+        const articlesRef = ref(db, `${LOCAL_ID}/ARTICULOS`);
+        const articlesSnapshot = await get(articlesRef);
+
+        if (!articlesSnapshot.exists()) return { removed: 0 };
+
+        const articlesData = articlesSnapshot.val();
+        const updates = {};
+        let removeCount = 0;
+
+        for (const articleId in articlesData) {
+            const article = articlesData[articleId];
+
+            if (article.opcionalesConfig && article.opcionalesConfig[groupCode] !== undefined) {
+                updates[`${LOCAL_ID}/ARTICULOS/${articleId}/opcionalesConfig/${groupCode}`] = null;
+                removeCount++;
+            }
+        }
+
+        if (Object.keys(updates).length > 0) {
+            // Revalida antes del update() definitivo: el get() de arriba fue un await real.
+            await update(ref(op.getDatabaseOrAbort()), updates);
+        }
+
+        return { removed: removeCount };
+    } catch (error) {
+        console.error('[Optional Group Cleanup] Error removing group from articles:', error);
+        throw error;
+    }
 };
 
 export const listenToManagementData = (tabId, callback, errorCallback) => {
@@ -674,8 +721,16 @@ export const deleteData = async (tabId, item) => {
         }
     }
 
-    // Revalida antes del remove() definitivo: removeOptionalFromArticles()
-    // arriba hizo su propio await real.
+    if (tabId === 'grupos-opcionales') {
+        try {
+            await removeOptionalGroupFromArticles(item.codigo);
+        } catch (cleanupError) {
+            console.error('[Optional Group Delete] Failed to cleanup group from articles:', cleanupError);
+        }
+    }
+
+    // Revalida antes del remove() definitivo: removeOptionalFromArticles()/
+    // removeOptionalGroupFromArticles() arriba hicieron su propio await real.
     const itemRef = ref(op.getDatabaseOrAbort(), path);
     await remove(itemRef);
 
