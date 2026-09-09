@@ -21,6 +21,13 @@ const {
   facturacionHabilitada,
   colaDesdeFirebasePath,
 } = require('./lib/decidirArranqueFacturacion');
+// node_modules compartido del motor de facturación (junction hacia
+// facturacion-runtime/node_modules). Módulo con pruebas propias: ver
+// electron/lib/facturacionRuntimeLink.js.
+const {
+  ensureFacturacionNodeModulesLink,
+  verificarPaquetesResolubles,
+} = require('./lib/facturacionRuntimeLink');
 
 const isDev = !app.isPackaged;
 
@@ -582,6 +589,28 @@ function spawnFacturacionProc(key, accountDir) {
 
   const entry = { proc: null, logs: facturacionProcs[key]?.logs || [], status: 'running', accountDir };
   facturacionProcs[key] = entry;
+
+  // ── node_modules compartido, ANTES que nada ─────────────────────────────
+  //
+  // Los motores son ESM (`import 'dotenv'`, firebase-admin, moment, pdfkit,
+  // qrcode, soap) y Node busca node_modules SUBIENDO el árbol desde
+  // accountDir — pero facturacion-runtime/node_modules es HERMANO de
+  // facturacion/, nunca ancestro, así que nunca aparece solo. Confirmado en
+  // Lepo Lepo y Joao. Idempotente: no hace nada si ya está bien.
+  const link = ensureFacturacionNodeModulesLink({
+    facturacionDir: FACTURACION_USER_DIR(),
+    runtimeModulesDir: path.join(app.getPath('userData'), 'facturacion-runtime', 'node_modules'),
+  });
+  if (!link.ok) {
+    entry.status = 'error';
+    const detalle = link.accion === 'sin-runtime'
+      ? 'Módulos AFIP no encontrados. Instalá los componentes desde Configuración → Sistema.'
+      : `No se pudo preparar node_modules compartido: ${link.error || link.motivo}.`;
+    entry.logs.push(`[${new Date().toLocaleTimeString('es-AR')}] [ERR] ${detalle}`);
+    console.error(`❌ [facturacion] '${key}': ${detalle}`);
+    mainWindow?.webContents?.send('facturacion:status', { key, status: 'error' });
+    return false;
+  }
 
   // ── GUARD ÚNICO, ANTES DE CUALQUIER spawn ────────────────────────────────
   //
@@ -3368,6 +3397,23 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   setupIPC();
   setupImageCacheIPC();
+
+  // node_modules compartido del motor de facturación: se asegura acá TAMBIÉN
+  // (no solo dentro de spawnFacturacionProc) para que quede listo desde el
+  // arranque, sin esperar al primer intento de facturar, y para que el log
+  // "[Facturación Runtime] ..." aparezca siempre en cada inicio de la app —
+  // útil para diagnosticar instalaciones existentes como la de Joao. Barata
+  // e idempotente: no rompe el arranque si el runtime todavía no existe.
+  ensureFacturacionNodeModulesLink({
+    facturacionDir: FACTURACION_USER_DIR(),
+    runtimeModulesDir: path.join(app.getPath('userData'), 'facturacion-runtime', 'node_modules'),
+  });
+  verificarPaquetesResolubles(FACTURACION_USER_DIR())
+    .then((r) => {
+      if (r.ok) console.log('[Facturación Runtime] Dependencias verificadas: dotenv, firebase-admin, moment, pdfkit, qrcode, soap — todas resuelven.');
+      else console.error(`[Facturación Runtime] ERROR preparando dependencias: no resuelven → ${r.faltantes.join(', ')}`);
+    })
+    .catch((e) => console.error(`[Facturación Runtime] ERROR preparando dependencias: ${e.message}`));
   // Reparar backend.env (del local activo) con private_key malformada ANTES de iniciar el backend
   const _bootLocal = getActiveLocalId();
   if (_bootLocal) {
