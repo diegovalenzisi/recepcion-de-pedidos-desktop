@@ -86,6 +86,8 @@ const COMPARTIDOS_RECEPTORES = [
   'src/lib/print/comandaModelo.js',                // título real del grupo + unidades idénticas
   'src/lib/print/utils.js',
   'src/lib/print/__tests__/comandaModelo.test.js',
+  'src/lib/utils/horarioComercio.js',              // horario + cierre temporal (swich/swichDesde)
+  'src/lib/utils/__tests__/horarioComercio.test.js',
 ];
 
 // Pruebas que deben ser idénticas donde existan.

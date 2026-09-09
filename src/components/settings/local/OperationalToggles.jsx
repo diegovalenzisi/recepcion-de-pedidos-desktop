@@ -36,17 +36,18 @@ const OperationalToggles = ({ settings, onSettingsChange }) => {
         />
       </div>
       
-       <div className="flex items-center justify-between p-4 border rounded-lg bg-blue-50 border-blue-200">
+      {/* El cierre temporal de Recepción ya no se controla desde acá: se
+          unificó en un único campo (CONFIGURACION/swich + swichDesde) que
+          también usa DLV Consultas, para no tener dos controles distintos
+          para el mismo concepto. El switch "Respetar Horario"/`manualClose`
+          que vivía en este lugar quedó reemplazado — ver LocalStatusIndicator
+          (badge de arriba) y CerradoManualSwitch en DLV Consultas
+          ("Recepción Habilitada"). */}
+      <div className="flex items-center justify-between p-4 border rounded-lg bg-gray-50 border-gray-200">
         <div>
-          <Label htmlFor="respect-schedule" className="font-bold text-blue-800">Respetar Horario</Label>
-          <p className="text-sm text-blue-700">Si está activo, el local sigue el horario programado. Si se desactiva, el local se cierra manualmente.</p>
+          <Label className="font-bold text-gray-700">Habilitar / cerrar temporalmente Recepción</Label>
+          <p className="text-sm text-gray-500">Se controla desde DLV Consultas → Configuraciones → "Recepción Habilitada". El estado se refleja acá arriba, en el indicador de la barra superior.</p>
         </div>
-        <Switch
-          id="respect-schedule"
-          checked={!(settings.manualClose ?? false)}
-          onCheckedChange={(checked) => handleToggle('manualClose', !checked)}
-          className="data-[state=checked]:bg-blue-500"
-        />
       </div>
 
       <div className="flex items-center justify-between p-4 border rounded-lg">
