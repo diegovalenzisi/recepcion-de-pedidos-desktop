@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { closeShift, generateShiftReportData } from '@/lib/api/cash';
+import CashDifferenceResult from '@/components/cash/CashDifferenceResult.jsx';
 import { saveShiftSummaryToPath } from '@/lib/api/cash/summary.js';
 import { getCurrentLocalId } from '@/lib/firebase/core.js';
 import { Loader2, ShieldAlert } from 'lucide-react';
@@ -42,6 +43,10 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
   const [authorizedUsers, setAuthorizedUsers] = useState([]);
   const [selectedResponsible, setSelectedResponsible] = useState('');
   const [progressMessage, setProgressMessage] = useState('');
+  // Solo se setea DESPUÉS de que closeShift() confirmó el cierre — nunca antes.
+  // Mientras tenga un valor, se muestra el resultado de la diferencia en vez
+  // del formulario, y el modal no se puede cerrar por X/Escape/click afuera.
+  const [resultadoCierre, setResultadoCierre] = useState(null);
   const { toast } = useToast();
   const { user: currentUser } = useAuth();
 
@@ -200,8 +205,18 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
       await saveShiftSummaryToPath(localId, shiftDataToSave.date, shiftDataToSave.id, summaryData);
 
       toast({ title: 'Turno Cerrado', description: `El turno #${shiftData.id} ha sido cerrado exitosamente.` });
-      onShiftClosed(null);
-      onClose();
+
+      // El cierre YA quedó guardado (backup + resumen escritos arriba). Recién
+      // ahora se puede mostrar la diferencia — nunca antes de este punto. Se
+      // reutilizan los mismos tres números que reportData.summary ya tenía
+      // calculados antes de cerrar (mismo cálculo, sin volver a tocarlo).
+      // onShiftClosed()/onClose() se difieren hasta que el usuario toque
+      // "Aceptar" en CashDifferenceResult (ver handleAcceptDifference).
+      setResultadoCierre({
+        difference: reportData.summary.difference,
+        cashInBox: reportData.summary.cashInBox,
+        cashCount: reportData.summary.cashCount,
+      });
     } catch (error) {
       // UN ERROR DE CIERRE TIENE QUE DECIR DOS COSAS: qué falló y en qué punto
       // quedó. El mensaje viejo ("No se pudo cerrar el turno.") ocultó durante
@@ -224,6 +239,16 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
       setIsLoading(false);
       setProgressMessage('');
     }
+  };
+
+  // Único botón de CashDifferenceResult. Recién acá se avisa al padre que el
+  // turno se cerró (mismo flujo de siempre: onShiftClosed(null) hace que
+  // App.jsx marque needsNewShift=true y aparezca CashFundModal) y se cierra
+  // este modal — nunca antes de que el usuario haya visto la diferencia.
+  const handleAcceptDifference = () => {
+    setResultadoCierre(null);
+    onShiftClosed(null);
+    onClose();
   };
 
   const formatCurrency = (amount) => {
@@ -265,8 +290,8 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
   const puedeConfirmar = !isLoading && montoValido && !faltaResponsable;
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-3xl">
+    <Dialog open={isOpen} onOpenChange={resultadoCierre ? () => {} : onClose}>
+      <DialogContent className={`sm:max-w-3xl ${resultadoCierre ? '[&>button.absolute]:hidden' : ''}`}>
         <DialogHeader>
           <DialogTitle>Cerrar Turno #{shiftData.id}</DialogTitle>
         </DialogHeader>
@@ -279,6 +304,13 @@ const CloseShiftModal = ({ isOpen, onClose, shiftData, sales, onShiftClosed, set
               <p className="text-sm text-center mt-2 text-gray-500">{progressMessage}</p>
             </div>
           </div>
+        ) : resultadoCierre ? (
+          <CashDifferenceResult
+            difference={resultadoCierre.difference}
+            cashInBox={resultadoCierre.cashInBox}
+            cashCount={resultadoCierre.cashCount}
+            onAccept={handleAcceptDifference}
+          />
         ) : (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-4">

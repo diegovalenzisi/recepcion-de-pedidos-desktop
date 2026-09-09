@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, Upload } from 'lucide-react';
+import { Loader2, Upload, Search } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -11,6 +11,7 @@ import TachoReportModal from '@/components/management/TachoReportModal.jsx';
 import StockHeader from '@/components/management/StockHeader.jsx';
 import StockActions from '@/components/management/StockActions.jsx';
 import OutOfStockModal from '@/components/management/OutOfStockModal.jsx';
+import StockConsultaModal from '@/components/management/StockConsultaModal.jsx';
 import StockStatusBadge from '@/components/management/StockStatusBadge.jsx';
 import OptionalExportButton from '@/components/management/OptionalExportButton.jsx';
 import OptionalImportModal from '@/components/management/OptionalImportModal.jsx';
@@ -75,6 +76,7 @@ function StockPage({ userPermissions, userRole }) {
   const [showPriceUpdateModal, setShowPriceUpdateModal] = useState(false);
   const [showTachoReportModal, setShowTachoReportModal] = useState(false);
   const [showOutOfStockModal, setShowOutOfStockModal] = useState(false);
+  const [showStockConsultaModal, setShowStockConsultaModal] = useState(false);
   const [showOptionalImportModal, setShowOptionalImportModal] = useState(false);
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
@@ -144,7 +146,22 @@ function StockPage({ userPermissions, userRole }) {
       const currentTabPermission = allTabsConfig.find(t => t.id === activeTab)?.permission;
       return userPermissions[currentTabPermission];
   }, [userRole, userPermissions, activeTab]);
-  
+
+  // Consulta de Stock (solo lectura): permiso independiente de las pestañas
+  // editables — un usuario puede tenerlo sin tener acceso a ninguna de ellas.
+  const canViewStockConsulta = userRole === 'dueño' || userPermissions.stock_consulta_general === true;
+
+  // Artículos con stock PROPIO (no heredado ni por receta) y con el control
+  // de stock habilitado — mismo criterio que ya usa useStockStatus.js para
+  // excluir de las alertas a los artículos con controlStock:false. Se
+  // calcula acá (StockPage ya tiene getTipoStockArticulo y data.articulos)
+  // y se le pasa listo al modal, que no importa nada de esta página.
+  const articulosStockPropio = useMemo(() => {
+    return (data.articulos || []).filter(
+      (a) => getTipoStockArticulo(a) === 'propio' && a.controlStock !== false
+    );
+  }, [data.articulos]);
+
   const canModifyTachoStockPermission = userRole === 'dueño' || userPermissions?.tachos_modificar_stock;
 
   const getNextId = (tabId) => {
@@ -386,11 +403,22 @@ function StockPage({ userPermissions, userRole }) {
             activeTab={activeTab}
             setActiveTab={setActiveTab}
           />
-          <StockStatusBadge 
-            outOfStockCount={outOfStockCount} 
-            lowStockCount={lowStockCount} 
+          <StockStatusBadge
+            outOfStockCount={outOfStockCount}
+            lowStockCount={lowStockCount}
             onClick={() => setShowOutOfStockModal(true)}
           />
+          {canViewStockConsulta && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 shrink-0"
+              onClick={() => setShowStockConsultaModal(true)}
+            >
+              <Search className="w-4 h-4" />
+              Consultar Stock
+            </Button>
+          )}
         </div>
       </div>
       
@@ -495,6 +523,15 @@ function StockPage({ userPermissions, userRole }) {
           lowStockRawMaterials={lowStockRawMaterials}
           departments={data.departamentos || []}
           localId={stockLocalId}
+        />
+      )}
+
+      {showStockConsultaModal && canViewStockConsulta && (
+        <StockConsultaModal
+          isOpen={showStockConsultaModal}
+          onClose={() => setShowStockConsultaModal(false)}
+          materiasPrimas={data['materia-prima'] || []}
+          articulosStockPropio={articulosStockPropio}
         />
       )}
 

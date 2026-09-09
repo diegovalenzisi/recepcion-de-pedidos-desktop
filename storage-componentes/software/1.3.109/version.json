@@ -1,0 +1,7 @@
+{
+  "version": "1.3.109",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.109.exe",
+  "releaseDate": "2026-09-07",
+  "sha256": "37357283de69d1cdbee1dc4474d6f9bcd8f5e126262d5d0b57f4b86560a76ede",
+  "notes": "Correccion fiscal ARCA/WSFEv1 (RG 5616): se incorpora el campo CondicionIVAReceptorId en la solicitud de CAE de Factura B y Factura C, obligatorio desde esta resolucion. El sistema factura siempre a Consumidor Final (no captura CUIT ni condicion IVA del cliente en ningun circuito), por lo que se envia CondicionIVAReceptorId: 5 (Consumidor Final), valor verificado contra la tabla de compatibilidad del manual oficial de ARCA para comprobantes clase B y C. No se modifico ningun otro campo del comprobante ni la logica de emision, numeracion o manejo de errores."
+}

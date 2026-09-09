@@ -26,6 +26,7 @@ export const permissionsList = [
             { id: 'departamentos', label: 'Departamentos' },
             { id: 'tachos', label: 'Tachos (Acceso)' },
             { id: 'tachos_modificar_stock', label: 'Tachos (Modificar Stock)' },
+            { id: 'stock_consulta_general', label: 'Consultar Stock (solo lectura)' },
         ]
     },
     {
