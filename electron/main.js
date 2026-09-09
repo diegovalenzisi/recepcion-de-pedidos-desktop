@@ -9,7 +9,7 @@ const path = require('path');
 const os = require('os');
 const { randomUUID, createHash } = require('crypto');
 const { spawn, execSync } = require('child_process');
-const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, renameSync } = require('fs');
+const { existsSync, readFileSync, writeFileSync, appendFileSync, createWriteStream, createReadStream, unlink, unlinkSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, renameSync, readdirSync } = require('fs');
 const https = require('https');
 const http  = require('http');
 const { resolveRequestTransport, normalizeFirebaseDatabaseURL, classifyTransportError } = require('./lib/firebaseHttpTransport');
@@ -28,6 +28,8 @@ const {
   ensureFacturacionNodeModulesLink,
   verificarPaquetesResolubles,
 } = require('./lib/facturacionRuntimeLink');
+// Borrado de credenciales de una cuenta fiscal (RI/Monotributo) al eliminarla.
+const { eliminarCredencialesDeCuenta } = require('./lib/facturacionAccountDelete');
 
 const isDev = !app.isPackaged;
 
@@ -2492,6 +2494,31 @@ function setupIPC() {
       existsSync(path.join(dir, 'cert', 'certificado.crt')) &&
       existsSync(path.join(dir, 'cert', 'clave.key'))
     );
+  });
+
+  /**
+   * ELIMINAR CUENTA FISCAL (RI o Monotributo) — detiene el proceso si está
+   * corriendo (nunca puede quedar facturando una cuenta que ya no existe) y
+   * borra solo credenciales/configuración ACTIVA de esa cuenta, nunca
+   * historial (ver electron/lib/facturacionAccountDelete.js, con pruebas
+   * propias contra filesystem real).
+   */
+  ipcMain.handle('facturacion:delete-account-files', (_e, tipo, cuentaId) => {
+    const key = tipo === 'responsable_inscripto' ? 'ri' : `mono_${cuentaId}`;
+    try {
+      stopFacturacionProc(key);
+      const accountDir = tipo === 'responsable_inscripto' ? getRIDir() : getMonoDir(cuentaId);
+      const { removed } = eliminarCredencialesDeCuenta(accountDir);
+      console.log(
+        `[facturacion] Cuenta eliminada (${tipo}${cuentaId ? '/' + cuentaId : ''}): ` +
+        `borrado ${removed.join(', ') || '(nada)'}. Se preservó cualquier factura-*.pdf histórica y ` +
+        `cualquier otro archivo no reconocido en ${accountDir}.`
+      );
+      return { ok: true, removed };
+    } catch (e) {
+      console.error('[facturacion] Error eliminando archivos de cuenta:', e.message);
+      return { ok: false, error: e.message };
+    }
   });
 
   // Versión del Node (bundleado o manual)

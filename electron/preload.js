@@ -61,6 +61,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     installDeps:  () => ipcRenderer.invoke('facturacion:install-deps'),
     depsOk:       () => ipcRenderer.invoke('facturacion:deps-ok'),
     filesOk:      (tipo, cuentaId) => ipcRenderer.invoke('facturacion:files-ok', tipo, cuentaId),
+    // Eliminar cuenta fiscal: detiene el proceso y borra solo credenciales/config
+    // activa (nunca facturas históricas). Ver electron/main.js para el detalle.
+    deleteAccountFiles: (tipo, cuentaId) => ipcRenderer.invoke('facturacion:delete-account-files', tipo, cuentaId),
     nodeVersion:  () => ipcRenderer.invoke('facturacion:node-version'),
     // ¿Hay un motor de facturación corriendo en esta PC? (solo lectura)
     isRunning:    () => ipcRenderer.invoke('facturacion:is-running'),

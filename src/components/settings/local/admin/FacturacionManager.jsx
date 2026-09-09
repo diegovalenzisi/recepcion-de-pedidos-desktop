@@ -669,9 +669,11 @@ function AccountCard({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {!isRI && (
+          {/* Mismo botón para RI y Monotributo — ver AlertDialog de confirmación
+              en el componente padre, nunca borra con un solo clic. */}
+          {onRemove && (
             <Button size="sm" variant="ghost" className="text-red-500 h-6 w-6 p-0"
-              onClick={(e) => { e.stopPropagation(); onRemove(); }}>
+              onClick={(e) => { e.stopPropagation(); onRemove(); }} title="Eliminar cuenta">
               <Trash2 className="h-3 w-3" />
             </Button>
           )}
@@ -795,6 +797,13 @@ const FacturacionManager = () => {
   const [firebaseConfig, setFirebaseConfig] = useState(null);
   const [syncing, setSyncing]         = useState(false);
   const [aplicandoSwitch, setAplicandoSwitch] = useState(false);
+  // RI empieza en "Sin cuentas configuradas" hasta que el usuario toca
+  // "+ Agregar cuenta" (igual que Monotributo parte de cuentas: []). Se resetea
+  // solo a false cuando se elimina la cuenta — ver ejecutarEliminacion().
+  const [riAdding, setRiAdding]       = useState(false);
+  // Confirmación genérica de borrado, para RI y Monotributo por igual.
+  const [pendingDelete, setPendingDelete] = useState(null); // { tipo, cuentaId, fields } | null
+  const [deleting, setDeleting]       = useState(false);
   const { toast } = useToast();
   // Evitar doble-trigger de autostart en el mismo montaje
   const autoStartFiredRef = useRef(false);
@@ -1313,14 +1322,63 @@ const FacturacionManager = () => {
       monotributo: { ...c.monotributo, cuentas: [...(c.monotributo?.cuentas || []), DEFAULT_CUENTA(id)] },
     }));
   };
-  const removeCuenta = async (id) => {
-    await fAPI()?.stop(`mono_${id}`);
-    setConfig(c => ({
-      ...c,
-      monotributo: { ...c.monotributo, cuentas: (c.monotributo?.cuentas || []).filter(cu => cu.id !== id) },
-    }));
-    setStatuses(prev => { const n = { ...prev }; delete n[`mono_${id}`]; return n; });
-    setAccountDirs(prev => { const n = { ...prev }; delete n[`mono_${id}`]; return n; });
+  // ---------------------------------------------------------------------------
+  // Eliminar cuenta (RI o Monotributo) — genérico, con confirmación obligatoria.
+  // ---------------------------------------------------------------------------
+  const solicitarEliminar = (tipo, cuentaId, fields) => setPendingDelete({ tipo, cuentaId, fields });
+
+  const ejecutarEliminacion = async () => {
+    if (!pendingDelete) return;
+    const { tipo, cuentaId } = pendingDelete;
+    const f = fAPI();
+    if (!f) { setPendingDelete(null); return; }
+    const key = tipo === 'responsable_inscripto' ? 'ri' : `mono_${cuentaId}`;
+
+    setDeleting(true);
+    try {
+      // 1. Detener el proceso (si estaba corriendo) y borrar SOLO credenciales/
+      //    configuración activa en disco — nunca facturas históricas (ver
+      //    electron/main.js: facturacion:delete-account-files).
+      const res = await f.deleteAccountFiles(tipo, cuentaId);
+      if (!res?.ok) throw new Error(res?.error || 'No se pudo borrar la configuración en disco');
+
+      // 2. Vaciar (RI) o sacar del array (Monotributo) y PERSISTIR de inmediato:
+      //    si esto quedara solo en el estado de React, reiniciar la app sin
+      //    pasar por "Guardar" haría reaparecer la cuenta eliminada.
+      let newConfig;
+      if (tipo === 'responsable_inscripto') {
+        newConfig = { ...config, ri: { id: 'ri', ...DEFAULT_FIELDS('Responsable Inscripto') } };
+      } else {
+        const cuentas = (config.monotributo?.cuentas || []).filter((cu) => cu.id !== cuentaId);
+        newConfig = { ...config, monotributo: { ...config.monotributo, cuentas } };
+      }
+      await f.writeConfig(newConfig);
+      setConfig(newConfig);
+
+      // 3. Limpiar también Firebase: si quedara con certDownloadUrl, el
+      //    auto-reconstruir del próximo arranque (líneas ~908 de este archivo)
+      //    la volvería a traer sola.
+      try {
+        await saveAfipConfigToFirebase(newConfig);
+        setFirebaseConfig({ ...newConfig, updatedAt: new Date().toISOString() });
+      } catch (e) {
+        console.warn('[firebase] Error al limpiar config AFIP eliminada:', e.message);
+      }
+
+      setStatuses((prev) => { const n = { ...prev }; delete n[key]; return n; });
+      setAccountDirs((prev) => { const n = { ...prev }; delete n[key]; return n; });
+      if (tipo === 'responsable_inscripto') setRiAdding(false);
+
+      toast({
+        title: 'Cuenta fiscal eliminada',
+        description: 'Se borraron las credenciales locales de esta cuenta. Pedidos, ventas y facturas ya emitidas no se modifican.',
+      });
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'No se pudo eliminar la cuenta', description: e.message });
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
   };
 
   if (!isElectron) {
@@ -1411,27 +1469,40 @@ const FacturacionManager = () => {
 
       {/* ── Responsable Inscripto ── */}
       {config.tipo === 'responsable_inscripto' && (
-        <AccountCard
-          tipo="responsable_inscripto"
-          cuentaId={null}
-          fields={config.ri}
-          onChange={updateRi}
-          onSave={() => saveAccount('responsable_inscripto', null, config.ri)}
-          saving={savingKey === 'ri'}
-          processKey="ri"
-          accountDir={accountDirs['ri']}
-          status={statuses['ri']}
-          onStatusChange={handleStatusChange}
-          machineId={machineId}
-          ownershipAccount={ownership.accounts.find(a => a.key === 'ri')}
-          onToggleAutoStart={(v) => handleToggleAutoStart('ri', v)}
-          ownershipBusy={ownership.busyKey === 'ri'}
-        />
+        (config.ri?.initialized || riAdding) ? (
+          <AccountCard
+            tipo="responsable_inscripto"
+            cuentaId={null}
+            fields={config.ri}
+            onChange={updateRi}
+            onSave={() => saveAccount('responsable_inscripto', null, config.ri)}
+            onRemove={() => solicitarEliminar('responsable_inscripto', null, config.ri)}
+            saving={savingKey === 'ri'}
+            processKey="ri"
+            accountDir={accountDirs['ri']}
+            status={statuses['ri']}
+            onStatusChange={handleStatusChange}
+            machineId={machineId}
+            ownershipAccount={ownership.accounts.find(a => a.key === 'ri')}
+            onToggleAutoStart={(v) => handleToggleAutoStart('ri', v)}
+            ownershipBusy={ownership.busyKey === 'ri'}
+          />
+        ) : (
+          <div className="text-center py-6 border rounded-lg bg-gray-50 space-y-3">
+            <p className="text-sm text-gray-500">Sin cuentas configuradas</p>
+            <Button size="sm" variant="outline" onClick={() => setRiAdding(true)} className="mx-auto">
+              <Plus className="h-3 w-3 mr-1" /> Agregar cuenta
+            </Button>
+          </div>
+        )
       )}
 
       {/* ── Monotributo ── */}
       {config.tipo === 'monotributo' && (
         <div className="space-y-3">
+          {cuentas.length === 0 && (
+            <p className="text-sm text-gray-500 text-center py-2">Sin cuentas configuradas</p>
+          )}
           {cuentas.map((cuenta) => {
             const key = `mono_${cuenta.id}`;
             return (
@@ -1442,7 +1513,7 @@ const FacturacionManager = () => {
                 fields={cuenta}
                 onChange={(k, v) => updateCuenta(cuenta.id, k, v)}
                 onSave={() => saveAccount('monotributo', cuenta.id, cuenta)}
-                onRemove={() => removeCuenta(cuenta.id)}
+                onRemove={() => solicitarEliminar('monotributo', cuenta.id, cuenta)}
                 saving={savingKey === cuenta.id}
                 processKey={key}
                 accountDir={accountDirs[key]}
@@ -1478,6 +1549,36 @@ const FacturacionManager = () => {
             <AlertDialogCancel onClick={() => resolveOwnerConfirm(false)}>Cancelar</AlertDialogCancel>
             <AlertDialogAction onClick={() => resolveOwnerConfirm(true)} className="bg-cyan-600 hover:bg-cyan-700">
               Tomar el control
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirmación de borrado — genérica para RI y Monotributo. Un solo clic
+          en el tacho NUNCA borra nada por sí solo: siempre pasa por acá. */}
+      <AlertDialog open={!!pendingDelete} onOpenChange={(v) => !v && !deleting && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar esta cuenta fiscal?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-left">
+                <div className="rounded-md bg-gray-50 border p-3 text-sm space-y-1">
+                  <p><strong>Razón social:</strong> {pendingDelete?.fields?.razonSocial || pendingDelete?.fields?.nombre || '(sin nombre)'}</p>
+                  <p><strong>CUIT:</strong> {pendingDelete?.fields?.cuit || '(sin CUIT)'}</p>
+                  <p><strong>Punto de venta:</strong> {pendingDelete?.fields?.ptoVta || '(sin punto de venta)'}</p>
+                </div>
+                <p>
+                  Esta acción eliminará la configuración local de esta cuenta (credenciales,
+                  certificados y .env) y detendrá su motor de facturación si está corriendo.
+                  No afecta pedidos, ventas, facturas ya emitidas ni a ninguna otra cuenta.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting} onClick={() => setPendingDelete(null)}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction disabled={deleting} onClick={ejecutarEliminacion} className="bg-red-600 hover:bg-red-700">
+              {deleting ? 'Eliminando...' : 'Eliminar cuenta'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
