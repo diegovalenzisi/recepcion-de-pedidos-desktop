@@ -192,7 +192,18 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   };
   
   const articlesByDept = useMemo(() => {
-    const sortedArticles = [...verifiedArticles].sort((a, b) => {
+    // Artículo AUXILIAR de promoción: permiteVentaEfectivo=false Y
+    // permiteVentaElectronica=false (las DOS, explícitamente — no "ausente").
+    // No se lista como artículo individual en ningún canal, pero sigue
+    // disponible como componente de cualquier promo o grupo que lo use:
+    // por eso este filtro se aplica SOLO a la grilla visible (articlesByDept),
+    // nunca a `verifiedArticles` en sí, que usePromo.js reutiliza para decidir
+    // qué opciones de un GRUPO están disponibles dentro de una promoción.
+    const individualmenteVisibles = verifiedArticles.filter((a) => (
+      !(a.permiteVentaEfectivo === false && a.permiteVentaElectronica === false)
+    ));
+
+    const sortedArticles = [...individualmenteVisibles].sort((a, b) => {
       const orderA = context === 'delivery' ? a.ordenWeb : a.ordenLocal;
       const orderB = context === 'delivery' ? b.ordenWeb : b.ordenLocal;
       return (orderA || 999) - (orderB || 999);
