@@ -61,7 +61,7 @@ console.log('\ncalcularEstadoRecepcion — casos del enunciado:');
 
 check('CASO base: swich false, dentro de horario => abierto', () => {
   const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: false }, fecha(15, 0));
-  assert.deepStrictEqual(r, { abierto: true, cerradoTemporalmente: false, debeResetearSwich: false });
+  assert.deepStrictEqual(r, { abierto: true, cerradoTemporalmente: false, debeResetearSwich: false, motivo: null });
 });
 
 check('CASO 1: OFF dentro de la franja => cierra ya, sin resetear', () => {
@@ -121,16 +121,107 @@ check('CASO 4: reactivación manual (swich=false) FUERA de horario => permanece 
   assert.strictEqual(r.debeResetearSwich, false);
 });
 
-check('cierre manual SIN swichDesde (dato legacy/ausente): se autocorrige en el próximo inicio de franja', () => {
+check('swich=true con swichDesde AUSENTE (undefined): NUNCA auto-reset, aunque ya haya una franja pasada', () => {
   const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true }, fecha(20, 0));
-  assert.strictEqual(r.debeResetearSwich, true);
-  assert.strictEqual(r.abierto, true);
+  assert.strictEqual(r.debeResetearSwich, false, 'no debe autocorregirse sin un swichDesde real');
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.cerradoTemporalmente, true);
 });
 
-check('cierre manual SIN swichDesde, sin ningún inicio de franja pasado todavía: sigue cerrado', () => {
+check('swich=true con swichDesde AUSENTE, sin ningún inicio de franja pasado todavía: sigue cerrado', () => {
   const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true }, fecha(10, 0));
   assert.strictEqual(r.debeResetearSwich, false);
   assert.strictEqual(r.abierto, false);
+});
+
+console.log('\nBug real (local 40508022): carrera / dato incompleto en swichDesde — NUNCA debe reabrir:');
+
+check('swichDesde = null (p.ej. llegó "swich:true" antes que el nuevo swichDesde en el mismo snapshot): sigue cerrado', () => {
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde: null }, fecha(20, 1));
+  assert.strictEqual(r.debeResetearSwich, false);
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.cerradoTemporalmente, true);
+});
+
+check('swichDesde = 0: NO se trata como "cerrado desde el epoch" (eso reabriría con cualquier franja pasada)', () => {
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde: 0 }, fecha(20, 1));
+  assert.strictEqual(r.debeResetearSwich, false);
+  assert.strictEqual(r.abierto, false);
+});
+
+check('swichDesde = NaN / string no numérica / false: tratados igual que ausente, sigue cerrado', () => {
+  for (const valorInvalido of [NaN, 'no-es-una-fecha', false, undefined]) {
+    const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde: valorInvalido }, fecha(20, 1));
+    assert.strictEqual(r.debeResetearSwich, false, `no debe resetear con swichDesde=${valorInvalido}`);
+    assert.strictEqual(r.abierto, false, `debe seguir cerrado con swichDesde=${valorInvalido}`);
+  }
+});
+
+check('en cuanto llega un swichDesde válido (mismo minuto, snapshot siguiente), se evalúa correctamente y sigue cerrado', () => {
+  // Simula el snapshot "bueno" que llega inmediatamente después del incompleto:
+  // mismo minuto, pero ya con swichDesde real — confirma que no quedó ningún
+  // estado pegado del cálculo anterior (la función es pura, sin memoria).
+  const r = calcularEstadoRecepcion(
+    { horarios: horariosDosFranjas, swich: true, swichDesde: fecha(20, 1).getTime() },
+    fecha(20, 1),
+  );
+  assert.strictEqual(r.debeResetearSwich, false);
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.cerradoTemporalmente, true);
+});
+
+console.log('\nCaso exacto reportado (local 40508022): franja 20:00–23:50, cierre manual a las 21:30:');
+
+check('21:31 (1 minuto después del cierre): sigue cerrado', () => {
+  const swichDesde = fecha(21, 30).getTime();
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde }, fecha(21, 31));
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.debeResetearSwich, false);
+});
+
+check('22:00 (mitad de la franja): sigue cerrado', () => {
+  const swichDesde = fecha(21, 30).getTime();
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde }, fecha(22, 0));
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.debeResetearSwich, false);
+});
+
+check('23:49 (1 minuto antes del fin de la franja): sigue cerrado', () => {
+  const swichDesde = fecha(21, 30).getTime();
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde }, fecha(23, 49));
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.debeResetearSwich, false);
+});
+
+check('polling cada 60s durante toda la franja (20:01 a 23:49): nunca reabre', () => {
+  const swichDesde = fecha(21, 30).getTime();
+  for (const [hh, mm] of [[21, 31], [21, 45], [22, 30], [23, 0], [23, 49]]) {
+    const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true, swichDesde }, fecha(hh, mm));
+    assert.strictEqual(r.abierto, false, `no debería abrir a las ${hh}:${mm}`);
+    assert.strictEqual(r.debeResetearSwich, false, `no debería resetear a las ${hh}:${mm}`);
+  }
+});
+
+check('reinicio de Desktop dentro de la misma franja (sin memoria previa): sigue cerrado', () => {
+  const input = { horarios: horariosDosFranjas, swich: true, swichDesde: fecha(21, 30).getTime() };
+  const r1 = calcularEstadoRecepcion(input, fecha(22, 15));
+  const r2 = calcularEstadoRecepcion(input, fecha(22, 15)); // "reinicio": mismo input, sin estado en memoria
+  assert.deepStrictEqual(r1, r2);
+  assert.strictEqual(r1.abierto, false);
+});
+
+check('franja NUEVA y posterior al cierre (al otro día a las 13:00): ahí sí resetea y abre', () => {
+  const swichDesde = fecha(21, 30).getTime(); // cierre miércoles 21:30
+  const horariosConMañana = {
+    miercoles: horariosDosFranjas.miercoles,
+    jueves: [{ start: '13:00', end: '18:00' }],
+  };
+  const r = calcularEstadoRecepcion(
+    { horarios: horariosConMañana, swich: true, swichDesde },
+    new Date(2025, 0, 16, 13, 0), // jueves 13:00 > swichDesde (miércoles 21:30)
+  );
+  assert.strictEqual(r.debeResetearSwich, true);
+  assert.strictEqual(r.abierto, true);
 });
 
 check('reinicio de la app: el cálculo es puro y da el mismo resultado sin estado previo en memoria', () => {
@@ -164,6 +255,54 @@ check('al otro día, arranca de nuevo el turno de las 20:00 (jueves): resetea', 
   );
   assert.strictEqual(r.debeResetearSwich, true);
   assert.strictEqual(r.abierto, true);
+});
+
+console.log('\nmotivo (distingue cierre manual de cierre por horario, sin romper abierto/cerradoTemporalmente/debeResetearSwich):');
+
+check('swich=false, dentro de horario => motivo null (abierto)', () => {
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: false }, fecha(15, 0));
+  assert.strictEqual(r.motivo, null);
+});
+
+check('swich=false, FUERA de horario => motivo "horario"', () => {
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: false }, fecha(19, 0));
+  assert.strictEqual(r.motivo, 'horario');
+});
+
+check('swich=true, dentro de la misma franja de cierre => motivo "manual"', () => {
+  const r = calcularEstadoRecepcion(
+    { horarios: horariosDosFranjas, swich: true, swichDesde: fecha(14, 0).getTime() },
+    fecha(15, 0),
+  );
+  assert.strictEqual(r.motivo, 'manual');
+});
+
+check('swich=true con swichDesde inválido/ausente => motivo "manual" igual (sigue cerrado por el switch)', () => {
+  const r = calcularEstadoRecepcion({ horarios: horariosDosFranjas, swich: true }, fecha(15, 0));
+  assert.strictEqual(r.motivo, 'manual');
+});
+
+check('empieza franja nueva estando DENTRO de horario => resetea y motivo vuelve a null (abierto)', () => {
+  const r = calcularEstadoRecepcion(
+    { horarios: horariosDosFranjas, swich: true, swichDesde: fecha(14, 0).getTime() },
+    fecha(20, 0),
+  );
+  assert.strictEqual(r.debeResetearSwich, true);
+  assert.strictEqual(r.motivo, null);
+});
+
+check('empieza franja nueva pero ya terminó y seguimos FUERA de horario en ese instante => motivo "horario", no "manual"', () => {
+  // Cierre manual durante la 1ra franja (14:00). Para cuando se vuelve a
+  // chequear (23:51) ya arrancó Y terminó la 2da franja (20:00–23:50): el
+  // cierre manual quedó vencido (se resetea), pero a las 23:51 tampoco es
+  // horario de atención — lo que queda es "todavía no abrió", no "manual".
+  const r = calcularEstadoRecepcion(
+    { horarios: horariosDosFranjas, swich: true, swichDesde: fecha(14, 0).getTime() },
+    fecha(23, 51),
+  );
+  assert.strictEqual(r.debeResetearSwich, true);
+  assert.strictEqual(r.abierto, false);
+  assert.strictEqual(r.motivo, 'horario');
 });
 
 console.log(`\n${passed} pruebas OK`);

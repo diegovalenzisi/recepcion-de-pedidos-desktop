@@ -86,38 +86,71 @@ export function ultimoInicioDeFranjaMs(horarios, ahora = new Date()) {
 }
 
 /**
+ * `swichDesde` válido = un epoch ms real (no `null`/`undefined`/`NaN`/`0`/
+ * booleano). Es la guarda contra el bug de local 40508022: si `swich` llega
+ * en `true` pero `swichDesde` todavía no es un timestamp real —ya sea porque
+ * el snapshot de Firebase que trajo el cierre no incluyó (todavía) el campo
+ * compañero, o porque el dato es legacy/incompleto— NUNCA hay que tratarlo
+ * como "cerrado desde el epoch" (0): eso hace que CUALQUIER inicio de franja
+ * ya pasado (por ejemplo la franja del propio cierre) se vea como "franja
+ * nueva" y dispare una reapertura automática inmediata, sin haber pasado ni
+ * un minuto del cierre manual.
+ */
+const swichDesdeEsValido = (valor) => {
+  if (valor === null || valor === undefined || typeof valor === 'boolean') return false;
+  const numero = Number(valor);
+  return Number.isFinite(numero) && numero > 0;
+};
+
+/**
  * Decisión única de "¿Recepción está abierta?", combinando horario + el
  * cierre temporal. Reemplaza cualquier cálculo propio que hiciera cada
  * pantalla: una sola función, un solo criterio.
  *
  *   swich !== true             → sigue el horario, sin más.
  *   swich === true:
- *     · si NO empezó una franja nueva desde `swichDesde` → cerrado, tal cual.
- *     · si SÍ empezó una franja nueva desde `swichDesde` → el cierre temporal
- *       ya venció: se recalcula como recién llegado (abierto según horario
- *       AHORA) y se devuelve `debeResetearSwich: true` para que el caller
- *       persista `{ swich: false, swichDesde: null }` en Firebase.
+ *     · si `swichDesde` NO es un timestamp válido → cerrado, tal cual, SIN
+ *       resetear (ver `swichDesdeEsValido` arriba). Se espera al próximo
+ *       snapshot/chequeo, que puede traer el `swichDesde` real.
+ *     · si `swichDesde` es válido y NO empezó una franja nueva desde ahí →
+ *       cerrado, tal cual.
+ *     · si `swichDesde` es válido y SÍ empezó una franja nueva desde ahí →
+ *       el cierre temporal ya venció: se recalcula como recién llegado
+ *       (abierto según horario AHORA) y se devuelve `debeResetearSwich: true`
+ *       para que el caller persista `{ swich: false, swichDesde: null }` en
+ *       Firebase.
  *
- * `swichDesde` ausente/no numérico con `swich === true` se trata como 0
- * (cierre "de siempre"): se autocorrige apenas se detecte cualquier inicio de
- * franja pasado, en vez de quedar cerrado para siempre por falta del dato.
+ * Es intencional que un `swichDesde` inválido NUNCA se autocorrija solo (no
+ * hay ningún inicio de franja, pasado o futuro, que lo resetee): sin la
+ * fecha real de cierre no hay forma segura de saber si ya pasó una franja
+ * nueva desde entonces, así que la única salida es que llegue el dato bueno.
  *
- * @returns {{ abierto: boolean, cerradoTemporalmente: boolean, debeResetearSwich: boolean }}
+ * `motivo` distingue POR QUÉ está cerrado, para que la UI no diga "Cerrado" a
+ * secas cuando en realidad es un cierre manual temporal (swich=true): 'manual'
+ * cuando el cierre viene del switch de Recepción, 'horario' cuando es sólo que
+ * estamos fuera de la franja configurada, `null` cuando está abierto. Campo
+ * agregado sin tocar `abierto`/`cerradoTemporalmente`/`debeResetearSwich`
+ * (ya existentes): ningún caller viejo se rompe por no leerlo.
+ *
+ * @returns {{ abierto: boolean, cerradoTemporalmente: boolean, debeResetearSwich: boolean, motivo: 'manual'|'horario'|null }}
  */
 export function calcularEstadoRecepcion({ horarios, swich, swichDesde } = {}, ahora = new Date()) {
   const dentroDeHorario = estaDentroDeHorario(horarios, ahora);
 
   if (swich !== true) {
-    return { abierto: dentroDeHorario, cerradoTemporalmente: false, debeResetearSwich: false };
+    return { abierto: dentroDeHorario, cerradoTemporalmente: false, debeResetearSwich: false, motivo: dentroDeHorario ? null : 'horario' };
+  }
+
+  if (!swichDesdeEsValido(swichDesde)) {
+    return { abierto: false, cerradoTemporalmente: true, debeResetearSwich: false, motivo: 'manual' };
   }
 
   const ultimoInicio = ultimoInicioDeFranjaMs(horarios, ahora);
-  const desde = Number.isFinite(Number(swichDesde)) ? Number(swichDesde) : 0;
-  const empezoFranjaNueva = ultimoInicio !== null && ultimoInicio > desde;
+  const empezoFranjaNueva = ultimoInicio !== null && ultimoInicio > Number(swichDesde);
 
   if (empezoFranjaNueva) {
-    return { abierto: dentroDeHorario, cerradoTemporalmente: false, debeResetearSwich: true };
+    return { abierto: dentroDeHorario, cerradoTemporalmente: false, debeResetearSwich: true, motivo: dentroDeHorario ? null : 'horario' };
   }
 
-  return { abierto: false, cerradoTemporalmente: true, debeResetearSwich: false };
+  return { abierto: false, cerradoTemporalmente: true, debeResetearSwich: false, motivo: 'manual' };
 }
