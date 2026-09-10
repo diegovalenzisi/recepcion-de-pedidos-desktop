@@ -4,7 +4,6 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from '@/components/ui/button';
 import { Loader2, Save } from 'lucide-react';
 import PaymentMethodsSettings from '@/components/settings/PaymentMethodsSettings';
-import AdminPanel from './local/AdminPanel';
 import GeneralInfo from './local/GeneralInfo';
 import OperationalToggles from './local/OperationalToggles';
 import AppearanceSettings from './local/AppearanceSettings';
@@ -13,6 +12,7 @@ import AudioSettings from './local/AudioSettings';
 import DeliveryScreenTypeSelector from './local/DeliveryScreenTypeSelector';
 import WhatsAppSettings from './local/WhatsAppSettings';
 import MercadoPagoOAuthManager from './local/admin/MercadoPagoOAuthManager.jsx';
+import GridViewSettingsManager from './local/admin/GridViewSettingsManager.jsx';
 import { useAuth } from '@/hooks/useAuth';
 
 function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettings }) {
@@ -80,28 +80,22 @@ function LocalSettings({ settings, onSettingsChange, onSave, saving, applySettin
           {/* Ancho mínimo para que las columnas y los interruptores no se
               compriman; por debajo de esto aparece la barra horizontal. */}
           <CardContent className="p-8 space-y-8 min-w-[1100px]">
-            {user && user.usuario === 'DiegoL' && (
-              <AdminPanel
-                settings={settings}
-                onSettingsChange={onSettingsChange}
-                applySettings={applySettings}
-              />
-            )}
-            {/* Independiente del Panel de Administración (arriba, exclusivo de
-                DiegoL): esta sección se gatea por el permiso puntual
-                `configuracion_mercadopago` (src/config/permissions.js), que
-                cualquier admin le puede asignar al usuario "dueño" de un
-                comercio desde Usuarios sin darle el resto de AdminPanel.
+            {/* Gatea por el permiso puntual `configuracion_mercadopago`
+                (src/config/permissions.js), que cualquier admin le puede
+                asignar al usuario "dueño" de un comercio desde Usuarios.
                 DiegoL la ve igual, porque su usuario ya tiene todos los
-                permisos (getAllPermissions() en useAuth.jsx). */}
+                permisos (getAllPermissions() en useAuth.jsx). No es
+                exclusiva de DiegoL, así que no forma parte de la solapa
+                Administrador. */}
             {user && !!user.permissions?.configuracion_mercadopago && (
               <MercadoPagoOAuthManager />
             )}
             <GeneralInfo settings={settings} handleChange={handleChange} handleFontChange={handleFontChange} />
-            <DeliveryScreenTypeSelector 
+            <DeliveryScreenTypeSelector
               value={settings.deliveryViewMode || settings.deliveryScreenType}
               onChange={(val) => handleDirectChange('deliveryViewMode', val)}
             />
+            <GridViewSettingsManager />
             <OperationalToggles settings={settings} onSettingsChange={handleSwitchChange} />
             <AppearanceSettings settings={settings} onSettingsChange={handleDirectChange} />
             <PrintingSettings

@@ -24,7 +24,7 @@ const formatCurrency = (value) =>
   new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value || 0);
 
 /**
- * accountTotals (provisto por AdminPanel.jsx vía useCommissionBalance — misma fuente y
+ * accountTotals (provisto por AdminSettings.jsx vía useCommissionBalance — misma fuente y
  * mismo cálculo que el footer y el aviso al entrar: COMISIONES/REGISTRO − COMISIONES/PAGOS,
  * NO RESUMEN_CUENTA/TOTALES ni PAGOS_COMISIONES):
  *   totalCommission  — Total Comisión Acumulada (suma de comisionGenerada válida)

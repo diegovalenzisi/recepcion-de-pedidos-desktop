@@ -28,6 +28,19 @@ const adminUser = {
     permissions: getAllPermissions(),
 };
 
+/** Usuario admin único del sistema (DiegoL). Para gatear UI por identidad,
+ * no por permiso: `user.usuario === ADMIN_USERNAME`. */
+export const ADMIN_USERNAME = adminUser.usuario;
+
+/**
+ * Valida la clave de administrador contra la MISMA fuente de verdad que el
+ * login (`adminUser.contrasena`), sin duplicar el valor en otro archivo y sin
+ * ningún efecto de sesión/navegación — para re-confirmar identidad dentro de
+ * una pantalla (ej. la solapa Administrador) sin volver a iniciar sesión.
+ * Nunca loguea la clave ingresada ni la correcta.
+ */
+export const verifyAdminPassword = (password) => password === adminUser.contrasena;
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);

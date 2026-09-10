@@ -195,17 +195,20 @@ check('el escenario completo funciona con la contabilidad dormida', () => {
 });
 
 // ---------------------------------------------------------------------------
-// CONFIGURACIÓN DEL LÍMITE — panel de Administración (DiegoL).
+// CONFIGURACIÓN DEL LÍMITE — solapa Administrador (DiegoL).
 //
 // El límite se carga desde SalesPercentageManager, que vive dentro de
-// AdminPanel, que LocalSettings.jsx solo renderiza para el usuario DiegoL. Es
-// el mismo alcance que ya tienen el porcentaje de comisión y el registro de
-// pagos: quien puede cambiar cuánto se cobra también puede fijar el corte.
+// AdminSettings.jsx (la solapa "Administrador"), a la que SettingsPage.jsx
+// solo ofrece acceso si el usuario es DiegoL (ADMIN_USERNAME), y que además
+// exige re-confirmar la clave de administrador (verifyAdminPassword) antes de
+// mostrar cualquier contenido. Es el mismo alcance que ya tienen el
+// porcentaje de comisión y el registro de pagos: quien puede cambiar cuánto
+// se cobra también puede fijar el corte.
 // ---------------------------------------------------------------------------
 const settingsSrc = readFileSync(new URL('../settingsApi.js', import.meta.url), 'utf8');
 const formSrc = readFileSync(new URL('../../../components/settings/local/admin/SalesPercentageManager.jsx', import.meta.url), 'utf8');
-const localSettingsSrc = readFileSync(new URL('../../../components/settings/LocalSettings.jsx', import.meta.url), 'utf8');
-const adminPanelSrc = readFileSync(new URL('../../../components/settings/local/AdminPanel.jsx', import.meta.url), 'utf8');
+const settingsPageSrc = readFileSync(new URL('../../../pages/SettingsPage.jsx', import.meta.url), 'utf8');
+const adminSettingsSrc = readFileSync(new URL('../../../components/settings/AdminSettings.jsx', import.meta.url), 'utf8');
 
 check('1) DiegoL puede guardar el límite: existe el escritor y el formulario lo llama', () => {
   assert.match(settingsSrc, /export const saveLimiteCorte = async/, 'no existe el escritor');
@@ -240,11 +243,12 @@ check('4) al reabrir Configuración se relee el valor guardado', () => {
 });
 
 check('el campo vive donde SOLO entra DiegoL', () => {
-  assert.match(adminPanelSrc, /<SalesPercentageManager/, 'el formulario salió del panel Admin');
-  assert.match(localSettingsSrc, /user\.usuario === 'DiegoL'/, 'el panel Admin perdió su candado');
-  const iCandado = localSettingsSrc.indexOf("user.usuario === 'DiegoL'");
-  const iPanel = localSettingsSrc.indexOf('<AdminPanel');
-  assert.ok(iCandado > 0 && iPanel > iCandado, 'el AdminPanel quedó fuera del candado');
+  assert.match(adminSettingsSrc, /<SalesPercentageManager/, 'el formulario salió de Administrador');
+  assert.match(settingsPageSrc, /esDiegoL = user && user\.usuario === ADMIN_USERNAME/, 'la solapa Administrador perdió su candado por identidad');
+  const iCandado = settingsPageSrc.indexOf('esDiegoL = user && user.usuario === ADMIN_USERNAME');
+  const iTab = settingsPageSrc.indexOf('label="Administrador"');
+  assert.ok(iCandado > 0 && iTab > iCandado, 'la solapa Administrador quedó fuera del candado de identidad');
+  assert.match(adminSettingsSrc, /verifyAdminPassword/, 'Administrador perdió la re-confirmación de clave');
 });
 
 check('8) la pantalla de bloqueo NO tiene ningún mecanismo de pago', () => {

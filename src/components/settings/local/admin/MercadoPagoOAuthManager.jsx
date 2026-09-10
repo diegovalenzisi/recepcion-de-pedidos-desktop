@@ -139,9 +139,9 @@ const CuentaMercadoPagoSlot = ({ cuentaId, estado }) => {
   );
 };
 
-// Acceso: NO depende de AdminPanel.jsx (ese panel sigue siendo exclusivo de
-// `DiegoL`, el superadmin técnico). El que gatea esta sección es
-// LocalSettings.jsx, con el permiso puntual `configuracion_mercadopago`
+// Acceso: NO depende de la solapa Administrador / AdminSettings.jsx (esa
+// solapa sigue siendo exclusiva de `DiegoL`, el superadmin técnico). El que
+// gatea esta sección es LocalSettings.jsx, con el permiso puntual `configuracion_mercadopago`
 // (src/config/permissions.js) — el mismo mecanismo de permisos por ítem que
 // ya usa el resto de la app (ej. `cajas_gestionar_fondo`). Un admin le asigna
 // ese permiso al usuario "dueño" del comercio desde Usuarios, sin darle

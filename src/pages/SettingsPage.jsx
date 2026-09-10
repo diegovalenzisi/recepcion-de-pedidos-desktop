@@ -4,11 +4,13 @@ import { useToast } from '@/components/ui/use-toast';
 import { fetchSettings, saveSettings, fetchAudioSetting } from '@/lib/api/settingsApi.js';
 import { reloadPrintSettings } from '@/lib/print.js';
 import { DEFAULT_WHATSAPP_MESSAGE, DEFAULT_ASSIGN_DELIVERER_MESSAGE } from '@/lib/whatsapp/paymentMessage';
-import { Loader2, Building, Globe, MapPin } from 'lucide-react';
+import { Loader2, Building, Globe, MapPin, ShieldCheck } from 'lucide-react';
+import { useAuth, ADMIN_USERNAME } from '@/hooks/useAuth';
 
 const LocalSettings = React.lazy(() => import('@/components/settings/LocalSettings.jsx'));
 const WebSettings   = React.lazy(() => import('@/components/settings/WebSettings.jsx'));
 const MapsSettings  = React.lazy(() => import('@/components/settings/maps/MapsSettings.jsx'));
+const AdminSettings = React.lazy(() => import('@/components/settings/AdminSettings.jsx'));
 
 const SettingsTab = ({ to, icon: Icon, label }) => {
     const location = useLocation();
@@ -30,6 +32,8 @@ const SettingsTab = ({ to, icon: Icon, label }) => {
 
 function SettingsPage({ applySettings }) {
   const location = useLocation();
+  const { user } = useAuth();
+  const esDiegoL = user && user.usuario === ADMIN_USERNAME;
   const [settings, setSettings] = useState({
     razonSocial: '',
     nombreFantasia: '',
@@ -204,7 +208,8 @@ function SettingsPage({ applySettings }) {
   // muy anchos. Las otras dos pestañas (Configuración Web y Zonas de Delivery)
   // conservan exactamente el ancho que tenían.
   const enLocal = location.pathname.endsWith('/local') || location.pathname === '/configuracion';
-  const anchoPestana = enLocal ? 'w-[96vw] max-w-[1600px]' : 'max-w-6xl';
+  const enAdmin = location.pathname.endsWith('/admin');
+  const anchoPestana = (enLocal || enAdmin) ? 'w-[96vw] max-w-[1600px]' : 'max-w-6xl';
 
   return (
     <div className={`${anchoPestana} mx-auto h-full flex flex-col`}>
@@ -213,6 +218,12 @@ function SettingsPage({ applySettings }) {
                 <SettingsTab to="/configuracion/local" icon={Building} label="Configuración del Local" />
                 <SettingsTab to="/configuracion/web" icon={Globe} label="Configuración Web" />
                 <SettingsTab to="/configuracion/maps" icon={MapPin} label="Zonas de Delivery" />
+                {/* Solapa EXCLUSIVA de DiegoL: ni el link se renderiza para otro
+                    usuario (no solo el contenido) — así no queda ni la pestaña
+                    visible ni la ruta "descubrible" desde la navegación. */}
+                {esDiegoL && (
+                    <SettingsTab to="/configuracion/admin" icon={ShieldCheck} label="Administrador" />
+                )}
             </nav>
         </div>
 
@@ -247,6 +258,18 @@ function SettingsPage({ applySettings }) {
                         path="maps"
                         element={<MapsSettings />}
                     />
+                    {esDiegoL && (
+                        <Route
+                            path="admin"
+                            element={
+                                <AdminSettings
+                                    settings={settings}
+                                    onSettingsChange={setSettings}
+                                    applySettings={applySettings}
+                                />
+                            }
+                        />
+                    )}
                 </Routes>
             </Suspense>
         </div>

@@ -164,8 +164,8 @@ const SalesPercentageManager = () => {
       {/*
         LÍMITE DE CORTE. Tercera pieza de la MISMA configuración de comisión: el
         porcentaje genera la deuda, la alarma avisa y este monto bloquea. Va acá,
-        junto a los otros dos, dentro de AdminPanel — que solo se renderiza para
-        el usuario DiegoL (ver LocalSettings.jsx), igual que el porcentaje y el
+        junto a los otros dos, dentro de Administrador (AdminSettings.jsx) — que
+        solo se renderiza para el usuario DiegoL (ver SettingsPage.jsx), igual que el porcentaje y el
         registro de pagos de comisión.
 
         Escribe en CONFIGURACION/limiteCorte, el MISMO nodo que lee el corte al

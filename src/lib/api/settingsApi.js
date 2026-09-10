@@ -604,8 +604,8 @@ export const fetchAlarmaPagoVerificable = async () => {
  * se acaba de grabar acá.
  *
  * QUIÉN PUEDE LLAMARLA: el único llamador es SalesPercentageManager, que se
- * monta dentro de AdminPanel, y AdminPanel solo se renderiza para el usuario
- * DiegoL (ver LocalSettings.jsx). Es el mismo alcance que ya tienen el
+ * monta dentro de la solapa Administrador (AdminSettings.jsx), exclusiva del
+ * usuario DiegoL (ver SettingsPage.jsx). Es el mismo alcance que ya tienen el
  * porcentaje de comisión y el registro de pagos.
  */
 export const saveLimiteCorte = async (amount) => {
