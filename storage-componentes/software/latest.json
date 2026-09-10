@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.112",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.112%2FRecepcion-de-Pedidos-Setup-1.3.112.exe?alt=media",
-  "sha256": "4eb894b5566e64139c9855412efc18251cca98227b1c79c7f917beae14832936",
-  "size": 125258978,
+  "latest": "1.3.115",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.115%2FRecepcion-de-Pedidos-Setup-1.3.115.exe?alt=media",
+  "sha256": "37588edfa5b571db7137438da15d06c938d279f814e79f5309c7d93d13dadc0b",
+  "size": 125260521,
   "mandatory": false,
-  "releaseDate": "2026-09-09",
-  "notes": "Correccion del motor de facturacion AFIP: en instalaciones donde facturacion-runtime/node_modules ya estaba descargado pero facturacion/node_modules no resolvia (motores ESM que no encontraban dotenv, firebase-admin, moment, pdfkit, qrcode o soap), la app ahora crea y repara automaticamente, en cada arranque, el enlace compartido entre ambas carpetas. No requiere ninguna accion del usuario ni acceso remoto a la PC. No se toco ningun otro archivo de configuracion, certificado ni cuenta fiscal existente."
+  "releaseDate": "2026-09-10",
+  "notes": "Version 1.3.115. Reorganizacion de Configuracion: nueva solapa Administrador exclusiva de DiegoL (protegida por clave), que agrupa ID Local, Comisiones, App de Pedidos, Facturacion, Mercado Pago, Temas de Aplicacion e Imagen para Pedido de Prueba. No cambia rutas Firebase, handlers de guardado ni logica de negocio existente."
 }

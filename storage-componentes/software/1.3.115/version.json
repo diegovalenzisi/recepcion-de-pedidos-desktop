@@ -1,0 +1,7 @@
+{
+  "version": "1.3.115",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.115.exe",
+  "releaseDate": "2026-09-10",
+  "sha256": "37588edfa5b571db7137438da15d06c938d279f814e79f5309c7d93d13dadc0b",
+  "notes": "Reorganizacion de Configuracion: nueva solapa Administrador exclusiva de DiegoL (protegida por clave), que agrupa ID Local, Comisiones, App de Pedidos, Facturacion, Mercado Pago, Temas de Aplicacion e Imagen para Pedido de Prueba. No cambia rutas Firebase, handlers de guardado ni logica de negocio existente."
+}
