@@ -35,13 +35,13 @@ export const checkAndUpdatePromotionStockStatus = async () => {
         const articlesData = snapshot.val();
         const updates = {};
 
-        const hasDescuentaPorArticulo = Object.values(articlesData).some(
-            item => item.isPromo && item.stock?.descuentaPorArticulo === true
+        const hayAlgunaPromo = Object.values(articlesData).some(
+            item => item.isPromo && (item.promoItems?.length > 0 || item.promoDetails?.length > 0)
         );
 
         let materiaPrimaData = {};
         let productGroupsArray = [];
-        if (hasDescuentaPorArticulo) {
+        if (hayAlgunaPromo) {
             const mpSnap = await get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`));
             materiaPrimaData = mpSnap.val() || {};
             productGroupsArray = await fetchProductGroupsArray(db, LOCAL_ID);
@@ -53,24 +53,16 @@ export const checkAndUpdatePromotionStockStatus = async () => {
                 const promoItems = item.promoItems || item.promoDetails || [];
                 if (promoItems.length === 0) continue;
 
-                let hasOutOfStock = false;
-
-                if (item.stock?.descuentaPorArticulo === true) {
-                    // New mode: availability depends on the real components (fixed items
-                    // and product groups), resolving propio/heredado/receta chains.
-                    hasOutOfStock = !isPromoAvailable(item, articlesData, materiaPrimaData, productGroupsArray, 'delivery');
-                } else {
-                    // Legacy mode (unchanged): only checks each component's own stock.propio.
-                    for (const pItem of promoItems) {
-                        const targetId = pItem.codigo || pItem.id;
-                        const targetArt = articlesData[targetId];
-
-                        if (targetArt && targetArt.stock && targetArt.stock.propio === 0) {
-                            hasOutOfStock = true;
-                            break;
-                        }
-                    }
-                }
+                // Disponibilidad por componentes reales, SIEMPRE — no solo cuando
+                // `stock.descuentaPorArticulo === true`. Ese flag es de CÓMO se
+                // descuenta el stock al vender, no de disponibilidad; una promo
+                // armada con promoItems casi nunca tiene un `stock` propio
+                // significativo. El modo "legacy" que revisaba solo
+                // `targetArt.stock.propio === 0` por ítem ignoraba por completo los
+                // grupos de elección (un grupo no tiene `codigo`/`id` propio, así
+                // que `articlesData[targetId]` daba undefined y ese ítem nunca se
+                // evaluaba) — quedó eliminado.
+                const hasOutOfStock = !isPromoAvailable(item, articlesData, materiaPrimaData, productGroupsArray, 'delivery');
 
                 if (hasOutOfStock) {
                     if (item.activoDelivery !== false) {
@@ -174,7 +166,10 @@ export const getPromotionArticleStockStatus = async (promotionId) => {
         const articlesSnap = await get(articlesRef);
         const articlesData = articlesSnap.val() || {};
 
-        if (promoData.stock?.descuentaPorArticulo === true) {
+        // Disponibilidad por componentes reales, SIEMPRE (ver el mismo criterio
+        // en checkAndUpdatePromotionStockStatus más arriba: descuentaPorArticulo
+        // es un flag de descuento, no de disponibilidad).
+        {
             const mpSnap = await get(ref(db, `${LOCAL_ID}/MATERIA_PRIMA`));
             const materiaPrimaData = mpSnap.val() || {};
             const productGroupsArray = await fetchProductGroupsArray(db, LOCAL_ID);
@@ -182,8 +177,12 @@ export const getPromotionArticleStockStatus = async (promotionId) => {
             for (const pItem of promoItems) {
                 if (pItem.tipo === 'grupo') {
                     const optionIds = getGroupOptionIds(pItem, productGroupsArray);
-                    const available = optionIds.some(id => isArticleAvailable(id, articlesData, materiaPrimaData, 'delivery'));
-                    const groupInfo = { id: pItem.grupoId, nombre: pItem.nombre, stock: available ? 1 : 0 };
+                    const availableCount = optionIds.filter(id => isArticleAvailable(id, articlesData, materiaPrimaData, 'delivery')).length;
+                    // "Elegí N" necesita al menos N opciones disponibles — no alcanza
+                    // con que haya una sola si el grupo exige más de una unidad.
+                    const minRequired = (pItem.minSeleccion > 0) ? pItem.minSeleccion : 1;
+                    const available = availableCount >= minRequired;
+                    const groupInfo = { id: pItem.grupoId, nombre: pItem.nombre, stock: availableCount };
                     result.allArticles.push(groupInfo);
                     if (!available) {
                         result.hasOutOfStock = true;
@@ -198,26 +197,6 @@ export const getPromotionArticleStockStatus = async (promotionId) => {
                     const articleInfo = { id: targetId, nombre: targetArt.nombre, stock: available ? 1 : 0 };
                     result.allArticles.push(articleInfo);
                     if (!available) {
-                        result.hasOutOfStock = true;
-                        result.outOfStockArticles.push(articleInfo);
-                    }
-                }
-            }
-        } else {
-            for (const pItem of promoItems) {
-                const targetId = pItem.codigo || pItem.id;
-                const targetArt = articlesData[targetId];
-
-                if (targetArt) {
-                    const articleInfo = {
-                        id: targetId,
-                        nombre: targetArt.nombre,
-                        stock: targetArt.stock?.propio || 0
-                    };
-
-                    result.allArticles.push(articleInfo);
-
-                    if (articleInfo.stock === 0) {
                         result.hasOutOfStock = true;
                         result.outOfStockArticles.push(articleInfo);
                     }

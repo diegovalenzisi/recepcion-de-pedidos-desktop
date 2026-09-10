@@ -321,6 +321,90 @@ check('promoción por artículos reales: usa la misma regla de receta', () => {
 });
 
 // ---------------------------------------------------------------------------
+// GRUPOS DE ELECCIÓN — la regla es "alcanzan las opciones necesarias" (some /
+// cantidad mínima), NUNCA "todas las opciones del grupo deben tener stock"
+// (every). Caso real que motivó esto: local 38827976, promo "1/4 KILO +
+// FRAMBUESAS A ELECCION", grupo "GIO" (4 variedades, grupoId real "1GP").
+// Las pruebas son genéricas — ni el local ni los nombres de producto importan
+// para la regla en sí.
+console.log('\nGrupos de elección de una promo (some, no every):');
+
+const grupoGIO = [{ id: '1GP', articulos: ['GIO-A', 'GIO-B', 'GIO-C', 'GIO-D'] }];
+
+const promoConGrupoGIO = (stocks, { minSeleccion = 1, maxSeleccion = 1, extraFixed } = {}) => {
+  const articulos = {
+    'GIO-A': { nombre: 'GIO A', activoMostrador: true, activoDelivery: true, stock: { propio: stocks[0], stockType: 'propio' } },
+    'GIO-B': { nombre: 'GIO B', activoMostrador: true, activoDelivery: true, stock: { propio: stocks[1], stockType: 'propio' } },
+    'GIO-C': { nombre: 'GIO C', activoMostrador: true, activoDelivery: true, stock: { propio: stocks[2], stockType: 'propio' } },
+    'GIO-D': { nombre: 'GIO D', activoMostrador: true, activoDelivery: true, stock: { propio: stocks[3], stockType: 'propio' } },
+  };
+  const promoItems = [{ tipo: 'grupo', grupoId: '1GP', nombre: 'GIO a elección', minSeleccion, maxSeleccion }];
+  if (extraFixed) {
+    articulos['BASE'] = extraFixed;
+    promoItems.unshift({ codigo: 'BASE', cantidad: 1, nombre: 'Base obligatoria' });
+  }
+  articulos['PROMO'] = {
+    nombre: 'Promo con grupo', isPromo: true, activoMostrador: true, activoDelivery: true,
+    promoItems,
+  };
+  return articulos;
+};
+
+check('4 de 4 disponibles -> promo disponible', () => {
+  const articulos = promoConGrupoGIO([5, 3, 7, 1]);
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('3 de 4 disponibles (uno en 0) -> promo SIGUE disponible', () => {
+  const articulos = promoConGrupoGIO([5, 0, 7, 1]);
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('1 de 4 disponibles (tres en 0) -> promo SIGUE disponible', () => {
+  const articulos = promoConGrupoGIO([0, 0, 7, 0]);
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('0 de 4 disponibles -> promo BLOQUEADA (recién ahí, no antes)', () => {
+  const articulos = promoConGrupoGIO([0, 0, 0, 0]);
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), false);
+});
+
+check('componente obligatorio individual (no de grupo) sin stock -> BLOQUEADA aunque el grupo esté completo', () => {
+  const sinStockFijo = { nombre: 'Base', activoMostrador: true, activoDelivery: true, stock: { propio: 0, stockType: 'propio' } };
+  const articulos = promoConGrupoGIO([5, 3, 7, 1], { extraFixed: sinStockFijo });
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), false);
+});
+
+check('componente obligatorio individual CON stock + grupo con alguna opción -> disponible', () => {
+  const conStockFijo = { nombre: 'Base', activoMostrador: true, activoDelivery: true, stock: { propio: 2, stockType: 'propio' } };
+  const articulos = promoConGrupoGIO([0, 0, 1, 0], { extraFixed: conStockFijo });
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('grupo "elegí 2": con solo 1 disponible de 4 -> BLOQUEADA (no alcanza el mínimo)', () => {
+  const articulos = promoConGrupoGIO([5, 0, 0, 0], { minSeleccion: 2, maxSeleccion: 2 });
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), false);
+});
+
+check('grupo "elegí 2": con exactamente 2 disponibles de 4 -> disponible', () => {
+  const articulos = promoConGrupoGIO([5, 3, 0, 0], { minSeleccion: 2, maxSeleccion: 2 });
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('grupo "elegí 2": con 3 disponibles de 4 (de sobra) -> disponible', () => {
+  const articulos = promoConGrupoGIO([5, 3, 7, 0], { minSeleccion: 2, maxSeleccion: 2 });
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+check('reponer stock (0 -> 1) en la opción que faltaba: la promo vuelve a estar disponible sin tocar su configuración', () => {
+  const articulos = promoConGrupoGIO([0, 0, 0, 0]);
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), false);
+  articulos['GIO-C'].stock.propio = 1;
+  assert.strictEqual(isPromoAvailable(articulos['PROMO'], articulos, {}, grupoGIO, 'counter'), true);
+});
+
+// ---------------------------------------------------------------------------
 console.log('\nApagado automático de Delivery: ahora mira cantidades, no "> 0":');
 
 check('la receta pide 5 y hay 4 → la materia prima BLOQUEA (antes no)', () => {

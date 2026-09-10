@@ -195,11 +195,19 @@ export const usePromo = ({ allArticles, addArticleToOrder, allProductGroups, ver
       // hay nada" y vaciar el grupo cancelaría la promo por error.
       {
         const disponibles = opcionesDisponiblesDeGrupo(promoItem, allProductGroups, allArticles, availableIds);
-        if (disponibles.length > 0) {
-          options = disponibles;
-        } else if (availableIds.size > 0) {
-          // Ninguna opción del grupo se puede vender: la promo no se puede armar.
-          console.warn('[PROMO] grupo sin opciones disponibles:', promoItem.grupoId, promoItem.nombre);
+        if (disponibles.length > 0) options = disponibles;
+
+        // Regla: NO es "todas las opciones deben tener stock" (every), es
+        // "alcanzan las disponibles para completar la elección" (some /
+        // cantidad mínima) — 1 para selección simple, minSeleccion para un
+        // grupo "elegí N". Solo bloquea si el catálogo YA verificó
+        // (availableIds.size > 0) y ni con eso se llega al mínimo.
+        const minRequerido = (promoItem.minSeleccion > 0) ? promoItem.minSeleccion : 1;
+        if (availableIds.size > 0 && options.length < minRequerido) {
+          console.warn(
+            `[PROMO] grupo con ${options.length} opción(es) disponible(s), menos que el mínimo requerido (${minRequerido}):`,
+            promoItem.grupoId, promoItem.nombre,
+          );
           hasEmptyGroup = true;
         }
       }
