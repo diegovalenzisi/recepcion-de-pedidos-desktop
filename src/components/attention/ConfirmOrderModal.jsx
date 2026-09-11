@@ -30,7 +30,8 @@ function ConfirmOrderModal({
   orderData,
   allowedPaymentMethods = [],
   currentShift,
-  settings
+  settings,
+  isCounterMode = false
 }) {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -272,6 +273,23 @@ function ConfirmOrderModal({
       return;
     }
 
+    // Mostrador + Efectivo: "Paga con" (montoAbonado) es obligatorio y debe
+    // alcanzar el total. Solo aplica a una venta de Mostrador nueva (no a
+    // una seña de pedido futuro, no a un descuento especial que ya puso el
+    // total en $0, y no a ningún otro medio de pago ni a Delivery).
+    if (!isFutureOrder && isCounterMode && !specialDiscountType
+        && payments.length > 0 && payments[0].method === 'Efectivo') {
+      const monto = payments[0].montoAbonado;
+      if (monto === undefined || monto === null || monto === '' || isNaN(Number(monto))) {
+        toast({ variant: "destructive", title: "Falta el monto abonado", description: "Ingresá con cuánto paga el cliente (\"Paga con\") para poder confirmar." });
+        return;
+      }
+      if (Number(monto) < total) {
+        toast({ variant: "destructive", title: "Monto insuficiente", description: `"Paga con" (${formatCurrency(Number(monto))}) es menor al total a pagar (${formatCurrency(total)}).` });
+        return;
+      }
+    }
+
     if (isFutureOrder && depositAmount && parseFloat(depositAmount) > total) {
        toast({ variant: "destructive", title: "Seña Inválida", description: "La seña no puede ser mayor al total." });
        return;
@@ -415,14 +433,29 @@ function ConfirmOrderModal({
     setIsSaving(false);
   };
 
-  const isConfirmDisabled = isSaving || (!isFutureOrder && payments.length === 0 && !specialDiscountType);
   const isEfectivoSelected = isFutureOrder ? depositMethod === 'Efectivo' : (payments.length > 0 && payments[0].method === 'Efectivo');
+
+  // Mismo criterio que la validación de handleConfirm: en Mostrador+Efectivo
+  // (venta nueva, sin descuento especial) el botón queda deshabilitado hasta
+  // que "Paga con" sea un número válido y alcance el total. Ver el bloque
+  // equivalente en handleConfirm para el mensaje claro si de todos modos se
+  // intenta confirmar (ej. Enter).
+  const faltaMontoAbonadoMostrador = !isFutureOrder && isCounterMode && !specialDiscountType
+    && payments.length > 0 && payments[0].method === 'Efectivo'
+    && (() => {
+      const monto = payments[0].montoAbonado;
+      return monto === undefined || monto === null || monto === '' || isNaN(Number(monto)) || Number(monto) < total;
+    })();
+
+  const isConfirmDisabled = isSaving
+    || (!isFutureOrder && payments.length === 0 && !specialDiscountType)
+    || faltaMontoAbonadoMostrador;
 
   return (
     <>
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] w-[95vw] h-[85vh] p-0 flex flex-col overflow-hidden bg-white sm:rounded-xl">
-        <DialogHeader className="px-6 py-4 border-b shrink-0 bg-white relative">
+      <DialogContent className="max-w-[95vw] w-[95vw] h-[92vh] p-0 flex flex-col overflow-hidden bg-white sm:rounded-xl">
+        <DialogHeader className="px-6 py-3 border-b shrink-0 bg-white relative">
           <DialogTitle className="text-xl font-bold text-slate-800 flex items-center pr-16">
              {isEditingClientData ? <Edit className="mr-2 h-5 w-5 text-primary" /> : <Wallet className="mr-2 h-5 w-5 text-primary" />}
              {isEditingClientData ? `Editando Pedido #${orderData?.id}` : 'Finalizar Pedido'}
@@ -433,11 +466,16 @@ function ConfirmOrderModal({
              </div>
           )}
         </DialogHeader>
-        
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full">
+
+        {/* overflow-y-auto queda como red de seguridad (ej. Emitir Factura +
+            RUT + Envío con entrecalles, todo expandido a la vez), pero con
+            h-[92vh] + paddings/gaps más compactos el flujo normal de Mostrador
+            (Efectivo, Retiro, sin factura) entra completo en 1920x1080 sin
+            necesitar scroll. */}
+        <div className="flex-1 overflow-y-auto p-5 bg-slate-50/50">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
             {/* LEFT COLUMN: Client Data (Takes 7/12 width on large screens) */}
-            <div className="lg:col-span-7 flex flex-col h-full space-y-4">
+            <div className="lg:col-span-7 flex flex-col h-full space-y-3">
                <ClientDataSection
                   customerPhone={customerPhone}
                   setCustomerPhone={setCustomerPhone}
@@ -491,7 +529,7 @@ function ConfirmOrderModal({
             </div>
             
             {/* RIGHT COLUMN: Payment Data (Takes 5/12 width on large screens) */}
-            <div className="lg:col-span-5 flex flex-col space-y-4">
+            <div className="lg:col-span-5 flex flex-col space-y-3">
                <div className="p-3 bg-white border rounded-lg shadow-sm">
                   <Label htmlFor="deliveryDate" className="mb-2 block font-semibold text-slate-700 flex items-center gap-2">
                       <CalendarIcon className="w-4 h-4"/> Fecha de Entrega / Caja
@@ -563,6 +601,7 @@ function ConfirmOrderModal({
                     specialDiscountType={specialDiscountType}
                     handleSpecialDiscountChange={handleSpecialDiscountChange}
                     responsibleEmployee={responsibleEmployee}
+                    isCounterMode={isCounterMode}
                     allowedPaymentMethods={allowedPaymentMethods}
                     formatCurrency={formatCurrency}
                   />
@@ -597,7 +636,7 @@ function ConfirmOrderModal({
           </div>
         </div>
         
-        <DialogFooter className="px-6 py-4 border-t shrink-0 bg-gray-50 flex items-center justify-between sm:justify-end gap-3">
+        <DialogFooter className="px-6 py-3 border-t shrink-0 bg-gray-50 flex items-center justify-between sm:justify-end gap-3">
           {isEditingClientData && orderData?.id && (
             <Button 
               type="button" 
