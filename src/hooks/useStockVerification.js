@@ -77,9 +77,25 @@ export const useStockVerification = (articles = [], context = 'delivery', isOpen
             // artículo ausente del snapshot se resolvería como "no existe" → oculto.
             const catalogo = { ...Object.fromEntries(list.map(a => [a.id, a])), ...realTimeArticles };
 
-            const filtered = list.filter(article => {
-                const rtArticle = catalogo[article.id] || article;
-
+            // IMPORTANTE: el elemento que queda en `verifiedArticles` es el
+            // objeto FRESCO (`rtArticle`, fusionado con el snapshot recién
+            // leído), no el `article` original de `list`/`allArticles` — que en
+            // NewOrderModal.jsx se fetchea UNA sola vez por sesión (el modal
+            // nunca se desmonta, solo cambia `isOpen`) y nunca se vuelve a
+            // pedir. Antes se devolvía `article` tal cual: la DECISIÓN de
+            // incluir o no ya usaba datos frescos (`catalogo`/`rtArticle`),
+            // pero el objeto devuelto quedaba con nombre/precio/departamento/
+            // flags de venta tal como estaban en el primer fetch de la
+            // sesión. Eso nunca se notaba en activo/activoDelivery/
+            // activoMostrador (la inclusión ya dependía de la versión fresca,
+            // así que un apagado manual sí sacaba el artículo de la grilla),
+            // pero sí rompía cualquier filtro de VISUALIZACIÓN que mirara un
+            // campo propio del artículo ya incluido — como
+            // esArticuloSoloParaPromocion en NewOrderModal.jsx: si alguien
+            // desactivaba los dos medios de venta individual DESPUÉS de que
+            // la sesión ya hubiera cargado el catálogo, el artículo seguía
+            // viéndose como vendible suelto hasta reiniciar la app.
+            const filtered = list.map(article => ({ ...article, ...(catalogo[article.id] || {}) })).filter(rtArticle => {
                 // Cualquier promo con promoItems se evalúa por sus componentes reales:
                 // NO por "algún artículo obligatorio se agotó" (every) sino por
                 // "cada ítem obligatorio disponible Y cada grupo con al menos las
@@ -100,7 +116,7 @@ export const useStockVerification = (articles = [], context = 'delivery', isOpen
 
                 // Regla ÚNICA: activo manual del canal + poder producir 1 unidad
                 // (stock propio, heredado o receta con las cantidades reales).
-                return isArticleAvailable(article.id, catalogo, materiaPrimaData, context);
+                return isArticleAvailable(rtArticle.id, catalogo, materiaPrimaData, context);
             });
 
             // 4. Extra safety check against real-time OOS arrays from useStockStatus hook

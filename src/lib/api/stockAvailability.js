@@ -44,6 +44,30 @@ const activoEnCanal = (nodo, context) => (
 );
 
 /**
+ * ¿Este artículo es SOLO PARA PROMOCIÓN — auxiliar interno que nunca se vende
+ * suelto? Regla: permiteVentaEfectivo=false Y permiteVentaElectronica=false,
+ * las DOS explícitamente en `false` (no "ausente": un artículo sin estos
+ * campos nunca es auxiliar, es el comportamiento de siempre). No depende del
+ * precio ($0 no es el criterio) ni de activo/activoDelivery/activoMostrador:
+ * un auxiliar puede y debe seguir activo en ambos canales para que las
+ * promos/grupos que lo usan sigan funcionando.
+ *
+ * ÚNICO uso correcto: excluirlo de un catálogo de venta INDIVIDUAL (Mostrador,
+ * Delivery, DLV Pedidos). JAMÁS debe llamarse desde `isArticleAvailable` ni
+ * `isPromoAvailable`: la disponibilidad de un artículo como COMPONENTE de una
+ * promo o de un grupo de elección depende solo de
+ * activo/activoDelivery/activoMostrador + stock/receta — nunca de estos dos
+ * flags (ver guarda en articuloAuxiliarPromo.test.js).
+ *
+ * Caso real que motivó esto: local 57641732 (Viticos), artículo 23A ("1/4
+ * promo", $0) — visible a mano en Mostrador/Delivery pese a tener ambos
+ * medios de venta individual deshabilitados.
+ */
+export const esArticuloSoloParaPromocion = (articulo) => (
+    !!articulo && articulo.permiteVentaEfectivo === false && articulo.permiteVentaElectronica === false
+);
+
+/**
  * ¿La receta del artículo tiene una referencia circular (A usa B, B usa A,
  * directa o transitivamente)?
  *
