@@ -438,7 +438,21 @@ function OptionalSelectionModal({
     finalSelection.selectedOptionals = selectedWithDetails;
     finalSelection.reorderedOptionals = reorderedOptionals;
     onConfirm(finalSelection);
-    if (!isPromoItem || promoItemIndex >= promoTotalItems - 1) {
+    // Para un ítem de promo (incluido el ÚLTIMO) el cierre del modal NO se
+    // dispara acá: lo hace el `useEffect` de NewOrderModal.jsx que mira
+    // `promoConfig.isFinalizing` vía `setIsOptionalModalOpen(false)` directo
+    // (sin pasar por `onOpenChange`). Antes, para el último ítem, también se
+    // llamaba a `onOpenChange(false)` AQUÍ, inmediatamente después de
+    // `onConfirm(...)` — pero `onConfirm` (handleConfirmOptionals →
+    // handlePromoItemConfigured) solo AGENDA el `setPromoConfig({
+    // isFinalizing: true })`; React no lo aplica hasta el próximo render. La
+    // llamada a `onOpenChange(false)` corría en el MISMO tick, así que
+    // `handleOptionalModalClose` todavía veía el `promoConfig` VIEJO
+    // (isFinalizing todavía en false) y disparaba el toast de "Configuración
+    // de promo cancelada" aunque la promo se hubiera confirmado con éxito.
+    // Para un artículo NORMAL (no promo) no existe ese efecto — ahí sigue
+    // siendo este el único lugar que cierra el modal.
+    if (!isPromoItem) {
       onOpenChange(false);
     }
   };

@@ -33,6 +33,7 @@ import { validarStockDeCarrito, MENSAJE_STOCK_NO_VERIFICABLE } from '@/lib/api/v
 import { usePromotionStockAutomation } from '@/hooks/usePromotionStockAutomation';
 import { filtrarDepartamentosVisiblesEnMostrador } from '@/lib/api/departamentosCanonicos';
 import { resolverMediosDePago } from '@/lib/api/mediosDePagoMostrador';
+import { esArticuloSoloParaPromocion } from '@/lib/api/stockAvailability';
 
 function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false, orderToEdit = null, context = 'delivery', isCounterMode = false, currentShift, settings }) {
   const [departments, setDepartments] = useState([]);
@@ -192,16 +193,14 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
   };
   
   const articlesByDept = useMemo(() => {
-    // Artículo AUXILIAR de promoción: permiteVentaEfectivo=false Y
-    // permiteVentaElectronica=false (las DOS, explícitamente — no "ausente").
-    // No se lista como artículo individual en ningún canal, pero sigue
-    // disponible como componente de cualquier promo o grupo que lo use:
-    // por eso este filtro se aplica SOLO a la grilla visible (articlesByDept),
-    // nunca a `verifiedArticles` en sí, que usePromo.js reutiliza para decidir
-    // qué opciones de un GRUPO están disponibles dentro de una promoción.
-    const individualmenteVisibles = verifiedArticles.filter((a) => (
-      !(a.permiteVentaEfectivo === false && a.permiteVentaElectronica === false)
-    ));
+    // Artículo auxiliar de promoción (ver esArticuloSoloParaPromocion,
+    // stockAvailability.js): no se lista como artículo individual en ningún
+    // canal, pero sigue disponible como componente de cualquier promo o grupo
+    // que lo use. Este filtro se aplica SOLO a la grilla visible
+    // (articlesByDept), nunca a `verifiedArticles` en sí, que usePromo.js
+    // reutiliza para decidir qué opciones de un GRUPO están disponibles
+    // dentro de una promoción.
+    const individualmenteVisibles = verifiedArticles.filter((a) => !esArticuloSoloParaPromocion(a));
 
     const sortedArticles = [...individualmenteVisibles].sort((a, b) => {
       const orderA = context === 'delivery' ? a.ordenWeb : a.ordenLocal;
@@ -248,14 +247,31 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
 
 
   useEffect(() => {
-    if (promoConfig.isConfiguring && promoConfig.currentIndex < promoConfig.itemsToConfigure.length) {
+    // `promoConfig.isFinalizing` es la señal de ÉXITO: usePromo.js
+    // (handlePromoItemConfigured) la pone en `true` EXCLUSIVAMENTE cuando ya
+    // confirmó el ÚLTIMO ítem, ya armó la promo final y ya la agregó al
+    // pedido (addArticleToOrder) — nunca antes. Se revisa ANTES que "¿hay
+    // otro ítem para configurar?": al terminar el último ítem,
+    // `currentIndex` queda en su valor anterior (handlePromoItemConfigured
+    // no lo incrementa en ese caso, no hace falta), así que
+    // `currentIndex < itemsToConfigure.length` TODAVÍA es cierto — si se
+    // revisaba primero, reabría el modal con el MISMO artículo en vez de
+    // cerrarlo (la promo quedaba agregada bien, pero "Finalizar Promo" no
+    // parecía hacer nada). Este cierre es puramente programático: nunca
+    // pasa por onOpenChange/handleOptionalModalClose, así que nunca puede
+    // disparar el toast de "Configuración de promo cancelada". Se resetea
+    // promoConfig acá (no en handleOptionalModalClose) para que el próximo
+    // artículo/promo que se abra no herede `isConfiguring`/`isFinalizing`
+    // viejos.
+    if (promoConfig.isFinalizing) {
+      setIsOptionalModalOpen(false);
+      resetPromoConfig();
+    } else if (promoConfig.isConfiguring && promoConfig.currentIndex < promoConfig.itemsToConfigure.length) {
       const itemToConfigure = promoConfig.itemsToConfigure[promoConfig.currentIndex];
       setArticleForSelection(itemToConfigure);
       setIsOptionalModalOpen(true);
-    } else if (promoConfig.isFinalizing) {
-        setIsOptionalModalOpen(false);
     }
-  }, [promoConfig]);
+  }, [promoConfig, resetPromoConfig]);
 
   const handleArticleClick = useCallback((article) => {
     if (article.isPromo) {
@@ -672,6 +688,7 @@ function NewOrderModal({ isOpen, onOpenChange, onOrderCreated, isEditing = false
         allowedPaymentMethods={allowedPaymentMethods}
         currentShift={currentShift}
         settings={settings}
+        isCounterMode={isCounterMode}
       />
     </>
   );
