@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { extractOrderDataForWhatsApp } from '@/lib/api/ordersApi';
 import { generateEnDeliveryWhatsAppMessage } from '@/lib/whatsapp/deliveryMessageFormatter';
 import { openWhatsAppWithMessage } from '@/lib/whatsapp/whatsappHandler';
+import { markWaSent } from '@/lib/whatsapp/waTracker';
 
 export default function SelectDeliveryPersonModal({ isOpen, onConfirm, onCancel, order }) {
   const [deliverers, setDeliverers] = useState([]);
@@ -58,7 +59,16 @@ export default function SelectDeliveryPersonModal({ isOpen, onConfirm, onCancel,
       
       if (waData && waData.clientPhone) {
         toast({ title: "WhatsApp", description: "Preparando mensaje de envío..." });
-        
+
+        // Marcar ANTES de armar el mensaje (no después): ver el mismo
+        // comentario en AssignDelivererModal.jsx. Acá además evita otra
+        // carrera: onConfirm() (más abajo) es lo que realmente pasa el
+        // pedido a EN DELIVERY, y el hook automático (useDeliveryStatusWhatsApp)
+        // reacciona a ESE cambio — marcar antes de generar el mensaje
+        // garantiza que ya esté marcado para cuando onConfirm() dispare esa
+        // transición.
+        markWaSent(order.id);
+
         // Pass deliverer explicitly as second parameter to ensure name is included
         const msg = await generateEnDeliveryWhatsAppMessage(waData, deliverer);
         openWhatsAppWithMessage(waData.clientPhone, msg, settings?.whatsappPreference);

@@ -11,6 +11,7 @@ import { extractOrderDataForWhatsApp } from '@/lib/api/ordersApi';
 import { generateEnDeliveryWhatsAppMessage } from '@/lib/whatsapp/deliveryMessageFormatter';
 import { openWhatsAppWithMessage } from '@/lib/whatsapp/whatsappHandler';
 import { fetchSettings } from '@/lib/api/settingsApi';
+import { markWaSent } from '@/lib/whatsapp/waTracker';
 
 export default function QRDelivererAssignmentFlow({ isOpen, onClose, currentShift, optimisticUpdate, initialDeliverer, onChangeDeliverer }) {
   const [assignedDeliverer, setAssignedDeliverer] = useState(null);
@@ -42,6 +43,16 @@ export default function QRDelivererAssignmentFlow({ isOpen, onClose, currentShif
         });
 
         setScannerState('opening_whatsapp');
+
+        // Marcar YA, antes del setTimeout de abajo: assignOrder() (arriba) ya
+        // escribió el pedido como EN DELIVERY, que es lo que el hook automático
+        // (useDeliveryStatusWhatsApp) está escuchando. El setTimeout de 1000ms
+        // que sigue es pura espera de UI (mostrar la animación "abriendo
+        // WhatsApp...") — sin esta marca, ese segundo entero le daba tiempo de
+        // sobra al hook automático para disparar su propio envío antes de que
+        // este flujo llegara a generar su mensaje, duplicando el texto en
+        // WhatsApp (mismo bug que en AssignDelivererModal.jsx).
+        markWaSent(result.order.id);
 
         // Trigger explicit EN DELIVERY WhatsApp message with deliverer name
         setTimeout(async () => {

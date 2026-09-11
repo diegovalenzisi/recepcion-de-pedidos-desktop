@@ -46,10 +46,23 @@ function AssignDelivererModal({ isOpen, onOpenChange, deliverers, onAssign, orde
         
         if (waData && waData.clientPhone) {
           toast({ title: "WhatsApp", description: "Preparando mensaje de envío..." });
-          
+
+          // Marcar ANTES de armar el mensaje, no después: generateEnDeliveryWhatsAppMessage
+          // hace varias lecturas async a Firebase (plantilla, nombre de repartidor) y puede
+          // tardar varios cientos de ms. El cambio de estado a "EN DELIVERY" que ya hizo
+          // onAssign() arriba es justo lo que useDeliveryStatusWhatsApp.js (el hook
+          // automático) está escuchando — si marcábamos recién después de ese await, el hook
+          // automático podía ver el pedido como EN DELIVERY, encontrar que todavía NO estaba
+          // marcado como enviado, y disparar su propio envío primero. WhatsApp recibe dos
+          // aperturas con el mismo texto y las concatena en el cuadro de redacción, todavía
+          // sin enviar — el "mensaje duplicado" reportado. Este punto (justo después de
+          // onAssign(), sin ningún await entremedio) es el lugar más temprano posible donde ya
+          // se sabe con certeza que se va a enviar, así que no puede haber una carrera: nada
+          // le cede el control al hook automático entre onAssign() y esta marca.
+          markWaSent(order.id);
+
           // Pass deliverer explicitly as second parameter to ensure name is included
           const msg = await generateEnDeliveryWhatsAppMessage(waData, deliverer);
-          markWaSent(order.id);
           openWhatsAppWithMessage(waData.clientPhone, msg, waPreference);
         } else {
           toast({ variant: "destructive", title: "Sin teléfono", description: "El pedido no tiene teléfono registrado para WhatsApp." });
