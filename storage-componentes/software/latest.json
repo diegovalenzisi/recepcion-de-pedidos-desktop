@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.120",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.120%2FRecepcion-de-Pedidos-Setup-1.3.120.exe?alt=media",
-  "sha256": "ec46082cd8703e5f56854877e8570f113fc4de759a0e6e33e7d34b8c12de6a3b",
-  "size": 125262402,
+  "latest": "1.3.121",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.121%2FRecepcion-de-Pedidos-Setup-1.3.121.exe?alt=media",
+  "sha256": "55f406bae943cd1760afb6cb0083c7c83da1b70e00df746fdd9fd05d8749f13b",
+  "size": 125258894,
   "mandatory": false,
-  "releaseDate": "2026-09-11",
-  "notes": "Version 1.3.120. WhatsApp duplicado al asignar repartidor corregido. Falso toast de cancelacion de promo y Finalizar Promo que no respondia en el ultimo articulo, corregidos. Finalizar Pedido reorganizado para 1920x1080 sin scroll, con Paga con obligatorio en Mostrador+Efectivo y calculo de vuelto. Articulo auxiliar de promocion ya no se escapa del catalogo por staleness."
+  "releaseDate": "2026-09-12",
+  "notes": "Version 1.3.121. Ajuste horizontal independiente para el ticket fiscal (printFiscalHorizontalOffset), separado del de comandas."
 }

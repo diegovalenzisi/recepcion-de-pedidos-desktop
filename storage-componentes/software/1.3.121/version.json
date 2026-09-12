@@ -1,0 +1,7 @@
+{
+  "version": "1.3.121",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.121.exe",
+  "releaseDate": "2026-09-12",
+  "sha256": "55f406bae943cd1760afb6cb0083c7c83da1b70e00df746fdd9fd05d8749f13b",
+  "notes": "Ajuste horizontal independiente para el ticket fiscal (printFiscalHorizontalOffset), separado del de comandas."
+}
