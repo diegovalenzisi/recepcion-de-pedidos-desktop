@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.122",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.122%2FRecepcion-de-Pedidos-Setup-1.3.122.exe?alt=media",
-  "sha256": "bd1b257233b4e13d84b957b22244e85db72a34c571d05b566504588f44820f32",
-  "size": 125258794,
+  "latest": "1.3.123",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.123%2FRecepcion-de-Pedidos-Setup-1.3.123.exe?alt=media",
+  "sha256": "55ec4cf60e80d2c9fc4d781e74d5d51f3f33e7bc25b05a09ca60a44c491ccaca",
+  "size": 150022743,
   "mandatory": false,
   "releaseDate": "2026-09-12",
-  "notes": "Version 1.3.122. Escala regulable del ticket fiscal (printFiscalScale, 50-100%) vía scaleFactor, independiente del ajuste horizontal existente."
+  "notes": "Version 1.3.123. Corrige VCRUNTIME140.dll faltante en el OpenSSL bundled (instala el redistribuible oficial de Microsoft incluido, sin Internet, solo si hace falta). Orden manual de opcionales/sabores ahora es local por PC, por local y por grupo (antes era compartido por Firebase entre todas las PCs)."
 }

@@ -1,0 +1,7 @@
+{
+  "version": "1.3.123",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.123.exe",
+  "releaseDate": "2026-09-12",
+  "sha256": "55ec4cf60e80d2c9fc4d781e74d5d51f3f33e7bc25b05a09ca60a44c491ccaca",
+  "notes": "Corrige VCRUNTIME140.dll faltante en el OpenSSL bundled (instala el redistribuible oficial de Microsoft incluido, sin Internet, solo si hace falta). Orden manual de opcionales/sabores ahora es local por PC, por local y por grupo (antes era compartido por Firebase entre todas las PCs)."
+}
