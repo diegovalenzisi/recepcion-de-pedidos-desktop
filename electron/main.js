@@ -1615,6 +1615,10 @@ async function handlePrint(_event, htmlContent, printerName, options = {}) {
       const printOptions = {
         silent: true,
         printBackground: true,
+        // scaleFactor: solo el ticket fiscal lo manda hoy (comprobanteFiscalPrint.jsx).
+        // Ausente en cualquier otro llamado (comandas, ticket de mostrador) = 100,
+        // idéntico al comportamiento de siempre.
+        scaleFactor: options.scaleFactor || 100,
         ...(printerName ? { deviceName: printerName } : {}),
       };
 

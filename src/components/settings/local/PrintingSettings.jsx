@@ -99,6 +99,32 @@ const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFo
                 </div>
 
                 {/*
+                    ESCALA del ticket fiscal: independiente del offset horizontal de
+                    arriba. Si a 100% el comprobante no entra completo en el ancho real
+                    imprimible de la térmica, achicarlo (ej. 90/85/80%) reduce TODO el
+                    comprobante proporcionalmente — vía scaleFactor de webContents.print
+                    (comprobanteFiscalPrint.jsx), no tocando ningún ancho del CSS. Solo
+                    afecta la impresión física del ticket fiscal.
+                */}
+                <div className="space-y-2">
+                    <Label htmlFor="printFiscalScale" className="flex items-center text-gray-700 font-semibold"><Ruler className="mr-2 h-5 w-5 text-orange-500" /> Tamaño de Ticket Fiscal</Label>
+                    <div className="flex items-center space-x-4">
+                        <span className="text-sm text-gray-500 w-12 text-right">50%</span>
+                        <Slider
+                            id="printFiscalScale"
+                            min={50}
+                            max={100}
+                            step={1}
+                            value={[settings.printFiscalScale ?? 100]}
+                            onValueChange={(value) => handleSliderChange('printFiscalScale', value)}
+                        />
+                        <span className="text-sm text-gray-500 w-12">100%</span>
+                        <span className="font-bold w-12 text-center">{settings.printFiscalScale ?? 100}%</span>
+                    </div>
+                    <p className="text-xs text-gray-400">Solo afecta al ticket fiscal/factura térmica. 100% = tamaño actual, sin cambios.</p>
+                </div>
+
+                {/*
                     ANCHO DEL ROLLO. Va junto al ajuste horizontal porque son los
                     dos parámetros físicos del papel. Se guarda en CONFIGURACION
                     como el resto de los ajustes de impresión, con el mismo botón

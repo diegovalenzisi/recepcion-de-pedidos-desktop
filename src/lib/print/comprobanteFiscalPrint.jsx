@@ -187,9 +187,14 @@ export async function imprimirFacturaDirecto(comprobante) {
 
     // printerName vacío ⇒ impresora PREDETERMINADA de Windows.
     const printerName = cachedPrintSettings.printerName || '';
+    // scaleFactor (50-100): escala TODO el comprobante como una sola unidad
+    // (texto, QR, márgenes) vía webContents.print — no es un ancho de CSS.
+    // Ausente/100 = tamaño actual, sin cambios. Exclusivo del ticket fiscal:
+    // no se manda en ningún otro llamado a printDirect (comandas, mostrador).
     const r = await window.electron.printDirect(html, printerName, {
       density: cachedPrintSettings.printTone,
       copies: 1,
+      scaleFactor: cachedPrintSettings.printFiscalScale || 100,
     });
 
     if (r && r.success === false) {

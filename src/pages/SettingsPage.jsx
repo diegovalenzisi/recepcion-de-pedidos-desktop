@@ -58,6 +58,7 @@ function SettingsPage({ applySettings }) {
     deliveryViewMode: 'table',
     printHorizontalOffset: 0,
     printFiscalHorizontalOffset: 0,
+    printFiscalScale: 100,
     web: {
         destacar: '',
         whatsappMessage: '',
@@ -98,6 +99,7 @@ function SettingsPage({ applySettings }) {
             deliveryViewMode: 'table',
             printHorizontalOffset: 0,
             printFiscalHorizontalOffset: 0,
+            printFiscalScale: 100,
             web: { destacar: '', whatsappMessage: DEFAULT_WHATSAPP_MESSAGE, assignDelivererMessage: DEFAULT_ASSIGN_DELIVERER_MESSAGE, horarios: {}, showOptionalsInDelivery: true, requireCrossStreets: false }
         };
 
@@ -121,6 +123,7 @@ function SettingsPage({ applySettings }) {
                 deliveryViewMode: fetchedSettings.deliveryViewMode || fetchedSettings.deliveryScreenType || 'table',
                 printHorizontalOffset: typeof fetchedSettings.printHorizontalOffset === 'number' ? fetchedSettings.printHorizontalOffset : 0,
                 printFiscalHorizontalOffset: typeof fetchedSettings.printFiscalHorizontalOffset === 'number' ? fetchedSettings.printFiscalHorizontalOffset : 0,
+                printFiscalScale: typeof fetchedSettings.printFiscalScale === 'number' ? fetchedSettings.printFiscalScale : 100,
                 web: {
                     ...defaults.web,
                     ...(fetchedSettings.web || {}),
