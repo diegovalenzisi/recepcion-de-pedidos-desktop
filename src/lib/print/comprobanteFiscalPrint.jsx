@@ -35,7 +35,13 @@ import { cachedPrintSettings } from '@/lib/print/settings';
  *     monoespaciada del sistema, que es lo que la térmica imprime igual.
  *   · el QR se limita en ancho para que entre completo en los 80 mm.
  */
-const ESTILOS_TERMICOS_80MM = `
+// Recibe el offset en mm (cachedPrintSettings.printFiscalHorizontalOffset, leído
+// EN EL MOMENTO de imprimir, no al importar el módulo — cachedPrintSettings se
+// rellena async después del import, así que una constante de nivel de módulo
+// habría quedado congelada en 0). Mismo mecanismo que ya usan command.js y
+// counterTicket.js para su propio corrector (`margin-left` en mm), pero con su
+// propia clave: este offset NUNCA debe mezclarse con el de comandas.
+const estilosTermicos80mm = (offsetMm = 0) => `
   @page { size: 80mm auto; margin: 0; }
   html, body { margin: 0; padding: 0; }
   body {
@@ -43,6 +49,7 @@ const ESTILOS_TERMICOS_80MM = `
     font-size: 11px;
     line-height: 1.25;
     width: 80mm;
+    margin-left: ${offsetMm}mm;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
@@ -67,9 +74,9 @@ const ESTILOS_TERMICOS_80MM = `
   * { max-width: 100%; word-wrap: break-word; overflow-wrap: break-word; }
 `;
 
-const ESTILOS = `
+const estilosPreview = (offsetMm = 0) => `
   @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap');
-  body { font-family: 'Roboto Mono', monospace; margin: 0; padding: 20px; }
+  body { font-family: 'Roboto Mono', monospace; margin: 0; margin-left: ${offsetMm}mm; padding: 20px; }
   .receipt { max-width: 300px; margin: auto; }
   .header { text-align: center; margin-bottom: 20px; }
   .header h1 { margin: 0; font-size: 1.2em; }
@@ -116,7 +123,7 @@ export async function imprimirComprobanteFiscal(clave, registro) {
     const html = renderToString(<ReceiptDocument sale={comprobante} />);
     ventana.document.write(
       `<html><head><title>Comprobante ${comprobante.numeroCompleto || clave}</title>`
-      + `<style>${ESTILOS}</style></head><body>${html}</body></html>`,
+      + `<style>${estilosPreview(cachedPrintSettings.printFiscalHorizontalOffset || 0)}</style></head><body>${html}</body></html>`,
     );
     ventana.document.close();
     ventana.focus();
@@ -171,7 +178,7 @@ export async function imprimirFacturaDirecto(comprobante) {
     const html =
       `<!DOCTYPE html><html><head><meta charset="utf-8">`
       + `<title>${comprobante.numeroCompleto || clave}</title>`
-      + `<style>${ESTILOS_TERMICOS_80MM}</style></head><body>${cuerpo}</body></html>`;
+      + `<style>${estilosTermicos80mm(cachedPrintSettings.printFiscalHorizontalOffset || 0)}</style></head><body>${cuerpo}</body></html>`;
 
     if (!(typeof window !== 'undefined' && window.electron && window.electron.printDirect)) {
       // Fuera de Electron no hay impresión silenciosa posible.

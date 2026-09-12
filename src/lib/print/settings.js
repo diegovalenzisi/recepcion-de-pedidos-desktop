@@ -12,6 +12,10 @@ export let cachedPrintSettings = {
     printerName: '',
     printTone: 5,
     printHorizontalOffset: 0,
+    // Corrector INDEPENDIENTE del de arriba: solo lo lee comprobanteFiscalPrint.js
+    // (ticket fiscal/factura térmica). Ausente (instalación vieja) = 0 = posición
+    // actual, sin ningún desplazamiento nuevo.
+    printFiscalHorizontalOffset: 0,
     // Ancho del rollo térmico, en mm. Ausente o inválido = 80 = lo de siempre.
     printPaperWidth: ANCHO_POR_DEFECTO,
 };
@@ -28,6 +32,7 @@ export const reloadPrintSettings = async () => {
                 printerName: settings.printerName || '',
                 printTone: settings.printTone || 5,
                 printHorizontalOffset: Math.max(-20, Math.min(settings.printHorizontalOffset ?? 0, 20)),
+                printFiscalHorizontalOffset: Math.max(-20, Math.min(settings.printFiscalHorizontalOffset ?? 0, 20)),
                 // `normalizarAncho` ya devuelve 80 ante ausente/inválido: un local
                 // que nunca tocó esta opción imprime exactamente como antes.
                 printPaperWidth: normalizarAncho(settings.printPaperWidth),

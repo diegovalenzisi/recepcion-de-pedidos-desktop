@@ -71,6 +71,34 @@ const PrintingSettings = ({ settings, handleChange, handleSliderChange, handleFo
                 </div>
 
                 {/*
+                    AJUSTE INDEPENDIENTE PARA EL TICKET FISCAL (factura térmica).
+                    El corrector de arriba (`printHorizontalOffset`) solo afecta a las
+                    comandas y al ticket de mostrador (command.js / counterTicket.js):
+                    el comprobante fiscal (comprobanteFiscalPrint.jsx) usa su propia
+                    hoja de estilos y nunca leía ese valor, así que un desvío de la
+                    impresora en la factura no se podía corregir sin mover también la
+                    comanda. Mismo rango/paso que el de arriba, guardado y aplicado
+                    igual, pero en una clave separada.
+                */}
+                <div className="space-y-2">
+                    <Label htmlFor="printFiscalHorizontalOffset" className="flex items-center text-gray-700 font-semibold"><MoveHorizontal className="mr-2 h-5 w-5 text-orange-500" /> Ajuste Horizontal de Ticket Fiscal</Label>
+                    <div className="flex items-center space-x-4">
+                        <span className="text-sm text-gray-500 w-12 text-right">← Izq</span>
+                        <Slider
+                            id="printFiscalHorizontalOffset"
+                            min={-10}
+                            max={10}
+                            step={1}
+                            value={[settings.printFiscalHorizontalOffset ?? 0]}
+                            onValueChange={(value) => handleSliderChange('printFiscalHorizontalOffset', value)}
+                        />
+                        <span className="text-sm text-gray-500 w-12">Der →</span>
+                        <span className="font-bold w-10 text-center">{(settings.printFiscalHorizontalOffset ?? 0) > 0 ? '+' : ''}{settings.printFiscalHorizontalOffset ?? 0}mm</span>
+                    </div>
+                    <p className="text-xs text-gray-400">Solo afecta al ticket fiscal/factura térmica. Valor 0 = posición normal.</p>
+                </div>
+
+                {/*
                     ANCHO DEL ROLLO. Va junto al ajuste horizontal porque son los
                     dos parámetros físicos del papel. Se guarda en CONFIGURACION
                     como el resto de los ajustes de impresión, con el mismo botón
