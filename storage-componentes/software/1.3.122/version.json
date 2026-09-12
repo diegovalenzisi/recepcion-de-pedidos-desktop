@@ -1,0 +1,7 @@
+{
+  "version": "1.3.122",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.122.exe",
+  "releaseDate": "2026-09-12",
+  "sha256": "bd1b257233b4e13d84b957b22244e85db72a34c571d05b566504588f44820f32",
+  "notes": "Escala regulable del ticket fiscal (printFiscalScale, 50-100%) vía scaleFactor, independiente del ajuste horizontal existente."
+}
