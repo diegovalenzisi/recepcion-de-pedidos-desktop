@@ -107,6 +107,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('components:progress', handler);
     },
   },
+  // Orden manual de opcionales/sabores: LOCAL por PC (nunca Firebase).
+  // Ver electron/lib/optionalesOrdenLocal.js.
+  optionalesOrden: {
+    readAll:       (params) => ipcRenderer.invoke('optionales-orden:read-all', params),
+    write:         (params) => ipcRenderer.invoke('optionales-orden:write', params),
+    writeMultiple: (params) => ipcRenderer.invoke('optionales-orden:write-multiple', params),
+  },
   relaunchApp:  () => ipcRenderer.invoke('app:relaunch'),
   quitApp:      () => ipcRenderer.invoke('app:quit'),
   getBootFlags: () => ipcRenderer.invoke('app:boot-flags'),

@@ -30,8 +30,31 @@ const {
 } = require('./lib/facturacionRuntimeLink');
 // Borrado de credenciales de una cuenta fiscal (RI/Monotributo) al eliminarla.
 const { eliminarCredencialesDeCuenta } = require('./lib/facturacionAccountDelete');
+// Microsoft Visual C++ Redistributable (VCRUNTIME140.dll) para el OpenSSL
+// bundled. Ver electron/lib/vcRedist.js.
+const { asegurarVcRedistSiHaceFalta, getVcRedistResourcePath } = require('./lib/vcRedist');
+// Orden manual de opcionales/sabores: LOCAL por PC, nunca en Firebase.
+// Ver electron/lib/optionalesOrdenLocal.js.
+const {
+  rutaArchivoOrden: rutaArchivoOrdenOpcionales,
+  leerArchivoOrden: leerArchivoOrdenOpcionales,
+  escribirArchivoOrden: escribirArchivoOrdenOpcionales,
+  obtenerOrdenesDelDispositivo,
+  conOrdenActualizado: conOrdenOpcionalActualizado,
+  conOrdenesMultiplesActualizadas,
+} = require('./lib/optionalesOrdenLocal');
 
 const isDev = !app.isPackaged;
+
+// Instalador oficial de Microsoft, incluido como recurso (nunca se descarga
+// de Internet): ver "extraResources" -> resources/vcredist en package.json.
+function vcRedistResourcePath() {
+  return getVcRedistResourcePath({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    repoRoot: path.join(__dirname, '..'),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // UNA SOLA INSTANCIA POR PC
@@ -653,6 +676,21 @@ function spawnFacturacionProc(key, accountDir) {
       procEnv.OPENSSL_BIN  = path.join(opensslDir, 'openssl.exe');
       procEnv.OPENSSL_CONF = path.join(opensslDir, 'openssl.cnf');
       procEnv.PATH         = opensslDir + ';' + (procEnv.PATH || '');
+
+      // VCRUNTIME140.dll: si el OpenSSL bundled no puede arrancar (PC nueva
+      // sin el runtime de Visual C++), se repara ACÁ mismo, antes de arrancar
+      // el motor — no se descarga nada, usa el redistribuible oficial ya
+      // incluido con la app. El motivo real queda en los logs de la cuenta
+      // (visibles en el panel de Facturación) tanto si se resuelve solo como
+      // si sigue fallando. Ver electron/lib/vcRedist.js.
+      const vc = asegurarVcRedistSiHaceFalta({
+        opensslExePath: procEnv.OPENSSL_BIN,
+        vcRedistExePath: vcRedistResourcePath(),
+        log: (msg) => entry.logs.push(`[${new Date().toLocaleTimeString('es-AR')}] [OpenSSL] ${msg}`),
+      });
+      if (!vc.ok) {
+        console.error(`[AFIP OPENSSL] '${key}': OpenSSL no pudo arrancar: ${vc.motivo}`);
+      }
     }
 
     proc = spawn(nodeBin, ['index.mjs'], {
@@ -2597,6 +2635,40 @@ function setupIPC() {
     return true;
   });
 
+  // ORDEN MANUAL DE OPCIONALES/SABORES — local por PC, por local y por grupo.
+  // NUNCA se escribe a Firebase (ver electron/lib/optionalesOrdenLocal.js).
+  // `localId` y `deviceId` los manda el renderer: localId es el mismo que usa
+  // el resto de la pantalla (firebase/core.js), deviceId es el mismo id de
+  // equipo que ya registra DISPOSITIVOS (deviceIdentity.js) — no se crea otro.
+  ipcMain.handle('optionales-orden:read-all', (_e, { localId, deviceId } = {}) => {
+    if (!localId || !deviceId) return {};
+    const ruta = rutaArchivoOrdenOpcionales(app.getPath('userData'), localId);
+    const data = leerArchivoOrdenOpcionales(ruta);
+    return obtenerOrdenesDelDispositivo(data, deviceId);
+  });
+  ipcMain.handle('optionales-orden:write', (_e, { localId, deviceId, groupId, order } = {}) => {
+    if (!localId || !deviceId || !groupId) return { ok: false, motivo: 'parametros-invalidos' };
+    try {
+      const ruta = rutaArchivoOrdenOpcionales(app.getPath('userData'), localId);
+      const actual = leerArchivoOrdenOpcionales(ruta);
+      escribirArchivoOrdenOpcionales(ruta, conOrdenOpcionalActualizado(actual, deviceId, groupId, order));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, motivo: e.message };
+    }
+  });
+  ipcMain.handle('optionales-orden:write-multiple', (_e, { localId, deviceId, ordersMap } = {}) => {
+    if (!localId || !deviceId) return { ok: false, motivo: 'parametros-invalidos' };
+    try {
+      const ruta = rutaArchivoOrdenOpcionales(app.getPath('userData'), localId);
+      const actual = leerArchivoOrdenOpcionales(ruta);
+      escribirArchivoOrdenOpcionales(ruta, conOrdenesMultiplesActualizadas(actual, deviceId, ordersMap));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, motivo: e.message };
+    }
+  });
+
   // Setea el local activo (para que main lea/escriba facturación de ese local) y frena
   // el motor de facturación del local anterior. Persiste en active-local.json.
   ipcMain.handle('local:set-active', (_e, localId) => {
@@ -3275,6 +3347,23 @@ async function installComponents(componentKeys, sendProg = () => {}) {
 
   // Limpiar manifest temporal
   try { unlinkSync(manifestPath); } catch {}
+
+  // VCRUNTIME140.dll: el OpenSSL recién instalado/actualizado puede necesitar
+  // el runtime de Visual C++ para arrancar (PC nueva sin otro software que lo
+  // trajera). Se verifica ejecutando `openssl version` de verdad — si ya
+  // funciona no se instala nada; si no, se instala el redistribuible oficial
+  // YA incluido con la app (nunca se descarga). Ver electron/lib/vcRedist.js.
+  if (keys.includes('openssl')) {
+    const opensslExePath = path.join(destDirMap.openssl, 'openssl.exe');
+    const vc = asegurarVcRedistSiHaceFalta({
+      opensslExePath,
+      vcRedistExePath: vcRedistResourcePath(),
+      log: (msg) => console.log(`[components] [vcredist] ${msg}`),
+    });
+    if (!vc.ok) {
+      errors.push(`Runtime de Visual C++: ${vc.motivo || 'OpenSSL no pudo arrancar'}`);
+    }
+  }
 
   const state = checkComponentsState();
   return { ok: errors.length === 0, errors, state };

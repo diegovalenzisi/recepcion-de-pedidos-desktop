@@ -4,7 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Minus, Search, Loader2 } from 'lucide-react';
-import { fetchAllOptionalOrders, saveOptionalOrder, saveMultipleOptionalOrders } from '@/lib/api/optionalOrderApi';
+// Orden manual de sabores/opcionales: LOCAL por PC (nunca Firebase), ver
+// src/lib/api/localOptionalOrderApi.js. Mismas firmas que el módulo viejo
+// (optionalOrderApi.js, que guardaba un único orden compartido por local).
+import { fetchAllOptionalOrders, saveOptionalOrder, saveMultipleOptionalOrders } from '@/lib/api/localOptionalOrderApi';
 import { tienePrecio, obtenerPrecioOpcional, precioOpcionalInvalido } from '@/lib/api/optionalsPricing';
 
 // Mismo patrón que el resto de los modales de atención (formato local ARS).
