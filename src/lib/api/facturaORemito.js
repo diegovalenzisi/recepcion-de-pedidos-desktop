@@ -338,8 +338,8 @@ export function esVentaSoloEfectivo(venta) {
 //
 // Se guarda el ID y no el nombre para que renombrar la cuenta no rompa el
 // vínculo, y no la cola directa para que mover la cuenta a otro CUIT se refleje
-// solo. El ALIAS del local NO interviene: eso quedó únicamente para el botón
-// manual "Convertir remito en factura".
+// solo. El ALIAS del local NO interviene acá ni en ningún otro camino de
+// facturación: ver resolverCuentaDeAliasFavorito() más abajo.
 // ---------------------------------------------------------------------------
 
 /** Entradas [id, cuenta] tanto si viene como mapa de Firebase o como array. */
@@ -424,13 +424,14 @@ export function resolverCuentaAsociadaDePlataforma({ plataformaId, cuentas } = {
 // La cola NO sale del TEXTO del alias: sale de la CUENTA a la que pertenece.
 // En Bynnon el alias es "MONICA.MP" y resuelve a FACTURACION_2 porque su cuenta
 // es "Transferencia 2" — el texto no dice nada de eso, y está bien así.
+//
+// SIN USO EN NINGÚN FLUJO DE FACTURACIÓN: se mantiene como utilidad pura,
+// probada por sus propios méritos, pero ningún caller de la app la invoca. En
+// particular, convertir un remito en factura ("Facturar remito" en Ventas) NO
+// usa el alias destacado ni ninguna cuenta favorita: usa las cuentas fiscales
+// realmente habilitadas para ARCA (`cuentasFiscalesHabilitadasParaFacturar` en
+// colasFiscales.js), igual que el resto del motor de facturación.
 // ---------------------------------------------------------------------------
-
-// El alias destacado puede apuntar a CUALQUIER cuenta fiscal del esquema (1..9),
-// no solo a una Transferencia: es la cuenta con la que el local factura una
-// conversión manual desde Facturación 2. Distinto de COLAS_ASOCIABLES, que es
-// más restrictivo a propósito porque las plataformas solo se asocian a una
-// Transferencia.
 
 /**
  * @param {object} params

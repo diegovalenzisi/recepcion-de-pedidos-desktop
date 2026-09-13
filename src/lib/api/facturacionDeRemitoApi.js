@@ -19,8 +19,7 @@
 import { getDatabase, ref, get, update, runTransaction, set, query, orderByKey, limitToLast } from 'firebase/database';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import { rutaRemito } from '@/lib/api/remitos';
-import { resolverCuentaDeAliasFavorito } from '@/lib/api/facturaORemito';
-import { leerCuentasDelLocal } from '@/lib/api/facturaORemitoApi';
+import { cuentasFiscalesHabilitadasDelLocal } from '@/lib/api/colasFiscalesApi';
 import {
   ESTADO_PENDIENTE,
   ESTADO_ERROR,
@@ -70,43 +69,53 @@ const dbDelMismoLocal = (raiz) => {
 };
 
 /**
- * Cola fiscal con la que se factura un remito: la de la cuenta asociada al
- * ALIAS DESTACADO del local (/{localId}/ALIAS).
+ * CUENTAS FISCALES del local activo en condiciones de facturar un remito a
+ * posteriori: completas y listas para emitir por ARCA, la MISMA fuente de
+ * verdad que usa el motor de facturación para cualquier cola.
  *
- *   /{localId}/ALIAS  →  la ÚNICA cuenta cuyo campo `alias` coincide
- *                     →  la cola fiscal de ESA cuenta (FACTURACION_1 a 9)
+ * NUNCA el alias destacado, NUNCA la cuenta favorita ni ninguna cuenta de
+ * cobro: eso decide a dónde entra la plata, no con qué CUIT se puede emitir.
  *
- * La cola NO sale del texto del alias ni de `isFavorite`: sale de la cuenta a la
- * que el alias pertenece. Es la misma resolución —y el mismo módulo puro— que
- * usa PedidosYa prepago, así que las dos rutas no pueden divergir.
- *
- * @returns {Promise<{cuenta: string, cola: string, alias: string, cuentaId: string}>}
- * @throws {RemitoNoFacturable} si el alias falta, está duplicado, no tiene
- *         cuenta asociada, o esa cuenta no resuelve FACTURACION_1/2/3.
+ * @returns {Promise<Array<object>>} cuentas listas, cada una con su `cola`.
  */
-export const resolverCuentaFiscalFavorita = async () => {
+export const cuentasFiscalesParaFacturarRemito = async () => {
   const raiz = raizLocal();
-  const cuentas = await leerCuentasDelLocal();
+  if (!raiz) throw new RemitoNoFacturable('No hay un local configurado.');
+  return cuentasFiscalesHabilitadasDelLocal(raiz);
+};
 
-  const aliasSnap = await get(ref(getDatabase(), construirRutaLocal(raiz, 'ALIAS')));
-  const alias = aliasSnap.exists() ? aliasSnap.val() : null;
+/**
+ * Resuelve con QUÉ CUENTA FISCAL se factura un remito:
+ *
+ *   0 cuentas habilitadas → se detiene: no hay con qué emitir.
+ *   1 cuenta habilitada   → esa, sin preguntar nada.
+ *   2+ habilitadas        → hace falta que el caller (la pantalla) ya haya
+ *                            elegido una cola en un selector; si no llegó
+ *                            ninguna, o la elegida ya no está disponible, se
+ *                            detiene con el mismo mensaje que ve el operador.
+ *
+ * @param {string|null} colaElegida  `FACTURACION_N` que el usuario eligió.
+ * @returns {Promise<{cuenta: string, cola: string, cuentaFiscal: object}>}
+ * @throws {RemitoNoFacturable} con el mensaje exacto para mostrar.
+ */
+export const resolverCuentaFiscalParaRemito = async (colaElegida = null) => {
+  const cuentas = await cuentasFiscalesParaFacturarRemito();
 
-  console.log(`[FACTURACION] Buscando alias destacado: ${construirRutaLocal(raiz, 'ALIAS')}`);
-  const r = resolverCuentaDeAliasFavorito({ alias, cuentas });
-
-  if (r.estado !== 'ok') {
-    // Mensaje ÚNICO y mostrable. No se manda nada por defecto ni se toca el remito.
-    const mensaje =
-      'No se puede facturar este remito porque el alias destacado no tiene una cuenta fiscal válida asociada.';
-    console.error(`[FACTURACION] ${mensaje}`, { estado: r.estado, alias, detalle: r.motivo });
-    throw new RemitoNoFacturable(`${mensaje} ${r.motivo}`);
+  if (cuentas.length === 0) {
+    throw new RemitoNoFacturable('Este local no tiene ninguna cuenta habilitada para emitir facturas.');
+  }
+  if (cuentas.length === 1) {
+    const unica = cuentas[0];
+    return { cuenta: unica.razonSocial || unica.nombre || unica.cola, cola: unica.cola, cuentaFiscal: unica };
   }
 
-  console.log(`[FACTURACION] Alias destacado encontrado: ${r.alias}`);
-  console.log(`[FACTURACION] Cuenta asociada: ${r.cuentaId} (${r.cuenta})`);
-  console.log(`[FACTURACION] Cola resuelta: ${r.cola}`);
-
-  return { cuenta: r.cuenta, cola: r.cola, alias: r.alias, cuentaId: r.cuentaId };
+  const elegida = colaElegida ? cuentas.find((c) => c.cola === colaElegida) : null;
+  if (!elegida) {
+    throw new RemitoNoFacturable(
+      `Este local tiene ${cuentas.length} cuentas fiscales habilitadas: elegí con cuál facturar.`
+    );
+  }
+  return { cuenta: elegida.razonSocial || elegida.nombre || elegida.cola, cola: elegida.cola, cuentaFiscal: elegida };
 };
 
 /** Lee un remito de la ruta canónica del local activo. */
@@ -127,10 +136,13 @@ export const leerRemito = async (numeroComprobante) => {
  *   4. encola en la cola fiscal, con clave derivada del número de remito;
  *   5. si algo del encolado falla, deja el remito en ERROR para reintentar.
  *
+ * @param {string|null} colaElegida  `FACTURACION_N` elegida en el selector,
+ *        cuando el local tiene 2 o más cuentas fiscales habilitadas. Con 0 o 1
+ *        cuenta habilitada se ignora: no hay nada que elegir.
  * @returns {Promise<{estado:'encolado'|'ya-en-curso'|'ya-facturado', cola?:string, cuenta?:string, numeroFactura?:string}>}
  * @throws {RemitoNoFacturable} con un mensaje mostrable al usuario.
  */
-export const facturarRemito = async (numeroComprobante) => {
+export const facturarRemito = async (numeroComprobante, colaElegida = null) => {
   const raiz = raizLocal();
   if (!raiz) throw new RemitoNoFacturable('No hay un local configurado.');
 
@@ -138,9 +150,10 @@ export const facturarRemito = async (numeroComprobante) => {
   const validacion = validarRemitoParaFacturar(remito, numeroComprobante);
   if (!validacion.ok) throw new RemitoNoFacturable(validacion.motivo);
 
-  // La cola se resuelve antes del candado: si la configuración fiscal está
-  // incompleta no se marca nada, el remito queda intacto y se avisa.
-  const { cuenta, cola } = await resolverCuentaFiscalFavorita();
+  // La cuenta se resuelve antes del candado: si no hay ninguna habilitada, o
+  // hace falta elegir entre varias y todavía no se eligió, no se marca nada y
+  // el remito queda intacto.
+  const { cuenta, cola } = await resolverCuentaFiscalParaRemito(colaElegida);
 
   // ── CANDADO ──────────────────────────────────────────────────────────────
   // Transacción sobre el propio estado del remito. Si otro equipo llegó

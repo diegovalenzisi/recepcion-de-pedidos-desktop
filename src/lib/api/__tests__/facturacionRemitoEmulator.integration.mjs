@@ -6,6 +6,12 @@
 // nada de stock/caja/estadísticas/comisiones tocado, y el vínculo de vuelta con
 // la factura que deja el motor en la ruta fiscal.
 //
+// LA CUENTA FISCAL con la que se factura NUNCA sale de un alias ni de la
+// cuenta favorita: sale de las cuentas fiscales del local que están REALMENTE
+// habilitadas para emitir por ARCA (`cuentasFiscalesHabilitadasParaFacturar`,
+// la misma fuente que usa el motor de facturación para cualquier cola). Según
+// cuántas haya: 0 bloquea, 1 se usa directo, 2+ exige que se haya elegido una.
+//
 // El motor AFIP se simula con lo que hace el real: copia el payload encolado
 // dentro de /{localId}/VENTAS/{FCB…} y borra el pedido de la cola.
 //
@@ -27,7 +33,7 @@ import {
   puedeFacturarse,
   validarRemitoParaFacturar,
 } from '../facturacionDeRemito.js';
-import { colaFiscalDeCuenta, cuentaFavorita } from '../facturaORemito.js';
+import { cuentasFiscalesHabilitadasParaFacturar } from '../colasFiscales.js';
 import { filasDeRemitos, totalNoFacturado } from '../remitos.js';
 
 let passed = 0;
@@ -55,10 +61,35 @@ const TAB = cliente('remFactTab');
 const ACHAVAL = '40508022';
 const OTRO_LOCAL = '38827976';
 
-const CUENTAS_ACHAVAL = {
-  'cta-1': { nombre: 'Transferencia', imprimeFactura: false, isFavorite: true },
-  'cta-2': { nombre: 'Mercado Pago', imprimeFactura: false },
-};
+/** Cuenta fiscal COMPLETA para /{localId}/CONFIGURACION/FACTURACION_AFIP. */
+const cuentaFiscal = (localId, cola, over = {}) => ({
+  id: over.id || `c-${cola}`,
+  nombre: over.nombre || `Titular ${cola}`,
+  cuit: over.cuit || '20111111111',
+  cuitFormat: over.cuitFormat || '20-11111111-1',
+  ptoVta: over.ptoVta || '1',
+  razonSocial: over.razonSocial || `TITULAR ${cola}`,
+  fantasia: over.fantasia || 'EL COMERCIO',
+  domicilio: over.domicilio || 'CALLE 123',
+  condIVA: over.condIVA || 'Monotributista',
+  inicioActividades: over.inicioActividades ?? '01/01/2025',
+  iibb: over.iibb ?? '901-000000-0',
+  certStoragePath: over.certStoragePath ?? 'facturacion/x/cert.crt',
+  keyStoragePath: over.keyStoragePath ?? 'facturacion/x/clave.key',
+  serviceAccountStoragePath: over.serviceAccountStoragePath ?? 'facturacion/x/sa.json',
+  firebaseDb: over.firebaseDb ?? 'https://x-default-rtdb.firebaseio.com',
+  firebasePath: `${localId}/${cola}`,
+  firebaseHistorial: `${localId}/VENTAS`,
+  initialized: true,
+  ...over,
+});
+
+/** /{localId}/CONFIGURACION/FACTURACION_AFIP con las cuentas que se pasen. */
+const configFiscal = (cuentas) => ({ tipo: 'monotributo', monotributo: { cuentas } });
+
+const CONFIG_ACHAVAL_UNA_CUENTA = configFiscal([
+  cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'ach-1', razonSocial: 'ACHAVAL SRL' }),
+]);
 
 const remitoDe = (numero, total = 16200) => ({
   numeroComprobante: numero,
@@ -85,18 +116,33 @@ const remitoDe = (numero, total = 16200) => ({
 });
 
 const rutaRem = (raiz, n) => `${raiz}/Remitos/${n}`;
+const rutaConfigFiscal = (raiz) => `${raiz}/CONFIGURACION/FACTURACION_AFIP`;
 
-/** Copia exacta del flujo de facturacionDeRemitoApi.facturarRemito(). */
-async function pedirFactura(db, raiz, numero, deviceId) {
+/**
+ * Copia exacta del flujo de facturacionDeRemitoApi.facturarRemito(): resuelve
+ * la cuenta fiscal (0/1/2+ habilitadas) y sólo entonces toma el candado.
+ *
+ * @param {string|null} colaElegida  la que eligió el usuario en el selector,
+ *        cuando hace falta elegir entre 2+ cuentas habilitadas.
+ */
+async function pedirFactura(db, raiz, numero, deviceId, colaElegida = null) {
   const remito = (await get(ref(db, rutaRem(raiz, numero)))).val();
   const v = validarRemitoParaFacturar(remito, numero);
   if (!v.ok) return { estado: 'rechazado', motivo: v.motivo };
 
-  const cuentas = (await get(ref(db, `${raiz}/CUENTAS`))).val();
-  const favorita = cuentaFavorita(cuentas);
-  if (!favorita?.nombre) return { estado: 'sin-cuenta-favorita' };
-  const cola = colaFiscalDeCuenta(favorita.nombre);
-  if (!cola) return { estado: 'sin-cola' };
+  const config = (await get(ref(db, rutaConfigFiscal(raiz)))).val();
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(config, { localId: raiz });
+
+  let cuenta;
+  if (habilitadas.length === 0) {
+    return { estado: 'sin-cuenta-habilitada' };
+  } else if (habilitadas.length === 1) {
+    cuenta = habilitadas[0];
+  } else {
+    cuenta = colaElegida ? habilitadas.find((c) => c.cola === colaElegida) : null;
+    if (!cuenta) return { estado: 'requiere-eleccion', cuentas: habilitadas };
+  }
+  const cola = cuenta.cola;
 
   const candado = await runTransaction(ref(db, `${rutaRem(raiz, numero)}/estadoFacturacion`), (actual) => {
     if (actual === ESTADO_PENDIENTE || actual === ESTADO_FACTURADO) return undefined;
@@ -107,7 +153,7 @@ async function pedirFactura(db, raiz, numero, deviceId) {
   await update(ref(db, rutaRem(raiz, numero)), marcaDePendiente({ cola, deviceId }));
   const payload = construirPayloadFacturacion({ remito, localId: raiz, cola, solicitadoPor: deviceId });
   await set(ref(db, `${raiz}/${cola}/${claveEnCola(numero)}`), payload);
-  return { estado: 'encolado', cola, cuenta: favorita.nombre, payload };
+  return { estado: 'encolado', cola, cuenta: cuenta.razonSocial || cuenta.nombre, payload };
 }
 
 /** El motor AFIP real: copia el payload dentro de VENTAS y borra el pedido. */
@@ -126,9 +172,14 @@ async function motorEmiteFactura(db, raiz, cola, claveCola, numeroFactura, cae =
 async function conciliar(db, raiz, numero) {
   const remito = (await get(ref(db, rutaRem(raiz, numero)))).val();
   const cola = remito?.colaFacturacion;
-  const sigueEnCola = cola ? (await get(ref(db, `${raiz}/${cola}/${claveEnCola(numero)}`))).exists() : false;
+  // El pedido encolado trae, si hubo un rechazo, el mensaje EXACTO que dejó el
+  // motor (`errorFacturacion`): es lo único que puede marcar ERROR. Que ya no
+  // esté en la cola (se emitió o está en camino) NO es un error por sí solo.
+  const pedidoSnap = cola ? await get(ref(db, `${raiz}/${cola}/${claveEnCola(numero)}`)) : null;
+  const sigueEnCola = !!(pedidoSnap && pedidoSnap.exists());
+  const errorDelMotor = sigueEnCola ? (pedidoSnap.val()?.errorFacturacion || null) : null;
   const ventas = (await get(ref(db, `${raiz}/VENTAS`))).val() || {};
-  const r = conciliarConFacturaEmitida({ remito, ventas, sigueEnCola });
+  const r = conciliarConFacturaEmitida({ remito, ventas, sigueEnCola, errorDelMotor });
   if (r.accion !== 'esperar') await update(ref(db, rutaRem(raiz, numero)), r.marca);
   return r;
 }
@@ -139,8 +190,11 @@ const fotoLocal = async (raiz) => (await get(ref(DESKTOP, raiz))).val() || {};
 async function sembrar() {
   await set(ref(DESKTOP, ACHAVAL), null);
   await set(ref(DESKTOP, OTRO_LOCAL), null);
-  await set(ref(DESKTOP, `${ACHAVAL}/CUENTAS`), CUENTAS_ACHAVAL);
-  // Estado operativo que NO se debe tocar.
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
+  // Estado operativo que NO se debe tocar. CUENTAS ya no decide con qué cola
+  // se factura un remito (eso sale de CONFIGURACION/FACTURACION_AFIP), pero se
+  // sigue sembrando para probar que la conversión no la toca.
+  await set(ref(DESKTOP, `${ACHAVAL}/CUENTAS`), { 'cta-1': { nombre: 'Efectivo' } });
   await set(ref(DESKTOP, `${ACHAVAL}/CAJAS`), { '25-07-2026': { turnos: { 3: { fondoInicial: 1000, ventas: 16200 } } } });
   await set(ref(DESKTOP, `${ACHAVAL}/ESTADISTICAS`), { '25-07-2026': { '156A': 4 } });
   await set(ref(DESKTOP, `${ACHAVAL}/MATERIAPRIMA`), { harina: { stock: 50 } });
@@ -160,10 +214,10 @@ await check('el remito arranca sin facturar y con el botón habilitado', async (
   assert.strictEqual(puedeFacturarse(r), true);
   assert.strictEqual(estadoFacturacion(r), 'SIN_FACTURAR');
 });
-await check('al pedir la factura se encola por el TOTAL COMPLETO en la cola de la favorita', async () => {
+await check('con UNA sola cuenta fiscal habilitada se encola directo, por el TOTAL COMPLETO', async () => {
   const r = await pedirFactura(DESKTOP, ACHAVAL, N1, 'pc-1');
   assert.strictEqual(r.estado, 'encolado');
-  assert.strictEqual(r.cuenta, 'Transferencia', 'no usó la cuenta favorita');
+  assert.strictEqual(r.cuenta, 'ACHAVAL SRL', 'no usó la cuenta fiscal habilitada');
   assert.strictEqual(r.cola, 'FACTURACION_1');
 
   const encolado = (await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N1)}`))).val();
@@ -326,8 +380,10 @@ await check('si el motor falla, el remito queda reintentable y sin factura', asy
   await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 5000));
   await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1');
 
-  // El pedido sale de la cola sin generar factura (rechazo de AFIP).
-  await set(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N)}`), null);
+  // El motor deja el pedido EN LA COLA con el rechazo de ARCA (no lo borra):
+  // así se distingue un rechazo real de una demora (el motor SÍ borra el
+  // pedido cuando la factura se emite, ver motorEmiteFactura()).
+  await update(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N)}`), { errorFacturacion: 'AFIP rechazó el comprobante' });
   const r = await conciliar(DESKTOP, ACHAVAL, N);
   assert.strictEqual(r.accion, 'reabrir');
 
@@ -356,43 +412,99 @@ await check('el reintento no genera una segunda factura', async () => {
   const deEsteRemito = Object.values(ventas).filter((v) => v.remitoId === N);
   assert.strictEqual(deEsteRemito.length, 1, `hay ${deEsteRemito.length} facturas del mismo remito`);
 });
-await check('sin cuenta favorita NO se encola y el remito queda intacto', async () => {
+await check('SIN ninguna cuenta fiscal habilitada NO se encola y el remito queda intacto', async () => {
   const N = 'FCX0008-00000053';
   await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 4000));
-  await update(ref(DESKTOP, `${ACHAVAL}/CUENTAS/cta-1`), { isFavorite: false });
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), null);
 
   const r = await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1');
-  assert.strictEqual(r.estado, 'sin-cuenta-favorita');
+  assert.strictEqual(r.estado, 'sin-cuenta-habilitada');
   const rem = await leerRemito(ACHAVAL, N);
   assert.strictEqual(rem.estadoFacturacion, undefined, 'marcó el remito igual');
   assert.strictEqual(rem.facturado, false);
   assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N)}`))).exists(), false);
 
-  await update(ref(DESKTOP, `${ACHAVAL}/CUENTAS/cta-1`), { isFavorite: true });
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
 });
-await check('favorita sin cola asignada tampoco encola', async () => {
+await check('una cuenta fiscal INCOMPLETA no cuenta como habilitada: tampoco encola', async () => {
   const N = 'FCX0008-00000054';
   await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 4000));
-  await set(ref(DESKTOP, `${ACHAVAL}/CUENTAS`), { 'cta-9': { nombre: 'Billetera Futura', isFavorite: true } });
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), configFiscal([
+    cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'incompleta', certStoragePath: null, keyStoragePath: null }),
+  ]));
 
   const r = await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1');
-  assert.strictEqual(r.estado, 'sin-cola');
+  assert.strictEqual(r.estado, 'sin-cuenta-habilitada');
   assert.strictEqual((await leerRemito(ACHAVAL, N)).estadoFacturacion, undefined);
 
-  await set(ref(DESKTOP, `${ACHAVAL}/CUENTAS`), CUENTAS_ACHAVAL);
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
+});
+await check('CON 2+ cuentas fiscales habilitadas, sin elegir ninguna, NO encola', async () => {
+  const N = 'FCX0008-00000055';
+  await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 6000));
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), configFiscal([
+    cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'dos-a', razonSocial: 'CUENTA A' }),
+    cuentaFiscal(ACHAVAL, 'FACTURACION_2', { id: 'dos-b', razonSocial: 'CUENTA B' }),
+  ]));
+
+  const r = await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1');
+  assert.strictEqual(r.estado, 'requiere-eleccion');
+  assert.strictEqual(r.cuentas.length, 2);
+  assert.strictEqual((await leerRemito(ACHAVAL, N)).estadoFacturacion, undefined, 'no se marcó nada sin elegir');
+  assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N)}`))).exists(), false);
+  assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_2/${claveEnCola(N)}`))).exists(), false);
+
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
+});
+await check('CON 2+ cuentas, eligiendo una que ya no existe, tampoco encola', async () => {
+  const N = 'FCX0008-00000056';
+  await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 6000));
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), configFiscal([
+    cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'dos-a', razonSocial: 'CUENTA A' }),
+    cuentaFiscal(ACHAVAL, 'FACTURACION_2', { id: 'dos-b', razonSocial: 'CUENTA B' }),
+  ]));
+
+  const r = await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1', 'FACTURACION_9');
+  assert.strictEqual(r.estado, 'requiere-eleccion', 'una cola inválida no puede colarse como elección');
+
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
+});
+await check('CON 2+ cuentas, eligiendo una VÁLIDA, encola con ESA y no con la otra', async () => {
+  const N = 'FCX0008-00000057';
+  await set(ref(DESKTOP, rutaRem(ACHAVAL, N)), remitoDe(N, 8000));
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), configFiscal([
+    cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'dos-a', razonSocial: 'CUENTA A' }),
+    cuentaFiscal(ACHAVAL, 'FACTURACION_2', { id: 'dos-b', razonSocial: 'CUENTA B' }),
+  ]));
+
+  const r = await pedirFactura(DESKTOP, ACHAVAL, N, 'pc-1', 'FACTURACION_2');
+  assert.strictEqual(r.estado, 'encolado');
+  assert.strictEqual(r.cola, 'FACTURACION_2');
+  assert.strictEqual(r.cuenta, 'CUENTA B');
+  assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_1/${claveEnCola(N)}`))).exists(), false, 'se coló en la otra cuenta');
+  assert.ok((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_2/${claveEnCola(N)}`))).exists());
+  const rem = await leerRemito(ACHAVAL, N);
+  assert.strictEqual(rem.colaFacturacion, 'FACTURACION_2');
+
+  await motorEmiteFactura(DESKTOP, ACHAVAL, 'FACTURACION_2', claveEnCola(N), 'FCB0008-00010303');
+  await conciliar(DESKTOP, ACHAVAL, N);
+  await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
 });
 
 console.log('\n6. Aislamiento entre locales:');
-await check('otro local factura sus remitos en SU ruta, sin mezclarse', async () => {
+await check('otro local factura sus remitos con SU PROPIA cuenta fiscal, sin mezclarse', async () => {
   const N = 'FCX0001-00000001';
-  await set(ref(TAB, `${OTRO_LOCAL}/CUENTAS`), { 'cta-1': { nombre: 'Mercado Pago', isFavorite: true } });
+  await set(ref(TAB, rutaConfigFiscal(OTRO_LOCAL)), configFiscal([
+    cuentaFiscal(OTRO_LOCAL, 'FACTURACION_9', { id: 'otro-1', razonSocial: 'OTRO LOCAL SA' }),
+  ]));
   await set(ref(TAB, rutaRem(OTRO_LOCAL, N)), { ...remitoDe(N, 3000), numeroComprobante: N, localId: OTRO_LOCAL });
 
   const r = await pedirFactura(TAB, OTRO_LOCAL, N, 'tab-1');
   assert.strictEqual(r.estado, 'encolado');
-  assert.strictEqual(r.cola, 'FACTURACION_4', 'no usó la cuenta favorita de SU local');
+  assert.strictEqual(r.cola, 'FACTURACION_9', 'no usó la cuenta fiscal de SU local');
+  assert.strictEqual(r.cuenta, 'OTRO LOCAL SA');
 
-  assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_4/${claveEnCola(N)}`))).exists(), false);
+  assert.strictEqual((await get(ref(DESKTOP, `${ACHAVAL}/FACTURACION_9/${claveEnCola(N)}`))).exists(), false);
   assert.strictEqual((await get(ref(DESKTOP, rutaRem(ACHAVAL, N)))).exists(), false);
   assert.ok((await get(ref(TAB, rutaRem(OTRO_LOCAL, N)))).exists());
 });

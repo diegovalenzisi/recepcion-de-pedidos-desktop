@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { fetchBillingData, suscribirCambiosDeVentas } from '@/lib/api/billingApi';
 import { suscribirRemitos } from '@/lib/api/remitosApi';
-import { facturarRemito, conciliarRemitosPendientes } from '@/lib/api/facturacionDeRemitoApi';
+import { facturarRemito, conciliarRemitosPendientes, cuentasFiscalesParaFacturarRemito } from '@/lib/api/facturacionDeRemitoApi';
 import { textoConfirmacion } from '@/lib/api/facturacionDeRemito';
 import { esClaveDeFactura } from '@/lib/api/comprobanteFiscal';
 import { imprimirFacturaDirecto } from '@/lib/print/comprobanteFiscalPrint';
@@ -33,6 +33,16 @@ const SalesPage = () => {
   // en curso (para que el botón no se pueda apretar dos veces).
   const [remitoAFacturar, setRemitoAFacturar] = useState(null);
   const [facturando, setFacturando] = useState(null);
+  // Mientras se consulta qué cuentas fiscales están habilitadas (antes de
+  // decidir si hace falta preguntar o se puede facturar directo).
+  const [verificandoRemito, setVerificandoRemito] = useState(null);
+  // Si el local tiene 2+ cuentas fiscales habilitadas, el selector que las
+  // muestra: qué remito y con qué cuentas elegir.
+  const [selectorCuentaFiscal, setSelectorCuentaFiscal] = useState(null);
+  // Cuenta fiscal ya elegida (automática si hay una sola, o por el selector),
+  // con la que se factura al confirmar. NUNCA sale de un alias ni de una
+  // cuenta favorita: siempre de las cuentas fiscales realmente habilitadas.
+  const [cuentaFiscalElegida, setCuentaFiscalElegida] = useState(null);
   // Factura que se está mandando a imprimir (evita el doble clic).
   const [imprimiendo, setImprimiendo] = useState(null);
   // Espejo de los remitos para poder conciliarlos desde el listener de VENTAS
@@ -261,19 +271,64 @@ const SalesPage = () => {
     return () => cancelar();
   }, [canViewDeliveryNotes, localPath]);
 
-  // FACTURAR UN REMITO A POSTERIORI.
+  // FACTURAR UN REMITO A POSTERIORI — PASO 1: ELEGIR LA CUENTA FISCAL.
+  //
+  // La cuenta fiscal NUNCA sale de un alias ni de la cuenta favorita: sale de
+  // las cuentas fiscales del local que están realmente habilitadas para emitir
+  // por ARCA (mismas que usa el motor de facturación). Según cuántas haya:
+  //   0 → se bloquea acá, antes de abrir ningún diálogo;
+  //   1 → se usa directo, sin preguntar nada;
+  //   2+ → se abre el selector para que el usuario elija.
+  const iniciarFacturacionRemito = useCallback(async (remito) => {
+    if (!remito) return;
+    const numero = remito.numeroFactura;
+    setVerificandoRemito(numero);
+    try {
+      const cuentas = await cuentasFiscalesParaFacturarRemito();
+      if (cuentas.length === 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Sin cuenta fiscal habilitada',
+          description: 'Este local no tiene ninguna cuenta habilitada para emitir facturas.',
+        });
+        return;
+      }
+      if (cuentas.length === 1) {
+        setCuentaFiscalElegida(cuentas[0]);
+        setRemitoAFacturar(remito);
+        return;
+      }
+      setSelectorCuentaFiscal({ remito, cuentas });
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'No se pudo verificar la facturación', description: e?.message || String(e) });
+    } finally {
+      setVerificandoRemito(null);
+    }
+  }, [toast]);
+
+  // PASO 1b (sólo con 2+ cuentas): el usuario elige una del selector.
+  const elegirCuentaFiscalParaRemito = useCallback((cuenta) => {
+    const remito = selectorCuentaFiscal?.remito || null;
+    setSelectorCuentaFiscal(null);
+    setCuentaFiscalElegida(cuenta);
+    setRemitoAFacturar(remito);
+  }, [selectorCuentaFiscal]);
+
+  // PASO 2: CONFIRMAR Y FACTURAR, con la cuenta ya elegida.
   //
   // No emite Nota de Crédito ni anula el remito: manda sus productos e importes
   // al motor de facturación de siempre y, cuando la factura sale, el remito
   // queda vinculado a ella. No descuenta stock ni registra caja otra vez.
   const confirmarFacturacionRemito = useCallback(async () => {
     const remito = remitoAFacturar;
+    const cuentaFiscal = cuentaFiscalElegida;
     if (!remito) return;
     const numero = remito.numeroFactura;
     setRemitoAFacturar(null);
+    setCuentaFiscalElegida(null);
     setFacturando(numero);
     try {
-      const r = await facturarRemito(numero);
+      const r = await facturarRemito(numero, cuentaFiscal?.cola || null);
       if (r.estado === 'encolado') {
         toast({
           title: 'Factura solicitada',
@@ -289,7 +344,7 @@ const SalesPage = () => {
     } finally {
       setFacturando(null);
     }
-  }, [remitoAFacturar, toast]);
+  }, [remitoAFacturar, cuentaFiscalElegida, toast]);
 
   // Cierra el círculo de los remitos que quedaron esperando: busca la factura
   // que dejó el motor en la ruta fiscal y le pone su número y su CAE al remito.
@@ -487,8 +542,8 @@ const SalesPage = () => {
                       data={remitos}
                       onPrint={handlePrint}
                       tableType="delivery_notes"
-                      onFacturarRemito={setRemitoAFacturar}
-                      facturando={facturando}
+                      onFacturarRemito={iniciarFacturacionRemito}
+                      facturando={facturando || verificandoRemito}
                     />
                   )}
                 </CardContent>
@@ -498,17 +553,59 @@ const SalesPage = () => {
         </Tabs>
       </div>
 
+      {/* Selector de cuenta fiscal: sólo aparece con 2+ cuentas habilitadas.
+          Con 0 se bloqueó antes de llegar acá; con 1 se salteó este paso. */}
+      <Dialog open={!!selectorCuentaFiscal} onOpenChange={(abierto) => !abierto && setSelectorCuentaFiscal(null)}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>¿Con qué cuenta fiscal facturás {selectorCuentaFiscal?.remito?.numeroFactura}?</DialogTitle>
+            <DialogDescription className="pt-2 text-slate-600">
+              Este local tiene {selectorCuentaFiscal?.cuentas?.length || 0} cuentas fiscales habilitadas para emitir por ARCA. Elegí con cuál se emite esta factura.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 py-2">
+            {(selectorCuentaFiscal?.cuentas || []).map((cuenta) => (
+              <Button
+                key={cuenta.cola}
+                variant="outline"
+                className="justify-start h-auto py-3 text-left"
+                onClick={() => elegirCuentaFiscalParaRemito(cuenta)}
+              >
+                <div className="flex flex-col items-start">
+                  <span className="font-semibold text-slate-800">{cuenta.razonSocial || cuenta.nombre || cuenta.cola}</span>
+                  <span className="text-xs text-slate-500">
+                    CUIT {cuenta.cuitFormat || cuenta.cuit || '—'} · Pto. Vta. {cuenta.puntoVenta || '—'} · Factura {cuenta.letra || '—'}
+                  </span>
+                </div>
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectorCuentaFiscal(null)}>Cancelar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Confirmación de la facturación posterior de un remito. */}
-      <Dialog open={!!remitoAFacturar} onOpenChange={(abierto) => !abierto && setRemitoAFacturar(null)}>
+      <Dialog
+        open={!!remitoAFacturar}
+        onOpenChange={(abierto) => { if (!abierto) { setRemitoAFacturar(null); setCuentaFiscalElegida(null); } }}
+      >
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>{textoConfirmacion(remitoAFacturar?.numeroFactura || '').titulo}</DialogTitle>
             <DialogDescription className="pt-2 text-slate-600">
               {textoConfirmacion(remitoAFacturar?.numeroFactura || '').descripcion}
+              {cuentaFiscalElegida && (
+                <span className="block mt-2 text-xs text-slate-500">
+                  Se emite con: {cuentaFiscalElegida.razonSocial || cuentaFiscalElegida.nombre || cuentaFiscalElegida.cola}
+                  {cuentaFiscalElegida.cuitFormat || cuentaFiscalElegida.cuit ? ` — CUIT ${cuentaFiscalElegida.cuitFormat || cuentaFiscalElegida.cuit}` : ''}
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRemitoAFacturar(null)}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setRemitoAFacturar(null); setCuentaFiscalElegida(null); }}>Cancelar</Button>
             <Button onClick={confirmarFacturacionRemito} className="bg-blue-600 hover:bg-blue-700">Facturar</Button>
           </DialogFooter>
         </DialogContent>

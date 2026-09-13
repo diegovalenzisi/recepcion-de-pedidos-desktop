@@ -18,6 +18,7 @@ import {
   colaDeFirebasePath,
   cuentaCobroAlimentaCola,
   cuentaFiscalDeCola,
+  cuentasFiscalesHabilitadasParaFacturar,
   detectarColasHuerfanas,
   emisorDeCuenta,
   esColaFiscal,
@@ -562,6 +563,67 @@ check('la fila en blanco de RI con firebasePath precargado NO bloquea la cola re
   assert.strictEqual(conflictos.length, 0, 'una fila en blanco no genera conflicto');
   assert.strictEqual(porCola.get('FACTURACION_1').razonSocial, 'LA QUE FACTURA');
   assert.strictEqual(validarCuentaFiscal(porCola.get('FACTURACION_1'), { localId: '77777777' }).listo, true);
+});
+
+console.log('\nCuentas fiscales habilitadas para facturar un remito a posteriori (sin alias, sin favorita):');
+
+check('0 cuentas listas → lista vacía, ninguna cola inventada', () => {
+  assert.deepStrictEqual(cuentasFiscalesHabilitadasParaFacturar(null), []);
+  assert.deepStrictEqual(cuentasFiscalesHabilitadasParaFacturar({}), []);
+  const incompleta = { tipo: 'monotributo', monotributo: { cuentas: [cuentaCompleta({ certStoragePath: null, keyStoragePath: null })] } };
+  assert.deepStrictEqual(cuentasFiscalesHabilitadasParaFacturar(incompleta), []);
+});
+check('1 cuenta lista → esa sola, con su cola', () => {
+  const cfg = { tipo: 'monotributo', monotributo: { cuentas: [
+    cuentaCompleta({ id: 'unica', razonSocial: 'LA UNICA', firebasePath: '55555555/FACTURACION_3' }),
+  ] } };
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(cfg, { localId: '55555555' });
+  assert.strictEqual(habilitadas.length, 1);
+  assert.strictEqual(habilitadas[0].razonSocial, 'LA UNICA');
+  assert.strictEqual(habilitadas[0].cola, 'FACTURACION_3');
+});
+check('2+ cuentas listas → todas, para que el selector elija', () => {
+  const cfg = {
+    ri: cuentaCompleta({ id: 'ri', condIVA: 'Responsable Inscripto', firebasePath: '55555555/FACTURACION_1' }),
+    monotributo: { cuentas: [
+      cuentaCompleta({ id: 'm2', razonSocial: 'SEGUNDA', firebasePath: '55555555/FACTURACION_2' }),
+    ] },
+  };
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(cfg, { localId: '55555555' });
+  assert.strictEqual(habilitadas.length, 2);
+  assert.deepStrictEqual(habilitadas.map((c) => c.cola).sort(), ['FACTURACION_1', 'FACTURACION_2']);
+});
+check('una cuenta INCOMPLETA no cuenta como habilitada, aunque otra sí', () => {
+  const cfg = { tipo: 'monotributo', monotributo: { cuentas: [
+    cuentaCompleta({ id: 'ok', razonSocial: 'LISTA', firebasePath: '55555555/FACTURACION_1' }),
+    cuentaCompleta({ id: 'rota', razonSocial: 'INCOMPLETA', firebasePath: '55555555/FACTURACION_2', ptoVta: '' }),
+  ] } };
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(cfg, { localId: '55555555' });
+  assert.strictEqual(habilitadas.length, 1);
+  assert.strictEqual(habilitadas[0].razonSocial, 'LISTA');
+});
+check('el interruptor imprimeFactura de una cuenta de COBRO NO afecta esta lista', () => {
+  // A propósito: esta lista es sobre cuentas FISCALES completas, no sobre qué
+  // cuenta de cobro decidió facturar sola. Un remito existe justamente porque
+  // en su momento ninguna cuenta de cobro facturó: eso no puede impedir
+  // elegir manualmente cualquier cuenta fiscal lista para emitir.
+  const cfg = { tipo: 'monotributo', monotributo: { cuentas: [
+    cuentaCompleta({ id: 'c1', razonSocial: 'FISCAL LISTA', firebasePath: '55555555/FACTURACION_2' }),
+  ] } };
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(cfg, { localId: '55555555' });
+  assert.strictEqual(habilitadas.length, 1, 'no depende de ningún switch de cuenta de cobro');
+});
+check('no depende de isFavorite ni de ningún campo de alias', () => {
+  const cfg = { tipo: 'monotributo', monotributo: { cuentas: [
+    cuentaCompleta({ id: 'c1', razonSocial: 'SIN FAVORITA', firebasePath: '55555555/FACTURACION_1' }),
+  ] } };
+  // La función ni siquiera recibe `cuentas` de COBRO ni `/ALIAS`: sólo la
+  // configuración fiscal. Si alguien intentara colar isFavorite/alias en la
+  // cuenta fiscal misma, no cambia el resultado.
+  cfg.monotributo.cuentas[0].isFavorite = false;
+  cfg.monotributo.cuentas[0].alias = 'NO.EXISTE';
+  const habilitadas = cuentasFiscalesHabilitadasParaFacturar(cfg, { localId: '55555555' });
+  assert.strictEqual(habilitadas.length, 1);
 });
 
 console.log(`\n${passed} verificaciones OK`);

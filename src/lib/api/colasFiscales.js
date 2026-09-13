@@ -539,6 +539,29 @@ export function radiografiaDeColas({
 }
 
 /**
+ * CUENTAS FISCALES REALMENTE HABILITADAS PARA EMITIR POR ARCA.
+ *
+ * Completas (CUIT, punto de venta, certificado, clave, runtime, rutas) y por lo
+ * tanto en condiciones de facturar YA — la MISMA validación (`validarCuentaFiscal`)
+ * que usa el motor de facturación para cada cola, sin `imprimeFactura` de ninguna
+ * cuenta de COBRO: ese interruptor decide qué ventas entran solas al circuito
+ * fiscal, no si una cuenta fiscal está en condiciones de emitir.
+ *
+ * NO mira alias, NO mira `isFavorite`, NO mira ninguna cuenta de cobro: es la
+ * fuente de verdad para cualquier flujo que necesite elegir con qué CUIT
+ * facturar manualmente (por ejemplo, convertir un remito en factura desde
+ * Ventas). Para cualquier local, con cualquier cantidad de cuentas.
+ *
+ * @returns {Array<object>} cuentas listas (`listo === true`), con su `cola` ya
+ *   resuelta. Vacío si el local no tiene ninguna cuenta fiscal lista.
+ */
+export function cuentasFiscalesHabilitadasParaFacturar(config, { localId = null } = {}) {
+  return listarCuentasFiscalesCrudas(config)
+    .filter((c) => c.cola)
+    .filter((c) => validarCuentaFiscal(c, { localId }).listo === true);
+}
+
+/**
  * Datos del EMISOR que hay que grabar en la factura y estampar en el PDF. Salen
  * SIEMPRE de la cuenta de la cola que la emitió, nunca de "el local".
  */

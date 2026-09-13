@@ -22,6 +22,7 @@ import {
   COLA_LEGADA,
   claveOwnership,
   cuentaFiscalDeCola,
+  cuentasFiscalesHabilitadasParaFacturar,
   detectarColasHuerfanas,
   radiografiaDeColas,
   switchesDeCuentasCobro,
@@ -140,6 +141,18 @@ export const colasHuerfanasDelLocal = async (localId = null) => {
     leerSwitchesCuentaCobro(raiz),
   ]);
   return detectarColasHuerfanas({ config, pendientesPorCola, switchesCuentaCobro });
+};
+
+/**
+ * CUENTAS FISCALES DEL LOCAL ACTIVO REALMENTE HABILITADAS PARA FACTURAR POR
+ * ARCA (completas y listas). No depende de ningún alias ni cuenta favorita: es
+ * la fuente que usa, por ejemplo, el selector manual de "Facturar remito".
+ */
+export const cuentasFiscalesHabilitadasDelLocal = async (localId = null) => {
+  const raiz = localId ? normalizarLocalId(localId) : raizLocal();
+  if (!raiz) throw new Error('LOCAL_ID_REQUIRED: no hay local configurado.');
+  const config = await leerConfigFiscal(raiz);
+  return cuentasFiscalesHabilitadasParaFacturar(config, { localId: raiz });
 };
 
 /**
