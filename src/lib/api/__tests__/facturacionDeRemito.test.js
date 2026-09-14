@@ -13,6 +13,7 @@ import {
   ESTADO_SIN_FACTURAR,
   ORIGEN_REMITO,
   buscarFacturaDelRemito,
+  buscarFacturasDelRemito,
   claveEnCola,
   claveIdempotencia,
   conciliarConFacturaEmitida,
@@ -21,11 +22,13 @@ import {
   describirEstadoFacturacion,
   esClaveDeFactura,
   estadoFacturacion,
+  marcaDeAlerta,
   marcaDeError,
   marcaDeFacturado,
   marcaDePendiente,
   puedeFacturarse,
   textoConfirmacion,
+  tieneCaeValido,
   validarRemitoParaFacturar,
 } from '../facturacionDeRemito.js';
 
@@ -572,6 +575,123 @@ check('el vínculo es por remitoId exacto, nunca por importe ni hora', () => {
   const f = buscarFacturaDelRemito(ventas, 'FCX0008-00000749');
   assert.strictEqual(f.clave, 'FCB0008-00010337');
   assert.strictEqual(f.registro.CAE, 'bbb');
+});
+
+// ---------------------------------------------------------------------------
+// RECONCILIACIÓN DETERMINÍSTICA POR remitoId — sin heurística de ventana.
+//
+// `ventas` acá representa lo que ya trae RECORTADO el rango de claves de la
+// cuenta fiscal (ver rangoDeClavesDeCuenta en comprobanteFiscal.js): estas
+// pruebas verifican que, dado ESE conjunto, la búsqueda y el desempate de
+// ambigüedad no dependen de cuántas entradas haya, de en qué posición esté la
+// coincidencia, ni de cuántas cuentas compartan prefijo — porque el filtrado
+// por rango ya lo hizo la capa de Firebase antes de llegar acá.
+// ---------------------------------------------------------------------------
+console.log('\nbuscarFacturasDelRemito / conciliarConFacturaEmitida — ambigüedad por remitoId:');
+
+check('encuentra la coincidencia sin importar la posición entre más de 100 entradas', () => {
+  const ventas = {};
+  for (let i = 1; i <= 150; i += 1) {
+    ventas[`FCC0001-${String(i).padStart(8, '0')}`] = { CAE: `x${i}`, total: 1000 };
+  }
+  // La coincidencia real va temprano en el objeto, "enterrada" bajo 149 más.
+  ventas['FCC0001-00000003'] = { CAE: 'real', total: 4000, remitoId: 'FCX0009-00000001' };
+  const encontradas = buscarFacturasDelRemito(ventas, 'FCX0009-00000001');
+  assert.strictEqual(encontradas.length, 1);
+  assert.strictEqual(encontradas[0].clave, 'FCC0001-00000003');
+});
+
+check('no depende de cuántas cuentas compartan el mismo prefijo de clave', () => {
+  // Dos remitos distintos, dos cuentas distintas, MISMO prefijo FCC0001- (caso
+  // real de IL CAPO: cuatro cuentas fiscales con el mismo punto de venta).
+  const ventas = {
+    'FCC0001-00000010': { CAE: 'a', total: 1000, remitoId: 'FCX0009-00000010' },
+    'FCC0001-00000011': { CAE: 'b', total: 2000, remitoId: 'FCX0009-00000011' },
+  };
+  assert.strictEqual(buscarFacturasDelRemito(ventas, 'FCX0009-00000010')[0].clave, 'FCC0001-00000010');
+  assert.strictEqual(buscarFacturasDelRemito(ventas, 'FCX0009-00000011')[0].clave, 'FCC0001-00000011');
+});
+
+check('las claves heredadas FCX nunca matchean (no son factura)', () => {
+  const ventas = {
+    'FCX0001-00000001': { CLIENTE: 'Viejo', IMPORTE: 500, remitoId: 'FCX0009-00000099' }, // dato corrupto hipotético
+    'FCC0002-00000050': { CAE: 'real', total: 500, remitoId: 'FCX0009-00000099' },
+  };
+  const encontradas = buscarFacturasDelRemito(ventas, 'FCX0009-00000099');
+  assert.strictEqual(encontradas.length, 1, 'la clave FCX no debe contarse como factura aunque tenga el remitoId');
+  assert.strictEqual(encontradas[0].clave, 'FCC0002-00000050');
+});
+
+check('tieneCaeValido distingue un CAE real de uno vacío', () => {
+  assert.strictEqual(tieneCaeValido({ CAE: '86372882161169' }), true);
+  assert.strictEqual(tieneCaeValido({ cae: '1' }), true);
+  assert.strictEqual(tieneCaeValido({ CAE: '' }), false);
+  assert.strictEqual(tieneCaeValido({ CAE: null }), false);
+  assert.strictEqual(tieneCaeValido({}), false);
+});
+
+check('UNA coincidencia con CAE válido → FACTURADO', () => {
+  const ventas = { 'FCC0001-00000005': { CAE: '123', total: 4000, remitoId: 'FCX0009-00000002' } };
+  const r = conciliarConFacturaEmitida({
+    remito: { numeroComprobante: 'FCX0009-00000002', estadoFacturacion: ESTADO_PENDIENTE },
+    ventas, sigueEnCola: false,
+  });
+  assert.strictEqual(r.accion, 'facturado');
+  assert.strictEqual(r.marca.numeroFactura, 'FCC0001-00000005');
+});
+
+check('CERO coincidencias en el rango → esperar, sin marcar nada', () => {
+  const r = conciliarConFacturaEmitida({
+    remito: { numeroComprobante: 'FCX0009-00000003', estadoFacturacion: ESTADO_PENDIENTE },
+    ventas: {}, sigueEnCola: false,
+  });
+  assert.strictEqual(r.accion, 'esperar');
+  assert.strictEqual(r.marca, undefined);
+});
+
+check('una coincidencia SIN CAE (factura a medio escribir) cuenta como demora, no como hallazgo', () => {
+  const ventas = { 'FCC0001-00000006': { total: 4000, remitoId: 'FCX0009-00000004' } }; // sin CAE
+  const r = conciliarConFacturaEmitida({
+    remito: { numeroComprobante: 'FCX0009-00000004', estadoFacturacion: ESTADO_PENDIENTE },
+    ventas, sigueEnCola: false,
+  });
+  assert.strictEqual(r.accion, 'esperar', 'sin CAE no se puede dar por facturado');
+});
+
+check('DOS coincidencias con CAE para el mismo remitoId → alerta, no elige ninguna', () => {
+  const ventas = {
+    'FCC0001-00000301': { CAE: 'dup-1', total: 7000, remitoId: 'FCX0009-00000005' },
+    'FCC0001-00000302': { CAE: 'dup-2', total: 7000, remitoId: 'FCX0009-00000005' },
+  };
+  const r = conciliarConFacturaEmitida({
+    remito: { numeroComprobante: 'FCX0009-00000005', estadoFacturacion: ESTADO_PENDIENTE },
+    ventas, sigueEnCola: false,
+  });
+  assert.strictEqual(r.accion, 'alerta');
+  assert.deepStrictEqual(r.marca.conciliacionAlertaClaves.sort(), ['FCC0001-00000301', 'FCC0001-00000302']);
+  // NO toca estadoFacturacion: el remito sigue PENDIENTE (botón bloqueado),
+  // nunca ERROR (que permitiría reintentar y generar una TERCERA factura).
+  assert.strictEqual('estadoFacturacion' in r.marca, false);
+});
+
+check('marcaDeAlerta no incluye ninguna de las claves si no hay coincidencias', () => {
+  assert.deepStrictEqual(marcaDeAlerta([]).conciliacionAlertaClaves, []);
+});
+
+check('un CAE de una NO gana sobre la ambigüedad de la otra: dos con CAE siguen siendo alerta', () => {
+  // Caso más realista: de dos coincidencias por remitoId, ambas terminaron
+  // con CAE (dos facturas realmente emitidas). No hay forma de saber cuál es
+  // la "buena": las dos cuentan para la alerta.
+  const ventas = {
+    'FCC0001-00000401': { CAE: 'real-1', total: 9000, remitoId: 'FCX0009-00000006' },
+    'FCC0002-00000401': { CAE: 'real-2', total: 9000, remitoId: 'FCX0009-00000006' },
+  };
+  const r = conciliarConFacturaEmitida({
+    remito: { numeroComprobante: 'FCX0009-00000006', estadoFacturacion: ESTADO_PENDIENTE },
+    ventas, sigueEnCola: false,
+  });
+  assert.strictEqual(r.accion, 'alerta');
+  assert.strictEqual(r.marca.conciliacionAlertaClaves.length, 2);
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

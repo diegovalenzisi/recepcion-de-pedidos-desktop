@@ -128,6 +128,42 @@ export function esClaveDeFactura(valor) {
 }
 
 /**
+ * Prefijo EXACTO con el que una cuenta fiscal escribe sus comprobantes en
+ * VENTAS: `FC{letra}{puntoVenta}-` (ej. `FCC0001-`). Es el mismo formato que
+ * lee `partesDeNumero()`, expresado al revés: de la cuenta a la clave.
+ *
+ * @param {{letra: string, puntoVenta: string}} cuenta
+ * @returns {string|null} null si falta letra o punto de venta.
+ */
+export function construirPrefijoClave({ letra, puntoVenta } = {}) {
+  const l = String(letra ?? '').trim().toUpperCase();
+  const pv = puntoVentaCanonico(puntoVenta);
+  if (!l || !pv) return null;
+  return `FC${l}${pv}-`;
+}
+
+/**
+ * Rango de claves de VENTAS donde puede estar CUALQUIER comprobante de esta
+ * cuenta fiscal — sin importar cuántas otras cuentas, ventas históricas o
+ * comprobantes de formatos viejos (p. ej. FCX legado) tenga el mismo local.
+ *
+ * Es un rango por CLAVE (orderByKey + startAt/endAt): a diferencia de una
+ * consulta por campo (orderByChild/equalTo), no requiere ningún `.indexOn` en
+ * las reglas de Firebase — funciona igual en cualquiera de las bases.
+ *
+ * @param {{letra: string, puntoVenta: string}} cuenta
+ * @returns {{desde: string, hasta: string}|null} null si la cuenta no resuelve prefijo.
+ */
+export function rangoDeClavesDeCuenta(cuenta) {
+  const prefijo = construirPrefijoClave(cuenta || {});
+  if (!prefijo) return null;
+  // U+F8FF: carácter del área de uso privado de Unicode, más alto que
+  // cualquier carácter imprimible real — cierra el rango sin incluir el
+  // siguiente prefijo (p. ej. FCC0002-) ni excluir ningún sufijo válido.
+  return { desde: prefijo, hasta: `${prefijo}` };
+}
+
+/**
  * Tipo fiscal REAL escrito en el comprobante, si lo trae.
  * @returns {number|null} CbteTipo de ARCA, o null si el registro no lo guarda.
  */

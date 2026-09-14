@@ -233,25 +233,65 @@ export function marcaDeFacturado(claveFactura, registroFiscal = {}, ahora = null
 }
 
 /**
- * Busca, entre los registros fiscales, el que salió de ESTE remito. El motor
- * copia `remitoId` dentro de la factura, así que la búsqueda es exacta: no se
- * adivina por importe ni por fecha.
+ * TODOS los registros fiscales que traen ESTE remito como `remitoId`. El
+ * motor copia `remitoId` dentro de la factura, así que la búsqueda es exacta:
+ * no se adivina por importe ni por fecha, y no se detiene en el primero —
+ * porque si hay más de uno, eso es justo lo que hay que poder detectar (ver
+ * `conciliarConFacturaEmitida`, caso `alerta`).
  *
- * @param {object} ventas  nodo (o porción reciente) de /{localId}/VENTAS
+ * El `ventas` que recibe puede ser el nodo completo o —preferido, ver
+ * `rangoDeClavesDeCuenta` en comprobanteFiscal.js— sólo el rango de claves de
+ * la cuenta fiscal que encoló este remito: la función no asume nada sobre
+ * cuántas claves trae ni en qué orden.
+ *
+ * @param {object} ventas  nodo (o rango) de /{localId}/VENTAS
  * @param {string} numeroComprobante  el FCX
- * @returns {{clave: string, registro: object}|null}
+ * @returns {Array<{clave: string, registro: object}>}
  */
-export function buscarFacturaDelRemito(ventas, numeroComprobante) {
+export function buscarFacturasDelRemito(ventas, numeroComprobante) {
   const numero = String(numeroComprobante ?? '');
-  if (!numero) return null;
+  if (!numero) return [];
+  const salida = [];
   for (const clave of Object.keys(ventas || {})) {
     if (!esClaveDeFactura(clave)) continue;
     const registro = ventas[clave];
     if (registro && typeof registro === 'object' && String(registro.remitoId ?? '') === numero) {
-      return { clave, registro };
+      salida[salida.length] = { clave, registro };
     }
   }
-  return null;
+  return salida;
+}
+
+/** ¿Este registro fiscal tiene un CAE real (no vacío)? */
+export function tieneCaeValido(registro) {
+  const cae = registro?.CAE ?? registro?.cae;
+  return cae !== undefined && cae !== null && String(cae).trim() !== '';
+}
+
+/**
+ * Compatibilidad: la primera coincidencia, sin importar el CAE. Preferí
+ * `buscarFacturasDelRemito` (plural) en código nuevo — ésta se mantiene para
+ * los callers que sólo necesitan "¿hay alguna?" y no distinguen ambigüedad.
+ *
+ * @returns {{clave: string, registro: object}|null}
+ */
+export function buscarFacturaDelRemito(ventas, numeroComprobante) {
+  return buscarFacturasDelRemito(ventas, numeroComprobante)[0] || null;
+}
+
+/**
+ * Campos que se escriben cuando aparece MÁS DE UNA factura con el mismo
+ * `remitoId` y CAE válido. NO elige ninguna a dedo: deliberadamente no toca
+ * `estadoFacturacion` (el remito sigue PENDIENTE, así que el botón sigue
+ * deshabilitado y nadie puede reintentar y generar una tercera factura) y dejar
+ * constancia para que alguien lo revise a mano.
+ */
+export function marcaDeAlerta(coincidencias) {
+  return {
+    conciliacionAlerta: 'MULTIPLES_FACTURAS_MISMO_REMITO',
+    conciliacionAlertaClaves: (coincidencias || []).map((c) => c.clave),
+    conciliacionAlertaEn: Date.now(),
+  };
 }
 
 /**
@@ -259,9 +299,9 @@ export function buscarFacturaDelRemito(ventas, numeroComprobante) {
  *
  * @param {object} opciones
  * @param {object} opciones.remito
- * @param {object} opciones.ventas          registros fiscales donde buscar
+ * @param {object} opciones.ventas          registros fiscales donde buscar (nodo o rango)
  * @param {boolean} opciones.sigueEnCola    ¿el pedido sigue esperando en la cola?
- * @returns {{accion: 'esperar'|'facturado'|'reabrir', marca?: object, motivo?: string}}
+ * @returns {{accion: 'esperar'|'facturado'|'reabrir'|'alerta', marca?: object, motivo?: string}}
  */
 export function conciliarConFacturaEmitida({ remito, ventas, sigueEnCola, errorDelMotor = null } = {}) {
   const estado = estadoFacturacion(remito);
@@ -278,9 +318,25 @@ export function conciliarConFacturaEmitida({ remito, ventas, sigueEnCola, errorD
   //    cualquier error de un intento anterior. Si la factura existe, el remito
   //    está facturado — no hay lectura del error que pueda contradecir un CAE.
   //    Ésta es la regla que repara sola los remitos que quedaron mal marcados.
-  const encontrada = buscarFacturaDelRemito(ventas, remito?.numeroComprobante);
-  if (encontrada) {
-    return { accion: 'facturado', marca: marcaDeFacturado(encontrada.clave, encontrada.registro) };
+  //
+  //    Coincidencias SIN CAE (remitoId ya escrito pero la factura todavía no
+  //    tiene CAE) no cuentan acá: caen al caso 3, DEMORA, más abajo — es
+  //    exactamente la misma carrera que ya contemplaba este módulo.
+  const coincidencias = buscarFacturasDelRemito(ventas, remito?.numeroComprobante);
+  const conCae = coincidencias.filter((c) => tieneCaeValido(c.registro));
+
+  if (conCae.length === 1) {
+    const { clave, registro } = conCae[0];
+    return { accion: 'facturado', marca: marcaDeFacturado(clave, registro) };
+  }
+
+  // DOS O MÁS facturas con CAE y el mismo remitoId: posible duplicado. NO se
+  // elige ninguna a dedo — eso sería adivinar cuál es "la buena". Se deja
+  // constancia para que alguien lo audite a mano y el remito sigue PENDIENTE
+  // (no ERROR): así el botón de reintentar sigue deshabilitado y no se puede
+  // generar una tercera factura por accidente.
+  if (conCae.length > 1) {
+    return { accion: 'alerta', marca: marcaDeAlerta(conCae), motivo: 'multiples-facturas-mismo-remito' };
   }
 
   // Sin factura y ya estaba en ERROR: se queda como está, esperando que el

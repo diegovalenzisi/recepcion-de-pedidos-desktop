@@ -19,7 +19,7 @@
 //   npm run test:facturacion-remito-emulator
 import assert from 'node:assert';
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, get, set, update, runTransaction, connectDatabaseEmulator } from 'firebase/database';
+import { getDatabase, ref, get, set, update, runTransaction, query, orderByKey, startAt, endAt, connectDatabaseEmulator } from 'firebase/database';
 import {
   ESTADO_ERROR,
   ESTADO_FACTURADO,
@@ -33,7 +33,8 @@ import {
   puedeFacturarse,
   validarRemitoParaFacturar,
 } from '../facturacionDeRemito.js';
-import { cuentasFiscalesHabilitadasParaFacturar } from '../colasFiscales.js';
+import { cuentasFiscalesHabilitadasParaFacturar, cuentaFiscalDeCola } from '../colasFiscales.js';
+import { rangoDeClavesDeCuenta } from '../comprobanteFiscal.js';
 import { filasDeRemitos, totalNoFacturado } from '../remitos.js';
 
 let passed = 0;
@@ -84,12 +85,17 @@ const cuentaFiscal = (localId, cola, over = {}) => ({
   ...over,
 });
 
-/** /{localId}/CONFIGURACION/FACTURACION_AFIP con las cuentas que se pasen. */
+/** /{localId}/CONFIGURACION/FACTURACION_AFIP con las cuentas que se pasen (monotributo → letra C). */
 const configFiscal = (cuentas) => ({ tipo: 'monotributo', monotributo: { cuentas } });
 
-const CONFIG_ACHAVAL_UNA_CUENTA = configFiscal([
-  cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'ach-1', razonSocial: 'ACHAVAL SRL' }),
-]);
+// La cuenta única de Achaval es Responsable Inscripto (letra B, punto de venta
+// 0008) para que coincida con las facturas 'FCB0008-…' que usan las pruebas de
+// abajo: la letra y el punto de venta ahora SÍ importan, porque
+// `conciliar()` busca por el rango exacto de claves de la cuenta (ver más
+// abajo), no por "las últimas N ventas".
+const CONFIG_ACHAVAL_UNA_CUENTA = {
+  ri: cuentaFiscal(ACHAVAL, 'FACTURACION_1', { id: 'ach-1', razonSocial: 'ACHAVAL SRL', ptoVta: '8', condIVA: 'Responsable Inscripto' }),
+};
 
 const remitoDe = (numero, total = 16200) => ({
   numeroComprobante: numero,
@@ -168,8 +174,20 @@ async function motorEmiteFactura(db, raiz, cola, claveCola, numeroFactura, cae =
   return numeroFactura;
 }
 
-/** Copia del flujo de conciliarRemito(). */
-async function conciliar(db, raiz, numero) {
+/**
+ * Copia del flujo de conciliarRemito() — usa las MISMAS funciones puras que el
+ * código real (`conciliarConFacturaEmitida`, `rangoDeClavesDeCuenta`,
+ * `cuentaFiscalDeCola`) para que esta prueba no pueda divergir de la lógica de
+ * negocio real; lo único "de test" es qué llamada a Firebase hacer, porque el
+ * arnés dual Desktop/TAB no puede reutilizar `facturacionDeRemitoApi.js` tal
+ * cual (depende del local activo global, pensado para un solo cliente).
+ *
+ * LA BÚSQUEDA es por el RANGO DE CLAVES exacto de la cuenta fiscal que encoló
+ * el remito — nunca "las últimas N claves de VENTAS": es justamente lo que
+ * hay que probar que no se rompe con volumen, con cuentas que comparten punto
+ * de venta, ni con claves heredadas de otro formato.
+ */
+async function conciliar(db, raiz, numero, configFiscalDelLocal = null) {
   const remito = (await get(ref(db, rutaRem(raiz, numero)))).val();
   const cola = remito?.colaFacturacion;
   // El pedido encolado trae, si hubo un rechazo, el mensaje EXACTO que dejó el
@@ -178,7 +196,19 @@ async function conciliar(db, raiz, numero) {
   const pedidoSnap = cola ? await get(ref(db, `${raiz}/${cola}/${claveEnCola(numero)}`)) : null;
   const sigueEnCola = !!(pedidoSnap && pedidoSnap.exists());
   const errorDelMotor = sigueEnCola ? (pedidoSnap.val()?.errorFacturacion || null) : null;
-  const ventas = (await get(ref(db, `${raiz}/VENTAS`))).val() || {};
+
+  const config = configFiscalDelLocal || (await get(ref(db, `${raiz}/CONFIGURACION/FACTURACION_AFIP`))).val();
+  const cuenta = cola ? cuentaFiscalDeCola(config, cola) : null;
+  const rango = cuenta ? rangoDeClavesDeCuenta(cuenta) : null;
+
+  let ventas = {};
+  if (rango) {
+    const snap = await get(
+      query(ref(db, `${raiz}/VENTAS`), orderByKey(), startAt(rango.desde), endAt(rango.hasta))
+    );
+    ventas = snap.exists() ? snap.val() : {};
+  }
+
   const r = conciliarConFacturaEmitida({ remito, ventas, sigueEnCola, errorDelMotor });
   if (r.accion !== 'esperar') await update(ref(db, rutaRem(raiz, numero)), r.marca);
   return r;
@@ -486,8 +516,14 @@ await check('CON 2+ cuentas, eligiendo una VÁLIDA, encola con ESA y no con la o
   const rem = await leerRemito(ACHAVAL, N);
   assert.strictEqual(rem.colaFacturacion, 'FACTURACION_2');
 
-  await motorEmiteFactura(DESKTOP, ACHAVAL, 'FACTURACION_2', claveEnCola(N), 'FCB0008-00010303');
-  await conciliar(DESKTOP, ACHAVAL, N);
+  // 'dos-b' es monotributo con punto de venta 1 (default de cuentaFiscal()):
+  // su factura es FCC0001-…, no FCB0008-… (esa es la de Achaval en las demás
+  // pruebas). Usar el prefijo que NO corresponde a esta cuenta es justo el
+  // error que la reconciliación por rango tiene que evitar.
+  await motorEmiteFactura(DESKTOP, ACHAVAL, 'FACTURACION_2', claveEnCola(N), 'FCC0001-00000900');
+  const rConciliado = await conciliar(DESKTOP, ACHAVAL, N);
+  assert.strictEqual(rConciliado.accion, 'facturado');
+  assert.strictEqual(rConciliado.marca.numeroFactura, 'FCC0001-00000900');
   await set(ref(DESKTOP, rutaConfigFiscal(ACHAVAL)), CONFIG_ACHAVAL_UNA_CUENTA);
 });
 
@@ -546,6 +582,136 @@ await check('cada remito tiene como máximo UNA factura', async () => {
   for (const [remito, facturas] of Object.entries(porRemito)) {
     assert.strictEqual(facturas.length, 1, `${remito} tiene ${facturas.length} facturas: ${facturas}`);
   }
+});
+
+console.log('\n8. Reconciliación determinística por remitoId (rango de claves, sin heurística de ventana):');
+
+// Local dedicado, aislado de Achaval/OTRO_LOCAL, para reproducir EXACTAMENTE
+// los dos bugs reales encontrados en producción (IL CAPO y Temperley):
+//   - dos cuentas fiscales con el MISMO punto de venta (mismo prefijo de clave);
+//   - más de 100 ventas históricas y claves heredadas FCX conviviendo en VENTAS.
+const VOLUMEN = '99999999';
+const CONFIG_VOLUMEN = configFiscal([
+  cuentaFiscal(VOLUMEN, 'FACTURACION_1', { id: 'vol-a', razonSocial: 'CUENTA VOLUMEN A', cuit: '20111111111' }),
+  cuentaFiscal(VOLUMEN, 'FACTURACION_2', { id: 'vol-b', razonSocial: 'CUENTA VOLUMEN B', cuit: '27222222222' }),
+  // Punto de venta 1 en AMBAS — igual que las 4 cuentas reales de IL CAPO.
+]);
+const remitoVolumen = (numero, total) => ({ ...remitoDe(numero, total), localId: VOLUMEN });
+
+await check('sembrado: > 100 ventas históricas + claves heredadas FCX conviven con las cuentas reales', async () => {
+  await set(ref(DESKTOP, VOLUMEN), null);
+  await set(ref(DESKTOP, rutaConfigFiscal(VOLUMEN)), CONFIG_VOLUMEN);
+
+  // > 100 ventas históricas de la MISMA cuenta (FCC0001-), sin relación con
+  // los remitos que se van a facturar — simula un local de mucho movimiento.
+  const historicas = {};
+  for (let i = 1; i <= 150; i += 1) {
+    historicas[`FCC0001-${String(i).padStart(8, '0')}`] = { CAE: `historica${i}`, total: 1000, CUIT: '20111111111' };
+  }
+  // Claves heredadas de otro formato (remitos FCX guardados alguna vez dentro
+  // de VENTAS, como los 99 de Temperley): 'X' ordena después de 'B'/'C', así
+  // que con la vieja heurística de "últimas N por orden alfabético" estas
+  // claves desplazarían a CUALQUIER factura real fuera de la ventana.
+  for (let i = 1; i <= 60; i += 1) {
+    historicas[`FCX0001-${String(i).padStart(8, '0')}`] = { CLIENTE: 'Viejo', IMPORTE: 500 };
+  }
+  await update(ref(DESKTOP, `${VOLUMEN}/VENTAS`), historicas);
+
+  const totalVentas = Object.keys((await get(ref(DESKTOP, `${VOLUMEN}/VENTAS`))).val() || {}).length;
+  assert.ok(totalVentas > 100, `se sembraron ${totalVentas}, hacen falta > 100`);
+});
+
+await check('factura FUERA de las últimas 60 claves (heurística vieja) se encuentra igual', async () => {
+  // Con la vieja heurística (orderByKey + limitToLast(60)) esta factura NUNCA
+  // hubiera aparecido: hay 150 FCC0001- + 60 FCX0001- después de ella en
+  // orden alfabético. Con el rango por cuenta (FCC0001-…) se encuentra sin
+  // importar la posición.
+  const N = 'FCX0004-00000001';
+  await set(ref(DESKTOP, rutaRem(VOLUMEN, N)), remitoVolumen(N, 4000));
+  const enc = await pedirFactura(DESKTOP, VOLUMEN, N, 'pc-1', 'FACTURACION_1');
+  assert.strictEqual(enc.estado, 'encolado');
+
+  // El motor emite con un número BAJO a propósito (queda "enterrado" antes de
+  // las 150 históricas 000001..000150 más recientes en orden alfabético).
+  const NUMERO_FACTURA = 'FCC0001-00000003';
+  await motorEmiteFactura(DESKTOP, VOLUMEN, 'FACTURACION_1', claveEnCola(N), NUMERO_FACTURA);
+
+  const r = await conciliar(DESKTOP, VOLUMEN, N, CONFIG_VOLUMEN);
+  assert.strictEqual(r.accion, 'facturado', 'la vieja heurística de últimas-60 la hubiera perdido para siempre');
+  assert.strictEqual(r.marca.numeroFactura, NUMERO_FACTURA);
+  assert.strictEqual((await leerRemito(VOLUMEN, N)).estadoFacturacion, ESTADO_FACTURADO);
+});
+
+await check('las claves heredadas FCX nunca se cuelan en la búsqueda', async () => {
+  // Ya sembradas 60 claves FCX0001-… sin remitoId. Ninguna puede aparecer
+  // como coincidencia de ningún remito real.
+  const ventasFCX = (await get(ref(DESKTOP, `${VOLUMEN}/VENTAS`))).val();
+  const clavesFCX = Object.keys(ventasFCX).filter((k) => k.startsWith('FCX'));
+  assert.strictEqual(clavesFCX.length, 60);
+  for (const k of clavesFCX) assert.strictEqual(ventasFCX[k].remitoId, undefined, `${k} no debería tener remitoId`);
+});
+
+await check('DOS cuentas fiscales con el MISMO punto de venta: cada remito reconcilia con SU factura', async () => {
+  // Reproduce IL CAPO exacto: 'vol-a' (FACTURACION_1) y 'vol-b' (FACTURACION_2)
+  // comparten punto de venta 1 → mismo prefijo de clave FCC0001-.
+  const Na = 'FCX0004-00000010';
+  const Nb = 'FCX0004-00000011';
+  await set(ref(DESKTOP, rutaRem(VOLUMEN, Na)), remitoVolumen(Na, 5000));
+  await set(ref(DESKTOP, rutaRem(VOLUMEN, Nb)), remitoVolumen(Nb, 6000));
+
+  await pedirFactura(DESKTOP, VOLUMEN, Na, 'pc-1', 'FACTURACION_1');
+  await pedirFactura(DESKTOP, VOLUMEN, Nb, 'pc-1', 'FACTURACION_2');
+
+  const FACTURA_A = 'FCC0001-00000200';
+  const FACTURA_B = 'FCC0001-00000201';
+  await motorEmiteFactura(DESKTOP, VOLUMEN, 'FACTURACION_1', claveEnCola(Na), FACTURA_A, 'caeA');
+  await motorEmiteFactura(DESKTOP, VOLUMEN, 'FACTURACION_2', claveEnCola(Nb), FACTURA_B, 'caeB');
+
+  const ra = await conciliar(DESKTOP, VOLUMEN, Na, CONFIG_VOLUMEN);
+  const rb = await conciliar(DESKTOP, VOLUMEN, Nb, CONFIG_VOLUMEN);
+  assert.strictEqual(ra.accion, 'facturado');
+  assert.strictEqual(ra.marca.numeroFactura, FACTURA_A, 'se coló la factura de la OTRA cuenta');
+  assert.strictEqual(rb.accion, 'facturado');
+  assert.strictEqual(rb.marca.numeroFactura, FACTURA_B, 'se coló la factura de la OTRA cuenta');
+});
+
+await check('CERO coincidencias: el remito queda como está, no se marca nada', async () => {
+  const N = 'FCX0004-00000020';
+  await set(ref(DESKTOP, rutaRem(VOLUMEN, N)), remitoVolumen(N, 2000));
+  await pedirFactura(DESKTOP, VOLUMEN, N, 'pc-1', 'FACTURACION_1');
+  // El motor NUNCA emitió nada para este remito.
+  const r = await conciliar(DESKTOP, VOLUMEN, N, CONFIG_VOLUMEN);
+  assert.strictEqual(r.accion, 'esperar');
+  const rem = await leerRemito(VOLUMEN, N);
+  assert.strictEqual(rem.estadoFacturacion, ESTADO_PENDIENTE, 'no se debe marcar nada sin coincidencia');
+  assert.strictEqual(rem.facturado, false);
+});
+
+await check('DOS coincidencias para el mismo remitoId: alerta, no se elige ninguna a dedo', async () => {
+  const N = 'FCX0004-00000030';
+  await set(ref(DESKTOP, rutaRem(VOLUMEN, N)), remitoVolumen(N, 7000));
+  await pedirFactura(DESKTOP, VOLUMEN, N, 'pc-1', 'FACTURACION_1');
+
+  // Simula una posible doble emisión: dos claves DISTINTAS, mismo remitoId,
+  // las dos con CAE válido.
+  const payload = (await get(ref(DESKTOP, `${VOLUMEN}/FACTURACION_1/${claveEnCola(N)}`))).val();
+  await set(ref(DESKTOP, `${VOLUMEN}/VENTAS/FCC0001-00000301`), {
+    ...payload, CLIENTE: payload.clientes, TOTAL: payload.total, CAE: 'dup-1',
+  });
+  await set(ref(DESKTOP, `${VOLUMEN}/VENTAS/FCC0001-00000302`), {
+    ...payload, CLIENTE: payload.clientes, TOTAL: payload.total, CAE: 'dup-2',
+  });
+  await set(ref(DESKTOP, `${VOLUMEN}/FACTURACION_1/${claveEnCola(N)}`), null);
+
+  const r = await conciliar(DESKTOP, VOLUMEN, N, CONFIG_VOLUMEN);
+  assert.strictEqual(r.accion, 'alerta', 'no debe elegir una de las dos en silencio');
+  assert.deepStrictEqual(r.marca.conciliacionAlertaClaves.sort(), ['FCC0001-00000301', 'FCC0001-00000302']);
+
+  const rem = await leerRemito(VOLUMEN, N);
+  assert.strictEqual(rem.estadoFacturacion, ESTADO_PENDIENTE, 'no debe marcarse FACTURADO ni ERROR con ambigüedad');
+  assert.strictEqual(rem.facturado, false, 'no debe darse por facturado sin saber cuál de las dos es la real');
+  assert.strictEqual(puedeFacturarse(rem), false, 'el botón debe seguir bloqueado: reintentar generaría una TERCERA factura');
+  assert.ok(rem.conciliacionAlerta, 'debe quedar constancia de la alerta para investigar a mano');
 });
 
 console.log(`\n${passed} pruebas OK` + (process.exitCode ? ' — HAY FALLAS ARRIBA' : ''));

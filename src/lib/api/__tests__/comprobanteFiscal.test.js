@@ -8,6 +8,7 @@
 import assert from 'node:assert';
 import {
   CBTE_TIPO,
+  construirPrefijoClave,
   construirQrArca,
   esClaveDeFactura,
   fechaISO,
@@ -19,6 +20,7 @@ import {
   normalizarComprobante,
   partesDeNumero,
   puntoVentaCanonico,
+  rangoDeClavesDeCuenta,
   resolverCuentaEmisora,
   resolverTipoComprobante,
   totalesImpositivos,
@@ -140,6 +142,29 @@ check('esClaveDeFactura distingue facturas de remitos', () => {
   assert.ok(esClaveDeFactura('FCB0008-00009973'));
   assert.ok(esClaveDeFactura('FCC0001-00001345'));
   assert.ok(!esClaveDeFactura('FCX0001-00000024'));
+});
+
+console.log('\nRango de claves por cuenta — reconciliación determinística por remitoId:');
+check('construirPrefijoClave arma FC{letra}{puntoVenta}-', () => {
+  assert.strictEqual(construirPrefijoClave({ letra: 'C', puntoVenta: '0001' }), 'FCC0001-');
+  assert.strictEqual(construirPrefijoClave({ letra: 'b', puntoVenta: 8 }), 'FCB0008-');
+});
+check('construirPrefijoClave sin letra o sin punto de venta no inventa nada', () => {
+  assert.strictEqual(construirPrefijoClave({ letra: '', puntoVenta: '0001' }), null);
+  assert.strictEqual(construirPrefijoClave({ letra: 'C', puntoVenta: '' }), null);
+  assert.strictEqual(construirPrefijoClave({}), null);
+});
+check('rangoDeClavesDeCuenta cierra el rango después de cualquier sufijo real', () => {
+  const r = rangoDeClavesDeCuenta({ letra: 'C', puntoVenta: '0001' });
+  assert.strictEqual(r.desde, 'FCC0001-');
+  // El límite superior tiene que quedar DESPUÉS de cualquier número de 8
+  // cifras (hasta 99999999) y ANTES del siguiente punto de venta.
+  assert.ok('FCC0001-99999999' < r.hasta, 'se perdería un número alto');
+  assert.ok(r.hasta < 'FCC0002-00000001', 'se colaría el siguiente punto de venta');
+});
+check('rangoDeClavesDeCuenta null si la cuenta no resuelve prefijo', () => {
+  assert.strictEqual(rangoDeClavesDeCuenta({ letra: null, puntoVenta: '0001' }), null);
+  assert.strictEqual(rangoDeClavesDeCuenta(null), null);
 });
 
 console.log('\nTipo fiscal — cascada acordada:');

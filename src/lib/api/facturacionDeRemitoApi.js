@@ -16,10 +16,12 @@
 // Archivo IDÉNTICO en Desktop y Tablet.
 // ---------------------------------------------------------------------------
 
-import { getDatabase, ref, get, update, runTransaction, set, query, orderByKey, limitToLast } from 'firebase/database';
+import { getDatabase, ref, get, update, runTransaction, set, query, orderByKey, startAt, endAt } from 'firebase/database';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import { rutaRemito } from '@/lib/api/remitos';
-import { cuentasFiscalesHabilitadasDelLocal } from '@/lib/api/colasFiscalesApi';
+import { cuentasFiscalesHabilitadasDelLocal, leerConfigFiscal } from '@/lib/api/colasFiscalesApi';
+import { cuentaFiscalDeCola } from '@/lib/api/colasFiscales';
+import { rangoDeClavesDeCuenta } from '@/lib/api/comprobanteFiscal';
 import {
   ESTADO_PENDIENTE,
   ESTADO_ERROR,
@@ -31,9 +33,6 @@ import {
   validarRemitoParaFacturar,
 } from '@/lib/api/facturacionDeRemito';
 import { construirRutaLocal, normalizarLocalId, verificarMismoLocal } from '@/lib/api/rutasLocales';
-
-/** Cuántos registros fiscales recientes se miran al reconciliar. */
-const VENTAS_A_REVISAR = 60;
 
 const DEVICE_ID_KEY = 'factDeviceId';
 
@@ -193,6 +192,45 @@ export const facturarRemito = async (numeroComprobante, colaElegida = null) => {
 };
 
 /**
+ * Registros fiscales donde PUEDE estar la factura de este remito: el rango de
+ * claves EXACTO de la cuenta fiscal que lo encoló (`FC{letra}{puntoVenta}-…`).
+ *
+ * Reemplaza la vieja heurística de "las últimas N claves de VENTAS por orden
+ * alfabético", que fallaba en dos formas reales:
+ *   - un local con varias cuentas de MUCHO volumen corre el orden alfabético
+ *     más rápido de lo que tarda en reconciliar, y la factura queda afuera de
+ *     la ventana PARA SIEMPRE (no hay forma de que "la ventana de las últimas
+ *     N" vuelva a incluir una clave vieja);
+ *   - claves heredadas de otro formato (p. ej. remitos FCX guardados alguna
+ *     vez dentro de VENTAS) ordenan después de cualquier factura real y
+ *     pueden llenar la ventana entera, dejándola sin ninguna factura de
+ *     verdad sin importar cuánto tiempo pase.
+ *
+ * El rango por CLAVE (orderByKey + startAt/endAt) no depende de cuántas
+ * ventas tenga el local, de cuántas cuentas compartan punto de venta ni del
+ * CUIT: sólo del prefijo que la PROPIA cuenta usa para escribir sus
+ * comprobantes. Tampoco requiere ningún `.indexOn` en las reglas de Firebase
+ * (a diferencia de una consulta por campo como `orderByChild('remitoId')`),
+ * así que funciona igual en cualquiera de las bases sin tocar reglas.
+ *
+ * @returns {Promise<object>} el rango de VENTAS (puede ser `{}` si no se pudo
+ *   resolver la cuenta fiscal de la cola — la reconciliación queda entonces
+ *   en "esperar", el comportamiento seguro de siempre).
+ */
+const leerVentasDeLaCuenta = async (db, raiz, cola, configPrevio) => {
+  if (!cola) return {};
+  const config = configPrevio || await leerConfigFiscal(raiz).catch(() => null);
+  const cuenta = cuentaFiscalDeCola(config, cola);
+  const rango = cuenta ? rangoDeClavesDeCuenta(cuenta) : null;
+  if (!rango) return {};
+
+  const snap = await get(
+    query(ref(db, construirRutaLocal(raiz, 'VENTAS')), orderByKey(), startAt(rango.desde), endAt(rango.hasta))
+  );
+  return snap.exists() ? snap.val() : {};
+};
+
+/**
  * Cierra el círculo de un remito PENDIENTE: busca la factura que el motor dejó
  * en la ruta fiscal y, si la encuentra, marca el remito como facturado con su
  * número y su CAE.
@@ -201,9 +239,13 @@ export const facturarRemito = async (numeroComprobante, colaElegida = null) => {
  * es exacto (`remitoId`), no adivinado por importe ni por fecha. No se toca el
  * motor y no se mueve la factura de la ruta fiscal.
  *
- * @returns {Promise<{accion:'esperar'|'facturado'|'reabrir', numeroFactura?:string}>}
+ * @param {object} [opciones]
+ * @param {object} [opciones.config]  configuración fiscal ya leída (para no
+ *        releerla en cada remito cuando `conciliarRemitosPendientes` procesa
+ *        varios de una vez).
+ * @returns {Promise<{accion:'esperar'|'facturado'|'reabrir'|'alerta', numeroFactura?:string}>}
  */
-export const conciliarRemito = async (numeroComprobante) => {
+export const conciliarRemito = async (numeroComprobante, { config = null } = {}) => {
   const raiz = raizLocal();
   if (!raiz) return { accion: 'esperar', motivo: 'sin-local' };
 
@@ -222,15 +264,9 @@ export const conciliarRemito = async (numeroComprobante) => {
   const sigueEnCola = !!(pedidoSnap && pedidoSnap.exists());
   const errorDelMotor = sigueEnCola ? (pedidoSnap.val()?.errorFacturacion || null) : null;
 
-  // Sólo los registros fiscales recientes: la factura de un remito recién
-  // encolado está entre los últimos. Evita leer VENTAS entero.
-  const recientes = await get(
-    query(ref(db, construirRutaLocal(raiz, 'VENTAS')), orderByKey(), limitToLast(VENTAS_A_REVISAR))
-  );
+  const ventas = await leerVentasDeLaCuenta(db, raiz, cola, config);
 
-  const resultado = conciliarConFacturaEmitida({
-    remito, ventas: recientes.exists() ? recientes.val() : {}, sigueEnCola, errorDelMotor,
-  });
+  const resultado = conciliarConFacturaEmitida({ remito, ventas, sigueEnCola, errorDelMotor });
 
   if (resultado.accion === 'esperar') return resultado;
 
@@ -240,6 +276,14 @@ export const conciliarRemito = async (numeroComprobante) => {
   if (resultado.accion === 'facturado') {
     console.log(`[REMITO→FACTURA] ${numeroComprobante} quedó facturado como ${resultado.marca.numeroFactura}`);
     return { accion: 'facturado', numeroFactura: resultado.marca.numeroFactura };
+  }
+  if (resultado.accion === 'alerta') {
+    console.error(
+      `[REMITO→FACTURA] ¡ALERTA! ${numeroComprobante} tiene ${resultado.marca.conciliacionAlertaClaves.length} ` +
+      `facturas distintas con el mismo remitoId (${resultado.marca.conciliacionAlertaClaves.join(', ')}). ` +
+      'NO se eligió ninguna: revisar a mano, puede haber una factura duplicada.'
+    );
+    return { accion: 'alerta', claves: resultado.marca.conciliacionAlertaClaves };
   }
   console.warn(`[REMITO→FACTURA] ${numeroComprobante} se liberó para reintentar: ${resultado.marca.errorFacturacion}`);
   return { accion: 'reabrir' };
@@ -252,16 +296,24 @@ export const conciliarRemito = async (numeroComprobante) => {
  * ser de un intento anterior. Si aparece la factura, el remito se corrige solo a
  * FACTURADO y se le borra el error — que es lo que repara los que quedaron mal
  * marcados por la versión anterior.
+ *
+ * Lee la configuración fiscal UNA sola vez para todo el lote (no una vez por
+ * remito): varios remitos pendientes suelen compartir local, y a veces cola.
  */
 export const conciliarRemitosPendientes = async (remitos) => {
   const pendientes = (remitos || []).filter((r) => {
     const e = String(r?.estadoFacturacion || '').toUpperCase();
     return (e === ESTADO_PENDIENTE || e === ESTADO_ERROR) && r?.facturado !== true;
   });
+  if (pendientes.length === 0) return [];
+
+  const raiz = raizLocal();
+  const config = raiz ? await leerConfigFiscal(raiz).catch(() => null) : null;
+
   const resultados = [];
   for (const r of pendientes) {
     try {
-      resultados.push({ numero: r.numeroFactura || r.id, ...(await conciliarRemito(r.numeroFactura || r.id)) });
+      resultados.push({ numero: r.numeroFactura || r.id, ...(await conciliarRemito(r.numeroFactura || r.id, { config })) });
     } catch (e) {
       console.error('[REMITO→FACTURA] error reconciliando', r?.id, e?.message || e);
     }
