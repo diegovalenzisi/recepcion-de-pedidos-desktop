@@ -73,6 +73,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     restart:   (key, accountDir) => ipcRenderer.invoke('facturacion:restart', key, accountDir),
     getStatus: (key) => ipcRenderer.invoke('facturacion:status', key),
     getLogs:   (key) => ipcRenderer.invoke('facturacion:logs', key),
+    // Host fiscal único por local: traslado deliberado ("Tomar control fiscal").
+    // Nunca roba un lease vigente — ver electron/main.js, facturacion:take-control.
+    takeControl: (localId) => ipcRenderer.invoke('facturacion:take-control', localId),
     // Config persistente (por local)
     readConfig:  () => ipcRenderer.invoke('facturacion:config:read'),
     writeConfig: (config) => ipcRenderer.invoke('facturacion:config:write', config),

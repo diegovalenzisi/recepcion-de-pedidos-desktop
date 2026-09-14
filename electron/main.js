@@ -30,6 +30,33 @@ const {
 } = require('./lib/facturacionRuntimeLink');
 // Borrado de credenciales de una cuenta fiscal (RI/Monotributo) al eliminarla.
 const { eliminarCredencialesDeCuenta } = require('./lib/facturacionAccountDelete');
+// Preferencia LOCAL por máquina (nunca por Firebase, nunca por local activo):
+// si esta PC debe autoarrancar sus motores fiscales. Ver electron/lib/machineSettings.js.
+const {
+  leerMachineSettings,
+  facturacionAutoStartHabilitado,
+  setFacturacionAutoStartEnabled,
+} = require('./lib/machineSettings');
+// Host fiscal único por local (módulo puro, con pruebas: ver
+// electron/lib/facturacionHost.js). Firebase client SDK usado desde el
+// proceso principal SOLO para esta elección — nunca para datos de negocio,
+// que siguen viviendo en el renderer.
+const {
+  HEARTBEAT_INTERVALO_MS,
+  LEASE_MS: FACTURACION_HOST_LEASE_MS,
+  TOMA_CONTROL_REINTENTO_MS,
+  TOMA_CONTROL_TIMEOUT_MS,
+  reductorDeHost,
+  reductorDeLiberacion,
+} = require('./lib/facturacionHost');
+const { initializeApp: initializeFirebaseApp } = require('firebase/app');
+const {
+  getDatabase: getFirebaseDatabase,
+  ref: firebaseRef,
+  onValue: onFirebaseValue,
+  runTransaction: runFirebaseTransaction,
+  set: setFirebaseValue,
+} = require('firebase/database');
 // Microsoft Visual C++ Redistributable (VCRUNTIME140.dll) para el OpenSSL
 // bundled. Ver electron/lib/vcRedist.js.
 const { asegurarVcRedistSiHaceFalta, getVcRedistResourcePath } = require('./lib/vcRedist');
@@ -751,6 +778,181 @@ function stopAllFacturacion() {
   Object.keys(facturacionProcs).forEach(stopFacturacionProc);
 }
 
+/**
+ * Detiene ÚNICAMENTE los motores fiscales de UN local — nunca los de otros
+ * locales que esta misma PC pudiera tener corriendo. Hace falta desde que el
+ * host fiscal es por local: perder (o soltar) el host de un local no puede
+ * tocar los motores de otro que esta PC siga hosteando.
+ *
+ * El criterio es el mismo `accountDir` que ya guarda cada entrada de
+ * `facturacionProcs`: pertenece al local si cae bajo
+ * `getLocaleFacturacionDir(localId)`.
+ */
+function stopFacturacionDeLocal(localId) {
+  const prefijo = getLocaleFacturacionDir(localId) + path.sep;
+  const keys = Object.keys(facturacionProcs).filter((key) => {
+    const dir = facturacionProcs[key]?.accountDir;
+    return dir && (dir + path.sep).startsWith(prefijo);
+  });
+  keys.forEach(stopFacturacionProc);
+  return keys;
+}
+
+// ---------------------------------------------------------------------------
+// HOST FISCAL ÚNICO POR LOCAL
+//
+// Máximo una PC por local corre node-afip; mínimo una, mientras haya al
+// menos una PC elegible viva. La decisión (quién gana, cuándo vence, quién
+// puede tomarlo) es el módulo puro `./lib/facturacionHost.js`; acá sólo vive
+// el I/O: la app de Firebase por base de datos, el reloj corregido por
+// offset de servidor, el ciclo que reintenta/renueva, y el listener de
+// traslado. Ver el plan aprobado para el diseño completo.
+// ---------------------------------------------------------------------------
+
+/** Una sola instancia de Database por databaseURL, reutilizada entre locales. */
+const firebaseDbPorURL = new Map();
+/** Offset de reloj sv-cliente por databaseURL, actualizado en vivo. */
+const offsetServidorPorURL = new Map();
+
+function dbFiscalDe(databaseURL) {
+  if (firebaseDbPorURL.has(databaseURL)) return firebaseDbPorURL.get(databaseURL);
+  const nombre = `host-fiscal-${firebaseDbPorURL.size}`;
+  const firebaseApp = initializeFirebaseApp({ databaseURL }, nombre);
+  const db = getFirebaseDatabase(firebaseApp);
+  firebaseDbPorURL.set(databaseURL, db);
+  offsetServidorPorURL.set(databaseURL, 0);
+  // `.info/serverTimeOffset`: referencia de tiempo compartida entre PCs, para
+  // que la comparación de `leaseUntil` no dependa del reloj de Windows de
+  // cada una. No hay forma de leer `ServerValue.TIMESTAMP` dentro de un
+  // reductor de transacción antes de confirmar, así que se usa esto en su
+  // lugar — mismo patrón que `claimPedido.mjs` (`ahora` como parámetro
+  // calculado ANTES de entrar a la transacción).
+  onFirebaseValue(firebaseRef(db, '.info/serverTimeOffset'), (snap) => {
+    offsetServidorPorURL.set(databaseURL, Number(snap.val()) || 0);
+  });
+  return db;
+}
+
+/** Reloj corregido: Date.now() + offset de servidor de ESA base. */
+function ahoraServidor(databaseURL) {
+  return Date.now() + (offsetServidorPorURL.get(databaseURL) || 0);
+}
+
+/** FIREBASE_DB de la primera cuenta candidata que lo tenga (todas comparten proyecto). */
+function databaseURLDeAccountDir(dir) {
+  try {
+    const env = parseEnvFile(path.join(dir, '.env'));
+    return env.FIREBASE_DB || null;
+  } catch {
+    return null;
+  }
+}
+
+/** El `localId` al que pertenece un `accountDir` (`.../locales/{localId}/ri|mono/{cuentaId}`). */
+function localIdDeAccountDir(accountDir) {
+  const base = path.join(FACTURACION_USER_DIR(), 'locales') + path.sep;
+  if (!accountDir || !accountDir.startsWith(base)) return null;
+  const resto = accountDir.slice(base.length);
+  return resto.split(path.sep)[0] || null;
+}
+
+/**
+ * Estado de host fiscal, sólo para los locales que ESTA PC llegó a ganar
+ * alguna vez en esta sesión: `{ activo: boolean, databaseURL: string }`.
+ * `activo` es la fuente de verdad LOCAL de "soy yo el que factura este local
+ * ahora mismo" — se pone en `true` sólo tras una transacción ganadora, y en
+ * `false` apenas se pierde, se suelta, o se traslada.
+ */
+const hostFiscalPorLocal = {};
+/** Función para desarmar el listener de FACTURACION_HOST_TRANSFER, por local. */
+const transferOff = {};
+/** localIds con una transacción de host en vuelo — evita ticks superpuestos. */
+const hostEnCurso = new Set();
+
+/**
+ * Suelta el host de un local (cierre normal, o para cederlo en un traslado).
+ * Usa `reductorDeLiberacion`: sólo libera si ESTA PC sigue siendo la dueña —
+ * si para ese momento ya no lo es (el lease venció y otra PC lo tomó),
+ * aborta sola sin tocar nada ajeno. Nunca lanza.
+ */
+async function liberarHostDelLocal(localId, databaseURL) {
+  try {
+    const db = dbFiscalDe(databaseURL);
+    const hostRef = firebaseRef(db, `${localId}/FACTURACION_HOST`);
+    const r = await runFirebaseTransaction(hostRef, reductorDeLiberacion({ machineId: MACHINE_ID }));
+    return r.committed;
+  } catch (e) {
+    console.error(`[Facturación] ${localId}: no se pudo liberar el host: ${e.message}`);
+    return false;
+  } finally {
+    if (hostFiscalPorLocal[localId]) hostFiscalPorLocal[localId].activo = false;
+    desarmarListenerDeTransferencia(localId);
+  }
+}
+
+/**
+ * Handoff seguro ("Tomar control fiscal"): se arma SOLO mientras esta PC es
+ * dueña vigente de ese local, se desarma apenas deja de serlo. Al ver una
+ * solicitud: detiene los motores del local, suelta el host (verificando que
+ * siga siendo mío), y limpia la solicitud. Nunca le "avisa" nada especial al
+ * solicitante — el solicitante gana solo, por la vía normal, en cuanto el
+ * nodo queda libre.
+ *
+ * TAMBIÉN mantiene caliente el cache local del SDK cliente sobre
+ * `FACTURACION_HOST` con un segundo listener. Es necesario: `runTransaction`
+ * del SDK cliente decide su PRIMER pase con lo que ya haya en el cache local
+ * (`syncTreeCalcCompleteEventCache`, ver node_modules/@firebase/database) —
+ * si no hay ningún listener activo sobre ese path, ese primer pase ve
+ * `null`. Como `reductorDeLiberacion` responde a `null` con `undefined`
+ * ("nada mío que soltar"), y el SDK trata un `undefined` en el PRIMER pase
+ * como un abort DEFINITIVO (nunca consulta al servidor para confirmar), una
+ * liberación legítima de esta misma PC podía abortar en falso contra un
+ * cache frío — verificado de forma aislada contra el emulador real. Esto NO
+ * afecta a `reductorDeHost`: su respuesta al mismo cache vacío siempre es un
+ * valor real (nunca `undefined`), así que el SDK sí reintenta contra el
+ * servidor en ese caso — motivo por el que la adquisición nunca necesitó
+ * este calentamiento.
+ *
+ * Devuelve una promesa que resuelve en cuanto el cache ya tiene un valor
+ * real (o de inmediato si ya estaba armado) — los llamadores la esperan
+ * antes de dar por buena la adquisición, así una liberación posterior de
+ * ESTE mismo local (cierre normal o traslado) funciona a la primera.
+ */
+function armarListenerDeTransferencia(localId, databaseURL) {
+  if (transferOff[localId]) return Promise.resolve(); // ya armado
+  const db = dbFiscalDe(databaseURL);
+  const transferRef = firebaseRef(db, `${localId}/FACTURACION_HOST_TRANSFER`);
+  const hostRef = firebaseRef(db, `${localId}/FACTURACION_HOST`);
+
+  const cancelarTransfer = onFirebaseValue(transferRef, async (snap) => {
+    const solicitud = snap.val();
+    if (!solicitud || !hostFiscalPorLocal[localId]?.activo) return;
+    console.log(
+      `[Facturación] ${localId}: solicitud de traslado de ` +
+      `${solicitud.solicitanteHostname || solicitud.solicitanteMachineId}. Deteniendo motores y liberando...`
+    );
+    stopFacturacionDeLocal(localId);
+    await liberarHostDelLocal(localId, databaseURL);
+    try { await setFirebaseValue(transferRef, null); } catch { /* best-effort */ }
+  });
+
+  return new Promise((resolve) => {
+    let resuelto = false;
+    const cancelarCache = onFirebaseValue(hostRef, () => {
+      if (!resuelto) { resuelto = true; resolve(); }
+    });
+    transferOff[localId] = () => { cancelarTransfer(); cancelarCache(); };
+  });
+}
+
+function desarmarListenerDeTransferencia(localId) {
+  const cancelar = transferOff[localId];
+  if (cancelar) {
+    try { cancelar(); } catch { /* best-effort */ }
+    delete transferOff[localId];
+  }
+}
+
 // Registra un fallo de la verificación remota de ownership con el código de
 // causa clasificado (URL_INVALIDA / PROTOCOLO_NO_SOPORTADO / ERROR_DE_RED /
 // PERMISSION_DENIED) — nunca un genérico "sin conexión" que hubiera ocultado
@@ -994,70 +1196,253 @@ function colaDeCuenta(dir) {
   }
 }
 
-async function autoStartFacturacion() {
-  const iniciadas = [];
+// ---------------------------------------------------------------------------
+// AUTOARRANQUE POR HOST FISCAL — no depende de `active-local.json` ni de qué
+// se esté mirando en pantalla. Ver electron/lib/facturacionHost.js para el
+// diseño completo y las garantías; acá sólo el I/O que lo pone en marcha.
+// ---------------------------------------------------------------------------
+
+/**
+ * Locales configurados en ESTA PC (`facturacion/locales/*` con su propio
+ * `facturacion-config.json`) — no el local activo de la UI, TODOS los que
+ * esta instalación tiene datos para correr. Orden estable (alfabético, el
+ * que da `readdirSync`) para que "me quedo con el primero que gana" sea
+ * determinista entre ciclos.
+ */
+function localesConfiguradosEnEstaPC() {
+  const base = path.join(FACTURACION_USER_DIR(), 'locales');
   try {
-    const localId = getActiveLocalId();
-    if (!localId) {
-      console.log('[AFIP AUTOSTART] no hay local activo, saltando');
-      return;
-    }
-    const cfgPath = getFacturacionConfigPath(localId);
-    if (!existsSync(cfgPath)) {
-      console.log(`[AFIP AUTOSTART] no hay facturacion-config.json para el local ${localId}, saltando`);
-      return;
-    }
-    const config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
-    console.log('[Facturación automática] Verificando configuración...');
-    console.log(`[Facturación automática] Local: ${localId} (tipo=${config.tipo})`);
-    let dirty = migrarPoliticaAutoStart(config, localId);
+    return readdirSync(base, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .filter((localId) => existsSync(getFacturacionConfigPath(localId)));
+  } catch {
+    return [];
+  }
+}
 
-    if (config.tipo === 'responsable_inscripto') {
-      const ri = config.ri || {};
-      const riDir = getRIDir();
-      const label = `${ri.nombre || 'Responsable Inscripto'} / CUIT ${ri.cuit || '?'} / Pto. Vta. ${ri.ptoVta || '?'}`;
-      const { start } = await evaluateAutoStart('ri', riDir, ri, label);
-      if (start) {
-        // `spawnFacturacionProc` sincroniza y verifica por su cuenta: si el
-        // runtime quedó incompleto devuelve false y no arranca nada.
-        const ok = spawnFacturacionProc('ri', riDir);
-        const cola = colaDeCuenta(riDir);
-        console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
-        if (ok) iniciadas.push(cola);
-      }
-    } else if (config.tipo === 'monotributo') {
-      const cuentas = config.monotributo?.cuentas || [];
-      for (const c of cuentas) {
-        const key = `mono_${c.id}`;
-        const dir = getMonoDir(c.id);
-        const label = `${c.nombre || 'Monotributo'} / CUIT ${c.cuit || '?'} / Pto. Vta. ${c.ptoVta || '?'}`;
-        const { start } = await evaluateAutoStart(key, dir, c, label);
-        if (start) {
-          // Runtime incompleto → spawn devuelve false y esta cuenta no arranca,
-          // pero las demás del local siguen su camino.
-          const ok = spawnFacturacionProc(key, dir);
-          const cola = colaDeCuenta(dir);
-          console.log(`[Facturación] Listener iniciado: ${cola} — ${label} (ok=${ok})`);
-          if (ok) iniciadas.push(cola);
-        }
-      }
-    }
+/** Las cuentas que corresponde arrancar para un local, según su config, con sus `fields` para `evaluateAutoStart`. */
+function tuplasDeCuentasDelLocal(config, localId) {
+  if (config.tipo === 'responsable_inscripto') {
+    const ri = config.ri || {};
+    const label = `${ri.nombre || 'Responsable Inscripto'} / CUIT ${ri.cuit || '?'} / Pto. Vta. ${ri.ptoVta || '?'}`;
+    return [{ key: 'ri', dir: getRIDir(localId), fields: ri, label }];
+  }
+  if (config.tipo === 'monotributo') {
+    return (config.monotributo?.cuentas || []).map((c) => ({
+      key: `mono_${c.id}`,
+      dir: getMonoDir(c.id, localId),
+      fields: c,
+      label: `${c.nombre || 'Monotributo'} / CUIT ${c.cuit || '?'} / Pto. Vta. ${c.ptoVta || '?'}`,
+    }));
+  }
+  return [];
+}
 
-    // Persistir la migración de política (una sola vez por PC y por local).
-    if (dirty) {
-      try { writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8'); } catch (e) {
-        console.error('[Facturación automática] no se pudo persistir la política de arranque:', e.message);
-      }
-    }
+/**
+ * Evalúa TODAS las cuentas debidas de un local con `evaluateAutoStart` (sin
+ * side effects todavía). El local sólo califica como candidato a host si
+ * NINGUNA cuenta que corresponde arrancar quedó incompleta — una PC que sólo
+ * podría facturar 3 de las 4 cuentas de un local no debe ganar su host. Una
+ * cuenta apagada a mano, o ya corriendo, no cuenta en contra.
+ */
+async function evaluarCuentasDelLocal(config, localId) {
+  const tuplas = tuplasDeCuentasDelLocal(config, localId);
+  const resultados = [];
+  let completo = true;
+  for (const t of tuplas) {
+    const evaluacion = await evaluateAutoStart(t.key, t.dir, t.fields, t.label);
+    resultados.push({ ...t, evaluacion });
+    if (evaluacion.missing) completo = false;
+  }
+  return { completo, resultados };
+}
+
+/**
+ * La transacción normal de adquisición/renovación — la MISMA que usa el
+ * ciclo automático, el botón manual "Iniciar" y la adquisición final de un
+ * traslado ("Tomar control fiscal"). Nunca hay una variante que pise un
+ * lease vigente ajeno. Puede tirar (Firebase inalcanzable) — lo maneja el
+ * llamador.
+ */
+async function intentarGanarHost(localId, databaseURL) {
+  const db = dbFiscalDe(databaseURL);
+  const hostRef = firebaseRef(db, `${localId}/FACTURACION_HOST`);
+  const ahora = ahoraServidor(databaseURL);
+  const reductor = reductorDeHost({
+    machineId: MACHINE_ID,
+    hostname: os.hostname(),
+    ahora,
+    appVersion: app.getVersion(),
+  });
+  const tx = await runFirebaseTransaction(hostRef, reductor);
+  const registro = tx.snapshot.val();
+  const gane = tx.committed && registro?.machineId === MACHINE_ID;
+  return { gane, registro, ahora };
+}
+
+/**
+ * Gate del arranque MANUAL de una cuenta (botón "Iniciar"/"Reiniciar"): usa
+ * la misma transacción normal, así que NUNCA puede pisar un lease vigente
+ * ajeno — no existe ningún "Iniciar de todos modos". Si gana, deja
+ * `hostFiscalPorLocal` y el listener de traslado armados igual que si
+ * hubiera ganado por el ciclo automático, para que el heartbeat de ahí en
+ * más lo sostenga solo.
+ */
+async function intentarAdquirirHostParaAccion(accountDir) {
+  const localId = localIdDeAccountDir(accountDir);
+  if (!localId) return { ok: false, motivo: 'sin-local' };
+  const databaseURL = databaseURLDeAccountDir(accountDir);
+  if (!databaseURL) return { ok: false, motivo: 'sin-firebase-db' };
+
+  let resultado;
+  try {
+    resultado = await intentarGanarHost(localId, databaseURL);
   } catch (e) {
-    console.error('[Facturación automática] falló el arranque:', e.message);
+    return { ok: false, motivo: 'firebase-inalcanzable', error: e.message };
+  }
+  const { gane, registro, ahora } = resultado;
+
+  if (!gane) {
+    const leaseRestanteMs = registro ? Math.max(0, (registro.leaseUntil || 0) - ahora) : 0;
+    return { ok: false, motivo: 'host-ajeno', hostname: registro?.hostname || registro?.machineId || null, leaseRestanteMs };
+  }
+
+  hostFiscalPorLocal[localId] = { activo: true, databaseURL };
+  await armarListenerDeTransferencia(localId, databaseURL);
+  return { ok: true, localId, databaseURL };
+}
+
+/** Arranca las cuentas ya evaluadas como `start:true` (apagadas a mano u ocupadas se saltan). */
+function arrancarCuentasEvaluadas(resultados) {
+  const iniciadas = [];
+  for (const r of resultados) {
+    if (!r.evaluacion.start) continue; // apagada a mano, o ya corriendo — nada que hacer
+    const ok = spawnFacturacionProc(r.key, r.dir);
+    const cola = colaDeCuenta(r.dir);
+    console.log(`[Facturación] Listener iniciado: ${cola} — ${r.label} (ok=${ok})`);
+    if (ok) iniciadas.push(cola);
+  }
+  return iniciadas;
+}
+
+/**
+ * Un ciclo de host fiscal para UN local: evalúa si esta PC puede correrlo
+ * completo, y si puede, intenta adquirir (o renovar) `FACTURACION_HOST` con
+ * la transacción normal — la MISMA que usan el botón manual "Iniciar" y la
+ * adquisición final de un traslado, nunca una variante especial. Devuelve
+ * `true` si esta PC quedó siendo la dueña vigente al final del ciclo.
+ */
+async function procesarLocalParaHostFiscal(localId) {
+  if (hostEnCurso.has(localId)) return false; // transacción anterior todavía en vuelo
+
+  const cfgPath = getFacturacionConfigPath(localId);
+  if (!existsSync(cfgPath)) return false;
+  let config;
+  try {
+    config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+  } catch (e) {
+    console.error(`[Facturación] ${localId}: facturacion-config.json inválido: ${e.message}`);
+    return false;
+  }
+
+  if (migrarPoliticaAutoStart(config, localId)) {
+    try { writeFileSync(cfgPath, JSON.stringify(config, null, 2), 'utf-8'); } catch (e) {
+      console.error(`[Facturación] ${localId}: no se pudo persistir la política de arranque: ${e.message}`);
+    }
+  }
+
+  const { completo, resultados } = await evaluarCuentasDelLocal(config, localId);
+  if (!completo || resultados.length === 0) {
+    // No calificó este ciclo (o no tiene cuentas configuradas): se reintenta
+    // solo en el próximo tick, sin tocar nada de lo que ya estuviera corriendo.
+    return !!hostFiscalPorLocal[localId]?.activo;
+  }
+
+  const databaseURL = databaseURLDeAccountDir(resultados[0].dir);
+  if (!databaseURL) {
+    console.log(`[Facturación] ${localId}: no se pudo determinar FIREBASE_DB de sus cuentas, se reintenta en el próximo ciclo.`);
+    return !!hostFiscalPorLocal[localId]?.activo;
+  }
+
+  hostEnCurso.add(localId);
+  try {
+    let resultado;
+    try {
+      resultado = await intentarGanarHost(localId, databaseURL);
+    } catch (e) {
+      // Firebase inalcanzable: NO se toca nada — ni arranca a ciegas, ni frena
+      // lo que ya corría (si esta PC ya era dueña, su lease sigue vigente en
+      // el servidor hasta que realmente venza; el próximo tick reintenta solo).
+      console.error(`[Facturación] ${localId}: la transacción de host falló (¿sin red?): ${e.message}`);
+      return !!hostFiscalPorLocal[localId]?.activo;
+    }
+    const { gane, registro, ahora } = resultado;
+
+    if (!gane) {
+      if (hostFiscalPorLocal[localId]?.activo) {
+        // Defensivo: esta PC creía ser la dueña y la transacción dice otra
+        // cosa (venció y otra PC ganó antes de que renovara). Frenar YA.
+        console.log(`[Facturación] ${localId}: se perdió el host frente a otra PC. Deteniendo motores de este local.`);
+        stopFacturacionDeLocal(localId);
+      }
+      hostFiscalPorLocal[localId] = { activo: false, databaseURL };
+      desarmarListenerDeTransferencia(localId);
+      if (registro) {
+        const restanteMs = Math.max(0, (registro.leaseUntil || 0) - ahora);
+        console.log(`[Facturación] ${localId}: host en ${registro.hostname || registro.machineId}, lease vigente ${restanteMs}ms más. No se arranca acá.`);
+      }
+      return false;
+    }
+
+    const yaEraDueñaAntes = hostFiscalPorLocal[localId]?.activo;
+    hostFiscalPorLocal[localId] = { activo: true, databaseURL };
+    await armarListenerDeTransferencia(localId, databaseURL);
+
+    const iniciadas = arrancarCuentasEvaluadas(resultados);
+    if (!yaEraDueñaAntes) {
+      console.log(`✅ [Facturación] ${localId}: host fiscal ganado por esta PC${iniciadas.length ? ` — ${[...new Set(iniciadas)].join(', ')}` : ''}.`);
+    }
+    return true;
   } finally {
-    // Resumen final: una línea que dice de un vistazo si esta PC quedó facturando.
-    const unicas = [...new Set(iniciadas)];
-    if (unicas.length > 0) {
-      console.log(`✅ Facturación automática activa — ${unicas.length} cola(s): ${unicas.join(', ')}`);
-    } else {
-      console.log('ℹ️ Facturación automática: ninguna cola iniciada en esta PC (ver los avisos de arriba).');
+    hostEnCurso.delete(localId);
+  }
+}
+
+/**
+ * Ciclo recurrente: arranque inicial, heartbeat/renovación de los locales ya
+ * ganados, y reintento automático de los que Firebase no dejó evaluar recién
+ * — todo el mismo mecanismo, sin distinguir "primera vez" de "reconexión".
+ *
+ * Restricción deliberada de esta entrega: como máximo UN local NUEVO por
+ * ciclo por PC (los locales YA ganados siempre se renuevan). El parque real
+ * (una PC por local, la administrativa excluida por el gate de abajo) nunca
+ * necesita que una misma PC hostee dos locales a la vez; si algún día hiciera
+ * falta, `facturacionProcs` necesita namespacing por `localId` primero (hoy
+ * sus keys son sólo `'ri'`/`'mono_{cuentaId}'`).
+ */
+async function tickHostFiscal() {
+  // Preferencia LOCAL de esta instalación, ANTES que nada: no depende de qué
+  // local esté activo, no depende de FACTURACION_OWNERS, no se sincroniza por
+  // Firebase. Una PC administrativa (que se usa para entrar a varios locales
+  // pero nunca factura) la pone en `false` una sola vez y esta función corta
+  // acá siempre, sin enumerar ni intentar ningún host. Ausente o `true` →
+  // participa normalmente.
+  if (!facturacionAutoStartHabilitado(leerMachineSettings(app.getPath('userData')))) {
+    console.log('[Facturación] Autoarranque deshabilitado para esta PC');
+    return;
+  }
+
+  const locales = localesConfiguradosEnEstaPC();
+  let ganóUnoNuevoEsteCiclo = false;
+  for (const localId of locales) {
+    const yaEraDueña = !!hostFiscalPorLocal[localId]?.activo;
+    if (!yaEraDueña && ganóUnoNuevoEsteCiclo) continue;
+    try {
+      const gane = await procesarLocalParaHostFiscal(localId);
+      if (gane && !yaEraDueña) ganóUnoNuevoEsteCiclo = true;
+    } catch (e) {
+      console.error(`[Facturación] ${localId}: error en el ciclo de host fiscal: ${e.message}`);
     }
   }
 }
@@ -2605,18 +2990,106 @@ function setupIPC() {
   });
 
   // Proceso: iniciar / detener / reiniciar / estado / logs
-  ipcMain.handle('facturacion:start', (_e, key, accountDir) => ({
-    ok: spawnFacturacionProc(key, accountDir),
-  }));
+  //
+  // "Iniciar"/"Reiniciar" YA NO arrancan directo: primero intentan la misma
+  // transacción de host que usa el ciclo automático. Si el local ya tiene un
+  // dueño vigente en OTRA PC, no arranca nada — no hay bypass. El renderer
+  // (FacturacionManager.jsx) debe mostrar `motivo:'host-ajeno'` con
+  // `hostname`/`leaseRestanteMs` y ofrecer "Tomar control fiscal" en su lugar.
+  ipcMain.handle('facturacion:start', async (_e, key, accountDir) => {
+    const adquisicion = await intentarAdquirirHostParaAccion(accountDir);
+    if (!adquisicion.ok) return adquisicion;
+    return { ok: spawnFacturacionProc(key, accountDir) };
+  });
   ipcMain.handle('facturacion:stop', (_e, key) => ({ ok: stopFacturacionProc(key) }));
-  ipcMain.handle('facturacion:restart', (_e, key, accountDir) => {
+  ipcMain.handle('facturacion:restart', async (_e, key, accountDir) => {
     const dir = accountDir || facturacionProcs[key]?.accountDir;
+    const adquisicion = await intentarAdquirirHostParaAccion(dir);
+    if (!adquisicion.ok) return adquisicion;
     stopFacturacionProc(key);
     setTimeout(() => spawnFacturacionProc(key, dir), 800);
     return { ok: true };
   });
   ipcMain.handle('facturacion:status', (_e, key) => facturacionProcs[key]?.status ?? 'stopped');
   ipcMain.handle('facturacion:logs', (_e, key) => facturacionProcs[key]?.logs ?? []);
+
+  // "Tomar control fiscal": traslado deliberado del host de un local a ESTA
+  // PC. Nunca roba: si hay un dueño vigente, le pide que suelte
+  // (FACTURACION_HOST_TRANSFER) y espera a que realmente libere antes de
+  // adquirir por la vía normal — ver electron/lib/facturacionHost.js para la
+  // garantía de que ningún reductor puede pisar un lease vigente ajeno.
+  ipcMain.handle('facturacion:take-control', async (_e, localId) => {
+    if (!localId) return { ok: false, motivo: 'sin-local' };
+    const cfgPath = getFacturacionConfigPath(localId);
+    if (!existsSync(cfgPath)) return { ok: false, motivo: 'sin-config' };
+    let config;
+    try {
+      config = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+    } catch (e) {
+      return { ok: false, motivo: 'config-invalida', error: e.message };
+    }
+
+    const { completo, resultados } = await evaluarCuentasDelLocal(config, localId);
+    if (!completo || resultados.length === 0) {
+      return { ok: false, motivo: 'runtime-incompleto' };
+    }
+    const databaseURL = databaseURLDeAccountDir(resultados[0].dir);
+    if (!databaseURL) return { ok: false, motivo: 'sin-firebase-db' };
+
+    const intentarYArrancar = async () => {
+      const r = await intentarGanarHost(localId, databaseURL);
+      if (!r.gane) return r;
+      hostFiscalPorLocal[localId] = { activo: true, databaseURL };
+      await armarListenerDeTransferencia(localId, databaseURL);
+      arrancarCuentasEvaluadas(resultados);
+      return r;
+    };
+
+    let primerIntento;
+    try {
+      primerIntento = await intentarYArrancar();
+    } catch (e) {
+      return { ok: false, motivo: 'firebase-inalcanzable', error: e.message };
+    }
+    if (primerIntento.gane) return { ok: true, modo: 'directo' };
+
+    // Dueño vigente ajeno: pedirle que suelte, y reintentar la adquisición
+    // normal cada TOMA_CONTROL_REINTENTO_MS mientras esperamos su respuesta.
+    // B nunca hace nada distinto de lo que ya hace el ciclo automático —
+    // sólo reintenta más seguido.
+    const db = dbFiscalDe(databaseURL);
+    const transferRef = firebaseRef(db, `${localId}/FACTURACION_HOST_TRANSFER`);
+    try {
+      await setFirebaseValue(transferRef, {
+        solicitanteMachineId: MACHINE_ID,
+        solicitanteHostname: os.hostname(),
+        solicitadoEn: ahoraServidor(databaseURL),
+      });
+    } catch (e) {
+      return { ok: false, motivo: 'no-se-pudo-solicitar', error: e.message };
+    }
+
+    const limite = Date.now() + TOMA_CONTROL_TIMEOUT_MS;
+    while (Date.now() < limite) {
+      await new Promise((resolve) => setTimeout(resolve, TOMA_CONTROL_REINTENTO_MS));
+      let intento;
+      try {
+        intento = await intentarYArrancar();
+      } catch {
+        continue; // corte transitorio durante la espera: se reintenta en la próxima vuelta
+      }
+      if (intento.gane) return { ok: true, modo: 'traspaso' };
+    }
+
+    // A no respondió a tiempo (apagada, colgada, sin red): NUNCA se salta el
+    // lease vigente. El ciclo automático (tickHostFiscal) va a ganar solo en
+    // cuanto el lease real venza — mismo failover de siempre, sin atajos.
+    return {
+      ok: false,
+      motivo: 'esperando-liberacion',
+      mensaje: 'La otra PC no respondió al pedido de traslado. Se tomará el control automáticamente cuando venza su lease.',
+    };
+  });
 
   // Config persistente POR LOCAL (nunca lee el archivo global viejo como fallback).
   ipcMain.handle('facturacion:config:read', () => {
@@ -2677,9 +3150,10 @@ function setupIPC() {
     setActiveLocalId(localId);
     console.log(`[LOCAL] Local activo = ${getActiveLocalId()} (cambió=${changed})`);
     if (changed) {
-      // Al cambiar de local: frenar el motor de facturación del local anterior y
-      // reiniciar el backend de Mercado Pago con la config del local nuevo (Fase 2).
-      stopAllFacturacion();
+      // Cambiar el local activo en la UI NO toca los motores fiscales: el
+      // host fiscal es por local y no depende de qué se está mirando en
+      // pantalla (ver tickHostFiscal). Sólo se reinicia el backend de
+      // Mercado Pago con la config del local nuevo (Fase 2).
       try {
         stopBackend();
         backendAutoRetried = false;
@@ -3567,7 +4041,14 @@ app.whenReady().then(() => {
     console.error('[Facturación automática] no se pudo configurar el arranque con Windows:', e.message);
   }
 
-  setTimeout(autoStartFacturacion, 8000);
+  // Arranque inicial a los 8s (tiempo para que la ventana y el resto del
+  // arranque asienten), y de ahí en más un ciclo cada HEARTBEAT_INTERVALO_MS:
+  // ese mismo ciclo ES el heartbeat de los locales ya ganados y ES la
+  // reconexión automática de los que no calificaron en un tick anterior.
+  setTimeout(() => {
+    tickHostFiscal();
+    setInterval(tickHostFiscal, HEARTBEAT_INTERVALO_MS);
+  }, 8000);
 
   // Retry de arranque del backend MP + creación de mp-accounts.json si falta (por local)
   setTimeout(() => {
@@ -3617,9 +4098,31 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  stopBackend();
-  stopAllFacturacion();
+// Cierre normal: intento best-effort de soltar el host fiscal de cada local
+// que esta PC tuviera ganado, para que el failover a otra PC sea inmediato en
+// vez de esperar `LEASE_MS`. Es una OPTIMIZACIÓN, no una dependencia de
+// corrección: si no llega a completarse (se corta la luz, se mata el
+// proceso), el `leaseUntil` ya escrito vence solo y cualquier PC candidata lo
+// toma en el siguiente tick después de esa expiración — sin `onDisconnect` de
+// por medio (descartado deliberadamente, ver electron/lib/facturacionHost.js).
+let cierreLiberandoHosts = false;
+app.on('before-quit', (event) => {
+  if (cierreLiberandoHosts) return; // ya se intentó soltar; dejar salir esta vez
+  cierreLiberandoHosts = true;
+  event.preventDefault();
+
+  const localesHosteados = Object.entries(hostFiscalPorLocal)
+    .filter(([, v]) => v?.activo)
+    .map(([localId, v]) => ({ localId, databaseURL: v.databaseURL }));
+
+  const liberaciones = localesHosteados.map(({ localId, databaseURL }) => liberarHostDelLocal(localId, databaseURL));
+  const tope = new Promise((resolve) => setTimeout(resolve, 2000));
+
+  Promise.race([Promise.allSettled(liberaciones), tope]).finally(() => {
+    stopBackend();
+    stopAllFacturacion();
+    app.quit();
+  });
 });
 
 app.on('activate', () => {

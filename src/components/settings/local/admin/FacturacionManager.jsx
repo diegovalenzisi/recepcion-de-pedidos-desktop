@@ -184,23 +184,44 @@ function LogsPanel({ processKey }) {
 
 // ---------------------------------------------------------------------------
 // ProcessControls
+//
+// "Iniciar"/"Reiniciar" pasan primero por el host fiscal del local (ver
+// electron/main.js, facturacion:start / facturacion:restart): si OTRA PC
+// tiene un lease vigente, la acción NO arranca nada — no existe un "Iniciar
+// de todos modos". En ese caso se muestra quién es el dueño y cuánto le
+// queda, con un único camino para forzarlo: "Tomar control fiscal", que hace
+// un TRASLADO SEGURO (le pide a la otra PC que suelte y recién entonces
+// adquiere) — nunca una toma directa. Ver electron/lib/facturacionHost.js.
 // ---------------------------------------------------------------------------
 function ProcessControls({ processKey, accountDir, status, onStatusChange }) {
   const { toast } = useToast();
+  const [bloqueo, setBloqueo] = useState(null); // { hostname, leaseRestanteMs } | null
+  const [tomandoControl, setTomandoControl] = useState(false);
+
+  const refrescarEstado = async (f) => {
+    try {
+      const s = await f.getStatus(processKey);
+      onStatusChange(processKey, s);
+    } catch { /* best-effort */ }
+  };
 
   const handle = async (action) => {
     const f = fAPI();
     if (!f || !accountDir) return;
     try {
       if (action === 'start') {
-        await f.start(processKey, accountDir);
+        const r = await f.start(processKey, accountDir);
+        if (r && r.ok === false) { setBloqueo(r); return; }
+        setBloqueo(null);
         onStatusChange(processKey, 'running');
         toast({ title: 'Facturación iniciada', className: 'bg-green-500 text-white' });
       } else if (action === 'stop') {
         await f.stop(processKey);
         onStatusChange(processKey, 'stopped');
       } else if (action === 'restart') {
-        await f.restart(processKey, accountDir);
+        const r = await f.restart(processKey, accountDir);
+        if (r && r.ok === false) { setBloqueo(r); return; }
+        setBloqueo(null);
         onStatusChange(processKey, 'running');
         toast({ title: 'Reiniciada', className: 'bg-green-500 text-white' });
       }
@@ -209,18 +230,61 @@ function ProcessControls({ processKey, accountDir, status, onStatusChange }) {
     }
   };
 
+  const handleTomarControl = async () => {
+    const f = fAPI();
+    if (!f) return;
+    setTomandoControl(true);
+    try {
+      const localId = getCurrentLocalId();
+      const r = await f.takeControl(localId);
+      if (r?.ok) {
+        setBloqueo(null);
+        toast({ title: 'Control fiscal tomado', className: 'bg-green-500 text-white' });
+        await refrescarEstado(f);
+      } else if (r?.motivo === 'esperando-liberacion') {
+        toast({
+          title: 'La otra PC no respondió',
+          description: r.mensaje || 'Se tomará el control automáticamente cuando venza su lease.',
+        });
+      } else {
+        toast({ variant: 'destructive', title: 'No se pudo tomar el control fiscal', description: r?.motivo || r?.error });
+      }
+    } catch (e) {
+      toast({ variant: 'destructive', title: 'Error', description: e.message });
+    } finally {
+      setTomandoControl(false);
+    }
+  };
+
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <StatusBadge status={status} />
-      <Button size="sm" variant="outline" onClick={() => handle('start')} disabled={status === 'running'}>
-        <Play className="h-3 w-3 mr-1" /> Iniciar
-      </Button>
-      <Button size="sm" variant="outline" onClick={() => handle('stop')} disabled={status !== 'running'}>
-        <Square className="h-3 w-3 mr-1" /> Detener
-      </Button>
-      <Button size="sm" variant="outline" onClick={() => handle('restart')}>
-        <RotateCcw className="h-3 w-3 mr-1" /> Reiniciar
-      </Button>
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <StatusBadge status={status} />
+        <Button size="sm" variant="outline" onClick={() => handle('start')} disabled={status === 'running'}>
+          <Play className="h-3 w-3 mr-1" /> Iniciar
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => handle('stop')} disabled={status !== 'running'}>
+          <Square className="h-3 w-3 mr-1" /> Detener
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => handle('restart')}>
+          <RotateCcw className="h-3 w-3 mr-1" /> Reiniciar
+        </Button>
+      </div>
+      {bloqueo && bloqueo.motivo === 'host-ajeno' && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800 flex flex-col gap-1.5">
+          <span>
+            Este local ya está siendo facturado por otra PC
+            {bloqueo.hostname ? ` (${bloqueo.hostname})` : ''}
+            {typeof bloqueo.leaseRestanteMs === 'number' ? ` — vigente ${Math.ceil(bloqueo.leaseRestanteMs / 1000)}s más` : ''}.
+            No se arrancó nada acá para evitar facturar dos veces el mismo pedido.
+          </span>
+          <Button size="sm" variant="outline" onClick={handleTomarControl} disabled={tomandoControl} className="self-start">
+            {tomandoControl
+              ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Tomando control...</>
+              : 'Tomar control fiscal'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
