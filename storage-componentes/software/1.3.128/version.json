@@ -1,9 +1,7 @@
 {
-  "latest": "1.3.128",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.128%2FRecepcion-de-Pedidos-Setup-1.3.128.exe?alt=media",
-  "sha256": "cf167df7fd16f351feb409fc82fa2d41902683833621b6526afd5486acff3228",
-  "size": 150073911,
-  "mandatory": true,
+  "version": "1.3.128",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.128.exe",
   "releaseDate": "2026-09-14",
+  "sha256": "cf167df7fd16f351feb409fc82fa2d41902683833621b6526afd5486acff3228",
   "notes": "Actualizacion OBLIGATORIA. Cuadricula manual 2D para sabores/opcionales (posicionamiento por celda, filas/columnas configurables, titulos de columna editables, todo local por PC/local/grupo, nunca en Firebase) mas todo lo acumulado desde 1.3.123: facturar remito por cuenta fiscal habilitada, conciliacion de remitos por remitoId, Ventas->Facturacion en tiempo real, y host fiscal unico por local con failover automatico."
 }
