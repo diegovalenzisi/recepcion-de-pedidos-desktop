@@ -70,6 +70,16 @@ const {
   conOrdenActualizado: conOrdenOpcionalActualizado,
   conOrdenesMultiplesActualizadas,
 } = require('./lib/optionalesOrdenLocal');
+// Posicionamiento manual 2D de opcionales/sabores: LOCAL por PC, nunca en
+// Firebase. Reemplaza al orden lineal de arriba para OptionalSelectionModal
+// (ese módulo queda sin usarse, sin borrarse). Ver electron/lib/optionalesGridLocal.js.
+const {
+  rutaArchivoGrid: rutaArchivoGridOpcionales,
+  leerArchivoGrid: leerArchivoGridOpcionales,
+  escribirArchivoGrid: escribirArchivoGridOpcionales,
+  obtenerGridsDelDispositivo,
+  conGridActualizada: conGridOpcionalActualizada,
+} = require('./lib/optionalesGridLocal');
 
 const isDev = !app.isPackaged;
 
@@ -3136,6 +3146,27 @@ function setupIPC() {
       const ruta = rutaArchivoOrdenOpcionales(app.getPath('userData'), localId);
       const actual = leerArchivoOrdenOpcionales(ruta);
       escribirArchivoOrdenOpcionales(ruta, conOrdenesMultiplesActualizadas(actual, deviceId, ordersMap));
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, motivo: e.message };
+    }
+  });
+
+  // POSICIONAMIENTO MANUAL 2D DE OPCIONALES/SABORES — local por PC, por local
+  // y por grupo. NUNCA se escribe a Firebase (ver electron/lib/optionalesGridLocal.js).
+  // Mismos `localId`/`deviceId` que el bloque de arriba.
+  ipcMain.handle('optionales-grid:read-all', (_e, { localId, deviceId } = {}) => {
+    if (!localId || !deviceId) return {};
+    const ruta = rutaArchivoGridOpcionales(app.getPath('userData'), localId);
+    const data = leerArchivoGridOpcionales(ruta);
+    return obtenerGridsDelDispositivo(data, deviceId);
+  });
+  ipcMain.handle('optionales-grid:write', (_e, { localId, deviceId, groupId, grid } = {}) => {
+    if (!localId || !deviceId || !groupId) return { ok: false, motivo: 'parametros-invalidos' };
+    try {
+      const ruta = rutaArchivoGridOpcionales(app.getPath('userData'), localId);
+      const actual = leerArchivoGridOpcionales(ruta);
+      escribirArchivoGridOpcionales(ruta, conGridOpcionalActualizada(actual, deviceId, groupId, grid));
       return { ok: true };
     } catch (e) {
       return { ok: false, motivo: e.message };
