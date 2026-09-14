@@ -26,6 +26,7 @@
     "test:ventas-apps-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/ventasAppsEmulator.integration.mjs\"",
     "test:factura-formato-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/facturaFormatoEmulator.integration.mjs\"",
     "test:colas-fiscales-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/colasFiscalesEmulator.integration.mjs\"",
+    "test:billing-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/billingApiEmulator.integration.mjs\"",
     "test:factura-mostrador-emulator": "firebase emulators:exec --only database --project stock-test --config emulator/firebase.json \"node src/lib/api/__tests__/facturaMostradorEmulator.integration.mjs\"",
     "test:comision-emulator": "firebase emulators:exec --only database --project comision-test --config emulator/comision.firebase.json \"node src/lib/api/__tests__/comisionEmulator.integration.mjs\""
   },

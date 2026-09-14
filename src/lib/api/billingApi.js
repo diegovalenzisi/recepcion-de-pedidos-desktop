@@ -1,9 +1,14 @@
-import { getDatabase, ref, get, query, orderByKey, limitToLast, onValue } from 'firebase/database';
+import { getDatabase, ref, get, query, orderByKey, startAt, endAt, onChildAdded, onChildChanged, onChildRemoved } from 'firebase/database';
 import { getCurrentDatabasePath } from '@/lib/firebase/core';
 import { listarCuentasFiscales, normalizarComprobante } from '@/lib/api/comprobanteFiscal';
 
-/** Ventana de comprobantes que se escucha en vivo (detectar altas, no traer todo). */
-const VENTAS_EN_VIVO = 80;
+/**
+ * Cuánto esperar tras el último evento antes de avisar. Una alta inicial (al
+ * suscribirse) o varias facturas casi simultáneas disparan varios eventos
+ * seguidos: se junta todo en UN solo aviso en vez de recargar la pantalla N
+ * veces. No es polling — sin eventos no corre nada, el timer se cancela solo.
+ */
+const DEBOUNCE_MS = 300;
 
 // COMPROBANTES FISCALES DEL LOCAL — /{localId}/VENTAS
 //
@@ -62,13 +67,32 @@ export const fetchBillingData = async () => {
  * No devuelve los datos: sólo dispara el callback para que la pantalla vuelva a
  * leer con `fetchBillingData` (que además necesita la configuración fiscal para
  * resolver la letra de cada comprobante). Es lo que hace que una factura recién
- * emitida —por ejemplo, la de un remito convertido— aparezca sola en la pestaña
- * Facturación, sin refrescar a mano.
+ * emitida —por ejemplo, la de un remito convertido, o una de facturación
+ * automática— aparezca sola en la pestaña Facturación, sin salir y volver a
+ * entrar al módulo.
  *
- * Se escucha una VENTANA de los últimos comprobantes, no el nodo entero: alcanza
- * para detectar altas y evita traerse todo el historial en cada cambio.
+ * RANGO POR LETRA (FCA…FCC), no por cantidad ni por "últimas N claves": un
+ * comprobante fiscal cae ahí sin importar su punto de venta, su CUIT o cuántas
+ * cuentas fiscales tenga el local. Antes esto usaba `orderByKey() +
+ * limitToLast(80)` — una ventana por ORDEN ALFABÉTICO de clave que fallaba en
+ * dos formas reales:
+ *   - un local con varias cuentas de mucho volumen corre esa ventana más
+ *     rápido de lo que tarda en reaccionar, y la cuenta con menos movimiento
+ *     queda afuera de las últimas 80 indefinidamente;
+ *   - claves heredadas de otro formato (los 99 FCX legado de Temperley,
+ *     guardados alguna vez dentro de VENTAS) ordenan después de cualquier
+ *     factura real y pueden llenar la ventana entera — el listener quedaba
+ *     suscripto a un rango que nunca iba a contener una factura nueva.
+ * Es el mismo defecto (y la misma solución: rango por CLAVE, no heurística de
+ * ventana) que ya se corrigió en la reconciliación de remitos — ver
+ * `rangoDeClavesDeCuenta` en comprobanteFiscal.js.
  *
- * @param {Function} callback  se llama en cada cambio (y una vez al suscribirse)
+ * `onChildAdded/Changed/Removed` en vez de `onValue`: cada evento trae sólo el
+ * comprobante que cambió, no el nodo entero (las facturas pueden traer
+ * `PDF_BASE64`; un local grande puede tener miles). Los eventos se juntan con
+ * un debounce corto para no recargar la pantalla una vez por cada uno.
+ *
+ * @param {Function} callback  se llama (agrupado) ante cualquier alta, cambio o baja
  * @param {Function} [onError]
  * @returns {Function} cancelar la suscripción
  */
@@ -76,14 +100,34 @@ export const suscribirCambiosDeVentas = (callback, onError = null) => {
   const localId = getCurrentDatabasePath();
   if (!localId) return () => {};
 
-  const consulta = query(ref(getDatabase(), `${localId}/VENTAS`), orderByKey(), limitToLast(VENTAS_EN_VIVO));
-  const suscripcion = onValue(
-    consulta,
-    () => { try { callback(); } catch (e) { console.error('[billingApi] error avisando cambio de ventas:', e); } },
-    (err) => {
-      console.error('[billingApi] error escuchando VENTAS:', err);
-      if (onError) onError(err);
-    }
+  const consulta = query(
+    ref(getDatabase(), `${localId}/VENTAS`),
+    orderByKey(),
+    startAt('FCA'),
+    endAt(`FCC${String.fromCharCode(0xf8ff)}`)
   );
-  return () => suscripcion();
+
+  let temporizador = null;
+  const avisar = () => {
+    if (temporizador) clearTimeout(temporizador);
+    temporizador = setTimeout(() => {
+      temporizador = null;
+      try { callback(); } catch (e) { console.error('[billingApi] error avisando cambio de ventas:', e); }
+    }, DEBOUNCE_MS);
+  };
+  const manejarError = (err) => {
+    console.error('[billingApi] error escuchando VENTAS:', err);
+    if (onError) onError(err);
+  };
+
+  const cancelarAlta = onChildAdded(consulta, avisar, manejarError);
+  const cancelarCambio = onChildChanged(consulta, avisar, manejarError);
+  const cancelarBaja = onChildRemoved(consulta, avisar, manejarError);
+
+  return () => {
+    if (temporizador) clearTimeout(temporizador);
+    cancelarAlta();
+    cancelarCambio();
+    cancelarBaja();
+  };
 };
