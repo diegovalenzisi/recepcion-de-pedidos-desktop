@@ -11,7 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAutostart: (enable) => ipcRenderer.invoke('autostart-set', enable),
   openUserDataFolder: () => ipcRenderer.invoke('open-userData-folder'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
-  downloadAndInstall: (url, fileName, sha256) => ipcRenderer.invoke('download-and-install', url, fileName, sha256),
+  // `remoteVersion` es la versión que se está por instalar — main.js la
+  // vuelve a comparar contra app.getVersion() ANTES de spawnear el instalador
+  // (protección extra, redundante a propósito, contra un downgrade por estado
+  // viejo/carrera). Ver electron/lib/actualizacionVersion.js.
+  downloadAndInstall: (url, fileName, sha256, remoteVersion) => ipcRenderer.invoke('download-and-install', url, fileName, sha256, remoteVersion),
   checkUpdatesNow: () => ipcRenderer.invoke('check-updates-now'),
   onDownloadProgress: (callback) => {
     const handler = (_e, data) => callback(data);

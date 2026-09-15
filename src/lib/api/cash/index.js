@@ -7,3 +7,4 @@ export * from './utils.js';
 export * from './safe.js';
 export * from './summary.js';
 export * from './partial.js';
+export * from './retiroEfectivo.js';

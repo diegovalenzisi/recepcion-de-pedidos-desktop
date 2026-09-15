@@ -18,7 +18,12 @@ export const saveToSafe = async (shift, safeData, performSave = true) => {
         ...safeData,
         fechacaja: shift.date,
         fecha: format(now, 'dd-MM-yyyy'),
-        hora: format(now, 'HH:mm:ss')
+        hora: format(now, 'HH:mm:ss'),
+        // Campo ADITIVO: no lo lee ningún cálculo existente de CAJAFUERTE/Efectivo
+        // en Caja. Lo usa exclusivamente RETIRO DE EFECTIVO (retiroEfectivo.js)
+        // para saber con certeza CUÁNDO ocurrió esta tirada, sin depender de
+        // parsear fecha+hora en formato dd-MM-yyyy/HH:mm:ss.
+        timestamp: now.toISOString()
     };
 
     const safeRef = ref(db, `${LOCAL_ID}/CAJAS/${shift.date}/turnos/${shift.id}/CAJAFUERTE`);

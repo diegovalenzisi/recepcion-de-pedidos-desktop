@@ -18,7 +18,9 @@ import PartialCloseModal from '@/components/cash/PartialCloseModal.jsx';
 import CashFundModal from '@/components/cash/CashFundModal.jsx';
 import SafeModal from '@/components/cash/SafeModal.jsx';
 import ExportSalesModal from '@/components/cash/ExportSalesModal.jsx';
+import RetiroEfectivoModal from '@/components/cash/RetiroEfectivoModal.jsx';
 import { useAuth } from '@/hooks/useAuth.jsx';
+import { esRolAutorizadoRetiroEfectivo } from '@/lib/roleUtils';
 import { Dialog, DialogContent } from '@/components/ui/dialog.jsx';
 import CashRegisterHeader from '@/components/cash/CashRegisterHeader.jsx';
 import CashRegisterSummary from '@/components/cash/CashRegisterSummary.jsx';
@@ -46,6 +48,7 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
   const [isFundModalOpen, setFundModalOpen] = useState(false);
   const [isSafeModalOpen, setSafeModalOpen] = useState(false);
   const [isExportModalOpen, setExportModalOpen] = useState(false);
+  const [isRetiroEfectivoModalOpen, setRetiroEfectivoModalOpen] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
   const { ready: firebaseReady } = useFirebaseReadiness();
@@ -53,6 +56,13 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
   const hasFullAccess = userPermissions.cajas;
   const canManageFund = userPermissions.cajas_gestionar_fondo;
   const canCloseShift = userPermissions.cajas_cerrar_turno;
+  // RETIRO DE EFECTIVO se gatea por ROL (Dueño/Encargado), no por el sistema de
+  // permisos granulares por casillero: ese sistema permite habilitar "cajas" a
+  // cualquier empleado, y esta función tiene que quedar fuera de su alcance.
+  // Acá alcanza con el rol de sesión (igual que el resto de la app); la
+  // función que realmente ejecuta el retiro vuelve a validar con el rol real
+  // releído de USUARIOS (ver RetiroEfectivoModal / resolverRolReal).
+  const canRetiroEfectivo = esRolAutorizadoRetiroEfectivo(user?.rol);
 
   // Regla de fecha de la pantalla de caja:
   // - Si HAY un turno abierto, la pantalla usa la fecha de ESA caja (no cambia por pasar la
@@ -272,10 +282,12 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
             loading={loading}
             canManageFund={canManageFund}
             canCloseShift={canCloseShift}
+            canRetiroEfectivo={canRetiroEfectivo}
             onFundModalOpen={() => setFundModalOpen(true)}
             onSafeModalOpen={() => setSafeModalOpen(true)}
             onCloseShiftModalOpen={() => setCloseShiftModalOpen(true)}
             onPartialCloseModalOpen={() => setPartialCloseModalOpen(true)}
+            onRetiroEfectivoModalOpen={() => setRetiroEfectivoModalOpen(true)}
             onDateChange={handleDateChange}
             displayDate={displayDate}
             isModal={isModal}
@@ -393,6 +405,13 @@ function CashRegisterPageContent({ currentShift: activeShift, onShiftChange, use
           isOpen={isExportModalOpen}
           onClose={() => setExportModalOpen(false)}
           selectedShift={selectedShift}
+        />
+      )}
+      {isRetiroEfectivoModalOpen && (
+        <RetiroEfectivoModal
+          isOpen={isRetiroEfectivoModalOpen}
+          onClose={() => setRetiroEfectivoModalOpen(false)}
+          user={user}
         />
       )}
     </>

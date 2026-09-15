@@ -42,9 +42,14 @@ check('PaymentSection.jsx siempre reemplaza `payments` con UN solo elemento (set
     'si esto aparece, PaymentSection.jsx empezó a soportar múltiples pagos y la obligatoriedad de abajo debe revisarse');
 });
 
-check('el pago dividido real (CounterPaymentModal.jsx, "Cobrar Venta") es una pantalla DISTINTA, no tocada por esta corrección', () => {
+check('el pago dividido real (CounterPaymentModal.jsx, "Cobrar Venta") es una pantalla DISTINTA, no tocada por ESTA corrección', () => {
+  // CounterPaymentModal.jsx SÍ tiene su propia corrección de Mostrador+Efectivo
+  // ("Paga con"/vuelto — ver pagaConMostradorCobrarVenta.test.js), pero es
+  // independiente de isCounterMode/PaymentSection: sigue sin depender de ese
+  // flag, y sigue admitiendo múltiples pagos por push (no un único payments[0]
+  // reemplazado, como PaymentSection.jsx) — eso es lo que este check verifica.
   assert.ok(!/isCounterMode/.test(counterPaymentModalSrc), 'CounterPaymentModal.jsx no debería depender de isCounterMode: es otro flujo');
-  assert.match(counterPaymentModalSrc, /setPayments\(\[\.\.\.payments, \{ amount: parsedAmount, method: selectedPaymentMethod \}\]\)/,
+  assert.match(counterPaymentModalSrc, /setPayments\(\[\.\.\.payments, nuevoPago\]\)/,
     'confirma que SÍ admite múltiples pagos (push) — por eso queda fuera de esta corrección');
 });
 

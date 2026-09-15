@@ -50,6 +50,7 @@ import { useImpresionFiscalPendiente } from '@/hooks/useImpresionFiscalPendiente
 import { recalcularTotalComisionAPagar } from '@/lib/api/myAccountApi.js';
 import { registrarDispositivo } from '@/lib/api/deviceIdentity.js';
 import { asegurarDepartamentosCanonicos } from '@/lib/api/departamentosCanonicosApi.js';
+import { ensureRetiroEfectivoHabilitadoDesde } from '@/lib/api/cash/index.js';
 import UpdateScreen from '@/components/UpdateScreen.jsx';
 import DepsBootstrapScreen from '@/components/DepsBootstrapScreen.jsx';
 
@@ -446,7 +447,8 @@ function AppContent() {
       await window.electronAPI.downloadAndInstall(
         updateInfo.url,
         updateInfo.nombreArchivo,
-        updateInfo.sha256 || null
+        updateInfo.sha256 || null,
+        updateInfo.version || null
       );
       // main.js cierra la app para que el instalador reemplace el ejecutable;
       // si llegamos acá sin haberse cerrado, lo damos por terminado.
@@ -554,6 +556,15 @@ function AppContent() {
         // localId: cubre igual a cualquier local nuevo que se dé de alta.
         asegurarDepartamentosCanonicos().catch((e) =>
           console.warn('[App] No se pudo asegurar los departamentos canónicos:', e?.message || e)
+        );
+
+        // PUNTO DE INICIO de RETIRO DE EFECTIVO — se fija UNA SOLA VEZ por local,
+        // acá y no de forma perezosa al abrir Caja/Retiro: así ninguna tirada
+        // creada en esta misma sesión puede quedar creada antes de que el corte
+        // exista. Si ya existe, la transacción interna no lo toca (no se
+        // reinicia al reabrir el programa, cambiar de turno ni actualizar).
+        ensureRetiroEfectivoHabilitadoDesde().catch((e) =>
+          console.warn('[App] No se pudo asegurar retiroEfectivoHabilitadoDesde:', e?.message || e)
         );
 
         const fetchedSettings = await fetchSettings();

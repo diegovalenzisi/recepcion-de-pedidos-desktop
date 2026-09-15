@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
-import { Calendar, ChevronLeft, ChevronRight, DollarSign, Lock, Edit, Shield, X, Users, ClipboardList, FileDown } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, DollarSign, Lock, Edit, Shield, X, Users, ClipboardList, FileDown, Banknote } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const CashRegisterHeader = ({
@@ -12,10 +12,12 @@ const CashRegisterHeader = ({
   loading,
   canManageFund,
   canCloseShift,
+  canRetiroEfectivo,
   onFundModalOpen,
   onSafeModalOpen,
   onCloseShiftModalOpen,
   onPartialCloseModalOpen,
+  onRetiroEfectivoModalOpen,
   onDateChange,
   displayDate,
   isModal,
@@ -75,6 +77,15 @@ const CashRegisterHeader = ({
           <Shield className="mr-2 h-4 w-4" />
           Caja Fuerte
         </Button>
+        {canRetiroEfectivo && (
+          // No se deshabilita con `!shiftIsActive`: el Retiro de Efectivo abarca
+          // tiradas de VARIOS turnos (incluso cerrados), no depende del turno
+          // que esté seleccionado/abierto en pantalla en este momento.
+          <Button onClick={onRetiroEfectivoModalOpen} disabled={loading} variant="outline">
+            <Banknote className="mr-2 h-4 w-4" />
+            Retiro de Efectivo
+          </Button>
+        )}
         <Button onClick={onPartialCloseModalOpen} disabled={!shiftIsActive || loading} variant="outline">
             <ClipboardList className="mr-2 h-4 w-4" />
             Cierre Parcial

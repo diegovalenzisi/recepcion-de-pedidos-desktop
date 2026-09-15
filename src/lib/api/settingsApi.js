@@ -149,9 +149,18 @@ export const saveSettings = async (settingsData) => {
   // montar la pantalla) y lo pisaba. Se excluye, igual que las claves de comisión.
   const DEDICATED_KEYS = new Set(['gridViewSettings']);
 
+  // retiroEfectivoHabilitadoDesde se escribe UNA SOLA VEZ, por transacción,
+  // desde ensureRetiroEfectivoHabilitadoDesde() (retiroEfectivo.js) al arrancar
+  // la app. fetchSettings() trae el nodo CONFIGURACION entero —este campo
+  // incluido— así que sin excluirlo el "Guardar" general de Configuración lo
+  // reescribiría con el valor que tenía cargado el formulario al montarse. No
+  // tiene campo en ningún formulario: no hace falta pisarlo nunca.
+  const SYSTEM_KEYS = new Set(['retiroEfectivoHabilitadoDesde']);
+
   for (const key in settingsData) {
     if (COMMISSION_KEYS.has(key)) continue;
     if (DEDICATED_KEYS.has(key)) continue;
+    if (SYSTEM_KEYS.has(key)) continue;
     const value = settingsData[key];
     if (key === 'web') {
       if (value && value.horarios !== undefined) {

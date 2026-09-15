@@ -30,6 +30,7 @@ const {
 } = require('./lib/facturacionRuntimeLink');
 // Borrado de credenciales de una cuenta fiscal (RI/Monotributo) al eliminarla.
 const { eliminarCredencialesDeCuenta } = require('./lib/facturacionAccountDelete');
+const { esVersionMayor, decidirActualizacion } = require('./lib/actualizacionVersion');
 // Preferencia LOCAL por máquina (nunca por Firebase, nunca por local activo):
 // si esta PC debe autoarrancar sus motores fiscales. Ver electron/lib/machineSettings.js.
 const {
@@ -2076,15 +2077,10 @@ async function handlePrint(_event, htmlContent, printerName, options = {}) {
 // ---------------------------------------------------------------------------
 const LATEST_JSON_URL = 'https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2Flatest.json?alt=media';
 
-function newerVersion(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return true;
-    if ((pa[i] || 0) < (pb[i] || 0)) return false;
-  }
-  return false;
-}
+// La comparación de versiones (esVersionMayor/decidirActualizacion) vive en
+// lib/actualizacionVersion.js — módulo puro, sin Electron, probado aparte.
+// REGLA ABSOLUTA acá abajo: nunca se ofrece ni se instala una versión remota
+// que no sea ESTRICTAMENTE mayor a la instalada, sin importar `mandatory`.
 
 function checkForUpdates() {
   if (isDev) return;
@@ -2108,7 +2104,8 @@ function checkForUpdates() {
         try {
           const info = JSON.parse(data);
           if (!info.latest || !info.installerUrl) return;
-          if (!newerVersion(info.latest, currentVersion)) return;
+          const decision = decidirActualizacion({ currentVersion, remoteVersion: info.latest, mandatory: info.mandatory === true });
+          if (!decision.hasUpdate) return;
           mainWindow?.webContents?.send('update:available', {
             version:      info.latest,
             installerUrl: info.installerUrl,
@@ -2264,13 +2261,31 @@ function setupIPC() {
             try {
               const info = JSON.parse(data);
               if (!info.latest || !info.installerUrl) { done({ hasUpdate: false, error: 'bad-latest-json', currentVersion }); return; }
+
+              const mandatory = info.mandatory === true;
+              const decision = decidirActualizacion({ currentVersion, remoteVersion: info.latest, mandatory });
+
+              console.log(`[Updater] Versión instalada: ${currentVersion}`);
+              console.log(`[Updater] Versión remota: ${info.latest}`);
+              console.log(`[Updater] mandatory: ${mandatory}`);
+              console.log(`[Updater] Comparación: ${decision.reason}`);
+              if (decision.reason === 'version-local-mas-nueva') {
+                console.log(`[Updater] No se actualiza: versión instalada (${currentVersion}) más nueva que la remota (${info.latest}). Se omite actualización.`);
+              } else if (decision.reason === 'version-igual') {
+                console.log('[Updater] No se actualiza: ya está en la última versión.');
+              } else if (decision.blocksStartup) {
+                console.log(`[Updater] Actualización OBLIGATORIA: ${currentVersion} -> ${info.latest}.`);
+              } else if (decision.hasUpdate) {
+                console.log(`[Updater] Actualización disponible (no obligatoria): ${currentVersion} -> ${info.latest}.`);
+              }
+
               done({
-                hasUpdate:    newerVersion(info.latest, currentVersion),
+                hasUpdate:    decision.hasUpdate,
                 version:      info.latest,
                 installerUrl: info.installerUrl,
                 sha256:       info.sha256 || null,
                 fileName:     `Recepcion-de-Pedidos-Setup-${info.latest}.exe`,
-                mandatory:    info.mandatory === true,
+                mandatory,
                 currentVersion,
               });
             } catch {
@@ -2287,7 +2302,21 @@ function setupIPC() {
   });
 
   // Descarga el instalador con progreso real, verifica SHA256 opcional y lo ejecuta
-  ipcMain.handle('download-and-install', (_e, downloadUrl, fileName, sha256) => {
+  ipcMain.handle('download-and-install', (_e, downloadUrl, fileName, sha256, remoteVersion) => {
+    // PROTECCIÓN EXTRA (punto 9): se vuelve a comparar acá, justo antes de
+    // descargar/ejecutar nada — no alcanza con haber decidido `hasUpdate`
+    // más arriba (esa decisión pudo quedar vieja: manifest cacheado, carrera,
+    // un llamado directo accidental). Con `app.getVersion()` leído DE NUEVO
+    // en este mismo instante: un instalador de versión igual o inferior a la
+    // instalada NUNCA se ejecuta, sin importar qué haya dicho el chequeo previo.
+    const currentVersionAhora = app.getVersion();
+    if (remoteVersion && !esVersionMayor(remoteVersion, currentVersionAhora)) {
+      console.log(`[Updater] ABORTADO antes de instalar: versión remota (${remoteVersion}) no es mayor a la instalada (${currentVersionAhora}).`);
+      return Promise.reject(new Error(
+        `Se abortó la instalación: la versión remota (${remoteVersion}) no es mayor a la instalada (${currentVersionAhora}).`
+      ));
+    }
+
     const tmpDir = app.getPath('temp');
     const dest = path.join(tmpDir, fileName || 'update-setup.exe');
 

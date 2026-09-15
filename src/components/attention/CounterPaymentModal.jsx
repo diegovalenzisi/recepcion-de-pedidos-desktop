@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -14,11 +14,26 @@ import { resolverMediosDePago } from '@/lib/api/mediosDePagoMostrador';
 import PaymentMethodSlider from '@/components/attention/PaymentMethodSlider';
 import ResponsibleEmployeeModal from './ResponsibleEmployeeModal';
 
+// "PAGA CON" OBLIGATORIO + VUELTO — SOLO acá, nunca en Delivery/Web.
+//
+// Esta pantalla ("Cobrar Venta") es la ÚNICA fuente real de identificación de
+// Mostrador que hace falta: es un componente exclusivo del flujo de Mostrador
+// —se monta solamente desde CounterPage.jsx/CounterTab.jsx, sobre una venta ya
+// creada por counterApi.js (saveCounterSale)—, nunca se importa ni se
+// renderiza desde Delivery, Pedido Web ni ningún otro canal (el pago dividido
+// de ESE otro flujo es PaymentSection.jsx/ConfirmOrderModal.jsx, gateado por
+// su propio flag de modo Mostrador — ver pagaConMostradorEfectivo.test.js—,
+// una pantalla completamente distinta que esta corrección no toca). Por eso
+// no hace falta —ni se agrega— un booleano
+// `esMostrador` nuevo: la condición real es "estamos en CounterPaymentModal",
+// que ya es verdad para el 100% de los casos en los que este archivo corre.
 const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfirmPayment, currentShift }) => {
   const [payments, setPayments] = useState([]);
   const [amount, setAmount] = useState('');
   const [paysWith, setPaysWith] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('Efectivo');
+  // Foco automático en "Paga con" al elegir/quedar en Efectivo (punto 3).
+  const paysWithInputRef = useRef(null);
   // Ingredientes crudos para resolverMediosDePago(): el departamento real de
   // cada artículo del carrito y los medios normales del local. La lista FINAL
   // (`availablePaymentMethods` más abajo) se deriva de esto + el estado del
@@ -119,6 +134,19 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     }
   }, [remainingBalance, isOpen, specialDiscountType]);
 
+  // Al cambiar de método de pago, "Paga con"/vuelto quedan limpios — así un
+  // valor tipeado en Efectivo nunca queda pegado si se pasa a Transferencia u
+  // otro medio y se vuelve (punto 14). Foco automático en "Paga con" cuando el
+  // método QUEDA en Efectivo (incluye la selección inicial al abrir el modal,
+  // que ya arranca en Efectivo) — nunca hace falta clickear a mano (punto 3).
+  useEffect(() => {
+    setPaysWith('');
+    if (selectedPaymentMethod === 'Efectivo') {
+      paysWithInputRef.current?.focus();
+      paysWithInputRef.current?.select();
+    }
+  }, [selectedPaymentMethod]);
+
   const handleSpecialDiscountChange = (type) => {
     if (specialDiscountType === type) {
       setSpecialDiscountType(null);
@@ -157,7 +185,26 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
       return;
     }
 
-    setPayments([...payments, { amount: parsedAmount, method: selectedPaymentMethod }]);
+    let nuevoPago = { amount: parsedAmount, method: selectedPaymentMethod };
+
+    // "Paga con" > Monto a Cobrar es obligatorio SOLO para Efectivo (esta
+    // pantalla es de Mostrador siempre — ver comentario junto al componente).
+    // Se revalida acá, no solo con el `disabled` del botón, para que un bypass
+    // del botón (ej. Enter en el input) no cuele un pago sin vuelto (punto 5).
+    if (selectedPaymentMethod === 'Efectivo') {
+      const parsedPaysWith = parseFloat(paysWith);
+      if (isNaN(parsedPaysWith) || parsedPaysWith <= parsedAmount) {
+        toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' debe ser mayor al monto a cobrar." });
+        return;
+      }
+      // pagaCon/vuelto son METADATA del pago en efectivo: el monto que se
+      // aplica a la venta sigue siendo `parsedAmount` (Total Pagado nunca usa
+      // pagaCon) — punto 8 y 11. Campos aditivos: un pago histórico sin ellos
+      // sigue funcionando igual (ver render de "Pagos Registrados" más abajo).
+      nuevoPago = { ...nuevoPago, pagaCon: parsedPaysWith, vuelto: parsedPaysWith - parsedAmount };
+    }
+
+    setPayments([...payments, nuevoPago]);
     setPaysWith('');
   };
   
@@ -215,6 +262,15 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     return 0;
   }, [paysWith, amount]);
 
+  // "Paga con" > Monto a Cobrar (estrictamente mayor: igual NO alcanza) —
+  // puntos 4 y 18. Deshabilita "Añadir Pago"; handleAddPayment revalida lo
+  // mismo por si se dispara el submit sin pasar por el botón (punto 5).
+  const paysWithInvalido = useMemo(() => {
+    const payValue = parseFloat(paysWith);
+    const amountValue = parseFloat(amount);
+    return paysWith === '' || isNaN(payValue) || isNaN(amountValue) || payValue <= amountValue;
+  }, [paysWith, amount]);
+
   const specialDiscountOptions = [
     { id: 'Sorteo', label: 'Sorteo', icon: Trophy },
     { id: 'Regalo', label: 'Regalo', icon: Gift },
@@ -266,17 +322,18 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
                         </div>
                         <div>
                             <Label htmlFor="paysWith" className="text-xs font-semibold text-gray-600 mb-1 block">Paga con</Label>
-                            <Input 
-                                id="paysWith" 
-                                type="number" 
-                                value={paysWith} 
-                                onChange={(e) => setPaysWith(e.target.value)} 
-                                className="h-10 text-lg" 
-                                placeholder="0.00" 
+                            <Input
+                                id="paysWith"
+                                type="number"
+                                ref={paysWithInputRef}
+                                value={paysWith}
+                                onChange={(e) => setPaysWith(e.target.value)}
+                                className="h-10 text-lg"
+                                placeholder="0.00"
                             />
                         </div>
                     </div>
-                    {paysWith && (
+                    {paysWith && !paysWithInvalido && (
                         <div className="flex justify-between items-center bg-white p-2 rounded border border-green-200 shadow-sm">
                             <span className="text-sm font-medium text-green-800 flex items-center gap-2">
                                 <Calculator className="w-4 h-4"/> Vuelto:
@@ -284,7 +341,12 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
                             <span className="text-2xl font-bold text-green-600">{formatCurrency(calculateChange)}</span>
                         </div>
                     )}
-                     <Button className="w-full h-10 text-base" onClick={handleAddPayment} disabled={!amount || remainingBalance <= 0}>
+                    {paysWith && paysWithInvalido && (
+                        <p className="text-xs font-medium text-red-600">
+                          El importe de 'Paga con' debe ser mayor al monto a cobrar.
+                        </p>
+                    )}
+                     <Button className="w-full h-10 text-base" onClick={handleAddPayment} disabled={!amount || remainingBalance <= 0 || paysWithInvalido}>
                           <Plus className="mr-2 h-4 w-4"/> Añadir Pago
                      </Button>
                 </div>
@@ -333,15 +395,44 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -20, transition: { duration: 0.2 } }}
-                    className="flex items-center justify-between p-3 bg-gray-100 rounded-lg"
+                    className="p-3 bg-gray-100 rounded-lg"
                   >
-                    <span className="font-medium text-gray-800">{p.method}</span>
-                    <div className="flex items-center gap-4">
-                      <span className="font-bold text-gray-900">{formatCurrency(p.amount)}</span>
-                      <Button variant="ghost" size="icon" onClick={() => removePayment(i)} className="text-red-500 hover:bg-red-100 hover:text-red-600" disabled={!!specialDiscountType}>
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    {/* Efectivo de Mostrador con pagaCon guardado: desglose
+                        Total/Paga con/Vuelto (punto 9). Cualquier otro pago
+                        (otro método, o un histórico sin estos campos aditivos)
+                        conserva exactamente la línea única de siempre — punto 10. */}
+                    {p.method === 'Efectivo' && p.pagaCon !== undefined ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-gray-800">Efectivo</span>
+                          <Button variant="ghost" size="icon" onClick={() => removePayment(i)} className="text-red-500 hover:bg-red-100 hover:text-red-600 h-8 w-8" disabled={!!specialDiscountType}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="flex justify-between items-center text-sm text-gray-600">
+                          <span>Total:</span>
+                          <span className="font-bold text-gray-900">{formatCurrency(p.amount)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm text-gray-600">
+                          <span>Paga con:</span>
+                          <span>{formatCurrency(p.pagaCon)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm text-gray-600">
+                          <span>Vuelto:</span>
+                          <span>{formatCurrency(p.vuelto)}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-800">{p.method}</span>
+                        <div className="flex items-center gap-4">
+                          <span className="font-bold text-gray-900">{formatCurrency(p.amount)}</span>
+                          <Button variant="ghost" size="icon" onClick={() => removePayment(i)} className="text-red-500 hover:bg-red-100 hover:text-red-600" disabled={!!specialDiscountType}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </motion.div>
                 )) : (
                   <p className="text-center text-gray-500 py-4">Aún no se han registrado pagos.</p>
