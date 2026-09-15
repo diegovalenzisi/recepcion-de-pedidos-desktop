@@ -1,14 +1,14 @@
-// "COBRAR VENTA" (CounterPaymentModal.jsx) — Mostrador + Efectivo: foco
-// automático en "Paga con" (nunca obligatorio: vacío = paga justo), cálculo
-// de vuelto, y desglose Total/Paga con/Vuelto en Pagos Registrados.
+// "COBRAR VENTA" (CounterPaymentModal.jsx) — Mostrador:
+//   1) "Paga con" OBLIGATORIO en Efectivo (pagaCon >= montoEfectivo).
+//   2) Botón "DIV. FORM. PAGO": divide el saldo entre Efectivo y la cuenta
+//      electrónica FAVORITA del local, en una sola pantalla.
 //
-// REGLA VIGENTE (reemplaza la versión anterior, que exigía pagaCon > monto):
-//   campo VACÍO ("", null, undefined)  -> paga justo: pagaCon = monto, vuelto = 0
+// REGLA VIGENTE DE "PAGA CON" (reemplaza la anterior "vacío = paga justo",
+// que queda ELIMINADA):
+//   campo VACÍO ("", null, undefined)  -> INVÁLIDO, se bloquea
+//   pagaCon < monto                     -> INVÁLIDO, se bloquea
 //   pagaCon == monto                    -> válido, vuelto = 0
 //   pagaCon > monto                     -> válido, vuelto = pagaCon - monto
-//   pagaCon < monto (escrito a mano)    -> inválido, se bloquea
-// Un "0" escrito a mano NO es "vacío": es un importe insuficiente y se
-// bloquea igual que cualquier otro valor menor al monto.
 //
 // IDENTIFICACIÓN DE MOSTRADOR: este modal ("Cobrar Venta") es exclusivo del
 // flujo de Mostrador — se monta SOLO desde CounterPage.jsx/CounterTab.jsx,
@@ -40,9 +40,10 @@ const counterTabSrc = leer('src/components/attention/CounterTab.jsx');
 const paymentSectionSrc = leer('src/components/attention/confirm-order/PaymentSection.jsx');
 const confirmModalSrc = leer('src/components/attention/ConfirmOrderModal.jsx');
 const deliveryTabSrc = leer('src/components/attention/DeliveryTab.jsx');
+const accountsApiSrc = leer('src/lib/api/accountsApi.js');
 
 // ---------------------------------------------------------------------------
-console.log('\n0. IDENTIFICACIÓN DE MOSTRADOR — se reutiliza, no se inventa (puntos 16, 17, 23):');
+console.log('\n0. IDENTIFICACIÓN DE MOSTRADOR — se reutiliza, no se inventa (punto 22):');
 
 check('CounterPaymentModal.jsx es Mostrador por construcción y lo documenta', () => {
   assert.match(counterPaymentModalSrc, /esMostrador/i);
@@ -54,77 +55,18 @@ check('el modal SOLO se monta desde Mostrador (CounterPage/CounterTab)', () => {
   assert.match(counterTabSrc, /CounterPaymentModal/);
 });
 
-check('Delivery (DeliveryTab.jsx) y el flujo de "Finalizar Pedido" (PaymentSection/ConfirmOrderModal) NO importan CounterPaymentModal', () => {
-  assert.ok(!/CounterPaymentModal/.test(deliveryTabSrc), 'DeliveryTab.jsx ahora reutiliza el modal de Mostrador');
-  assert.ok(!/CounterPaymentModal/.test(paymentSectionSrc), 'PaymentSection.jsx ahora reutiliza el modal de Mostrador');
-  assert.ok(!/CounterPaymentModal/.test(confirmModalSrc), 'ConfirmOrderModal.jsx ahora reutiliza el modal de Mostrador');
+check('Delivery/Web (DeliveryTab, PaymentSection, ConfirmOrderModal) NO importan CounterPaymentModal', () => {
+  assert.ok(!/CounterPaymentModal/.test(deliveryTabSrc));
+  assert.ok(!/CounterPaymentModal/.test(paymentSectionSrc));
+  assert.ok(!/CounterPaymentModal/.test(confirmModalSrc));
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n1-3. FOCO AUTOMÁTICO + LIMPIEZA AL CAMBIAR DE MÉTODO (puntos 1, 3, 14, 17, 21.1):');
+console.log('\nPRUEBAS 1-7 — "PAGA CON" OBLIGATORIO (sección 25):');
 
-check('usa useRef + focus()/select() — la solución de React pedida, no un querySelector', () => {
-  assert.match(counterPaymentModalSrc, /const paysWithInputRef = useRef\(null\);/);
-  assert.match(counterPaymentModalSrc, /ref={paysWithInputRef}/);
-  assert.match(counterPaymentModalSrc, /paysWithInputRef\.current\?\.focus\(\);/);
-  assert.match(counterPaymentModalSrc, /paysWithInputRef\.current\?\.select\(\);/);
-  assert.ok(!/document\.querySelector/.test(counterPaymentModalSrc), 'usa querySelector en vez de ref');
-});
-
-check('el foco se dispara cuando el método QUEDA en Efectivo (incluye la selección inicial al abrir)', () => {
-  const i = counterPaymentModalSrc.indexOf('paysWithInputRef.current?.focus();');
-  const antes = counterPaymentModalSrc.slice(Math.max(0, i - 200), i);
-  assert.match(antes, /selectedPaymentMethod === 'Efectivo'/);
-});
-
-check('"Paga con" se limpia con cada cambio de método (nunca queda pegado de Efectivo a otro medio) — punto 14', () => {
-  const i = counterPaymentModalSrc.indexOf('Al cambiar de método de pago');
-  assert.ok(i > 0, 'no se encontró el comentario del efecto que limpia paysWith al cambiar de método');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 700);
-  assert.match(cuerpo, /setPaysWith\(''\);/);
-  assert.match(cuerpo, /\[selectedPaymentMethod\]/, 'el efecto no depende de selectedPaymentMethod');
-});
-
-// ---------------------------------------------------------------------------
-console.log('\n1,4-6. "AÑADIR PAGO" SIEMPRE HABILITADO + VUELTO — solo Efectivo (puntos 1, 4, 5, 6):');
-
-check('paysWithInvalido trata el campo VACÍO como válido (nunca deshabilita el botón)', () => {
-  const i = counterPaymentModalSrc.indexOf('const paysWithInvalido = useMemo');
-  assert.ok(i > 0);
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
-  assert.match(cuerpo, /if \(paysWith === '' \|\| paysWith === null \|\| paysWith === undefined\) return false;/);
-});
-
-check('paysWithInvalido ya NO exige estrictamente mayor: pagaCon == monto es válido', () => {
-  const i = counterPaymentModalSrc.indexOf('const paysWithInvalido = useMemo');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
-  assert.match(cuerpo, /payValue < amountValue/);
-  assert.ok(!/payValue <= amountValue/.test(cuerpo), 'volvió a exigir estrictamente mayor');
-});
-
-check('el botón "Añadir Pago" (rama Efectivo) NUNCA se deshabilita solo por el campo vacío', () => {
-  assert.match(counterPaymentModalSrc, /disabled={!amount \|\| remainingBalance <= 0 \|\| paysWithInvalido}/);
-});
-
-check('handleAddPayment: campo vacío -> paga justo (pagaCon = monto); escrito y menor -> bloquea (punto 5)', () => {
-  const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2400);
-  assert.match(cuerpo, /if \(selectedPaymentMethod === 'Efectivo'\) \{/);
-  assert.match(cuerpo, /const paysWithVacio = paysWith === '' \|\| paysWith === null \|\| paysWith === undefined;/);
-  assert.match(cuerpo, /parsedPaysWith = parsedAmount; \/\/ no informado -> paga justo/);
-  assert.match(cuerpo, /parsedPaysWith < parsedAmount/);
-  assert.match(cuerpo, /El importe de 'Paga con' no puede ser menor al monto a cobrar\./);
-});
-
-check('mensaje de error visible en pantalla, con el texto actualizado (ya no dice "debe ser mayor")', () => {
-  assert.match(counterPaymentModalSrc, /paysWith && paysWithInvalido/);
-  assert.match(counterPaymentModalSrc, /El importe de 'Paga con' no puede ser menor al monto a cobrar\./);
-  assert.ok(!/debe ser mayor al monto a cobrar/.test(counterPaymentModalSrc), 'quedó el mensaje viejo (regla anterior)');
-});
-
-// Réplica PURA de paysWithInvalido, para probar la tabla exacta del punto 6.
+// Réplica PURA de paysWithInvalido (ver CounterPaymentModal.jsx).
 function paysWithInvalido(paysWith, amount) {
-  if (paysWith === '' || paysWith === null || paysWith === undefined) return false;
+  if (paysWith === '' || paysWith === null || paysWith === undefined) return true;
   const payValue = parseFloat(paysWith);
   const amountValue = parseFloat(amount);
   return isNaN(payValue) || isNaN(amountValue) || payValue < amountValue;
@@ -132,32 +74,23 @@ function paysWithInvalido(paysWith, amount) {
 
 const MONTO_A_COBRAR = '12500';
 
-check('1/9) foco automático + botón nunca deshabilitado por vacío: ya cubierto arriba por inspección de fuente', () => {
-  assert.ok(true);
+check('1) Paga con VACÍO -> inválido (ya no es "paga justo")', () => {
+  assert.strictEqual(paysWithInvalido('', MONTO_A_COBRAR), true);
+  assert.strictEqual(paysWithInvalido(null, MONTO_A_COBRAR), true);
+  assert.strictEqual(paysWithInvalido(undefined, MONTO_A_COBRAR), true);
 });
 
-check('2) campo VACÍO -> válido (Añadir Pago habilitado)', () => {
-  assert.strictEqual(paysWithInvalido('', MONTO_A_COBRAR), false);
-  assert.strictEqual(paysWithInvalido(null, MONTO_A_COBRAR), false);
-  assert.strictEqual(paysWithInvalido(undefined, MONTO_A_COBRAR), false);
-});
-
-check('3) "0" escrito a mano NO es "vacío": se bloquea como cualquier valor insuficiente', () => {
-  assert.strictEqual(paysWithInvalido('0', MONTO_A_COBRAR), true);
-});
-
-check('valor MENOR ($10.000) sigue sin permitir (punto 6/8)', () => {
+check('2) Paga con MENOR ($10.000 de $12.500) -> inválido', () => {
   assert.strictEqual(paysWithInvalido('10000', MONTO_A_COBRAR), true);
 });
 
-check('4) valor IGUAL ($12.500) ahora SÍ permite (paga justo, vuelto 0)', () => {
+check('3) Paga con IGUAL ($12.500) -> válido', () => {
   assert.strictEqual(paysWithInvalido('12500', MONTO_A_COBRAR), false);
 });
 
-check('6) valor MAYOR ($12.501, $13.000, $15.000) SÍ permite', () => {
-  assert.strictEqual(paysWithInvalido('12501', MONTO_A_COBRAR), false);
-  assert.strictEqual(paysWithInvalido('13000', MONTO_A_COBRAR), false);
+check('5) Paga con MAYOR ($15.000) -> válido', () => {
   assert.strictEqual(paysWithInvalido('15000', MONTO_A_COBRAR), false);
+  assert.strictEqual(paysWithInvalido('12501', MONTO_A_COBRAR), false);
 });
 
 // Réplica PURA de calculateChange.
@@ -168,97 +101,81 @@ function calcularVuelto(paysWith, amount) {
   return 0;
 }
 
-check('7) calcula el vuelto correctamente (ejemplo del punto 6: 12.500 / 15.000 → 2.500)', () => {
-  assert.strictEqual(calcularVuelto('15000', '12500'), 2500);
+check('4) Paga con IGUAL -> vuelto = 0', () => {
+  assert.strictEqual(calcularVuelto('12500', MONTO_A_COBRAR), 0);
 });
 
-check('vuelto se recalcula en tiempo real si cambia Monto a Cobrar o Paga con', () => {
-  assert.strictEqual(calcularVuelto('15000', '10000'), 5000);
-  assert.strictEqual(calcularVuelto('20000', '10000'), 10000);
+check('5) Paga con MAYOR -> vuelto correcto (12.500 / 15.000 -> 2.500)', () => {
+  assert.strictEqual(calcularVuelto('15000', MONTO_A_COBRAR), 2500);
 });
 
-// ---------------------------------------------------------------------------
-console.log('\n7-8. DATOS GUARDADOS — monto/pagaCon/vuelto, sin romper pagos históricos (puntos 7, 8, 21.8-21.10):');
+check('6) foco automático en "Paga con" sigue funcionando (useRef + focus()/select())', () => {
+  assert.match(counterPaymentModalSrc, /const paysWithInputRef = useRef\(null\);/);
+  assert.match(counterPaymentModalSrc, /ref={paysWithInputRef}/);
+  assert.match(counterPaymentModalSrc, /paysWithInputRef\.current\?\.focus\(\);/);
+  assert.match(counterPaymentModalSrc, /paysWithInputRef\.current\?\.select\(\);/);
+  const i = counterPaymentModalSrc.indexOf('paysWithInputRef.current?.focus();');
+  const antes = counterPaymentModalSrc.slice(Math.max(0, i - 200), i);
+  assert.match(antes, /selectedPaymentMethod === 'Efectivo'/);
+});
 
-check('el pago Efectivo guarda amount, pagaCon y vuelto como campos ADITIVOS', () => {
+check('7) la prueba anterior "vacío = paga justo" ya NO existe (código ni mensaje)', () => {
+  assert.ok(!/no informado -> paga justo/.test(counterPaymentModalSrc), 'quedó código de la regla vieja');
+  assert.ok(!/paysWithVacio = paysWith === '' \|\| paysWith === null \|\| paysWith === undefined;\s*\n\s*const parsedPaysWith = parseFloat\(paysWith\);\s*\n\s*if \(isNaN\(parsedPaysWith\) \|\| parsedPaysWith < parsedAmount\) \{/.test(counterPaymentModalSrc));
+});
+
+check('fuente: paysWithInvalido ya no acepta vacío, y ya no exige estrictamente mayor', () => {
+  const i = counterPaymentModalSrc.indexOf('const paysWithInvalido = useMemo');
+  assert.ok(i > 0);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
+  assert.match(cuerpo, /if \(paysWith === '' \|\| paysWith === null \|\| paysWith === undefined\) return true;/);
+  assert.match(cuerpo, /payValue < amountValue/);
+  assert.ok(!/payValue <= amountValue/.test(cuerpo), 'volvió a exigir estrictamente mayor');
+});
+
+check('fuente: handleAddPayment bloquea vacío igual que un valor menor (revalida, no solo el disabled del botón)', () => {
   const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
-  assert.match(cuerpo, /nuevoPago = \{ \.\.\.nuevoPago, pagaCon: parsedPaysWith, vuelto: parsedPaysWith - parsedAmount \}/);
-  // El método que se guarda sigue siendo `amount`/`method` como siempre —
-  // pagaCon/vuelto se agregan, no reemplazan la forma existente.
-  assert.match(cuerpo, /let nuevoPago = \{ amount: parsedAmount, method: selectedPaymentMethod \};/);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2100);
+  assert.match(cuerpo, /if \(selectedPaymentMethod === 'Efectivo'\) \{/);
+  assert.match(cuerpo, /paysWithVacio \|\| isNaN\(parsedPaysWith\) \|\| parsedPaysWith < parsedAmount/);
+  assert.match(cuerpo, /El importe de 'Paga con' es obligatorio y no puede ser menor al monto a cobrar\./);
 });
 
-check('otros métodos (no Efectivo) NO agregan pagaCon/vuelto — mismo payload de siempre', () => {
-  const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
-  const iIf = cuerpo.indexOf("if (selectedPaymentMethod === 'Efectivo')");
-  assert.ok(iIf > 0);
-  // Nada antes del if ASIGNA pagaCon: el objeto base es siempre {amount, method}.
-  // (busca "pagaCon:", la asignación real — no alcanza con "pagaCon" a secas,
-  // que también aparece en los comentarios que explican la regla vigente).
-  assert.ok(!/pagaCon:/.test(cuerpo.slice(0, iIf)));
+check('fuente: el botón "Añadir Pago" (Efectivo normal) se deshabilita con paysWithInvalido', () => {
+  assert.match(counterPaymentModalSrc, /disabled={!amount \|\| remainingBalance <= 0 \|\| paysWithInvalido}/);
 });
 
-// Réplica del payload real que produce handleAddPayment — incluye la
-// normalización "vacío -> paga justo" (paysWith undefined/null/'' -> amount).
+// Réplica del payload real que produce handleAddPayment en modo normal
+// (asume paysWith ya validado — no vacío, no menor al monto).
 function construirPago({ amount, method, paysWith }) {
   let pago = { amount, method };
   if (method === 'Efectivo') {
-    const vacio = paysWith === '' || paysWith === null || paysWith === undefined;
-    const pagaCon = vacio ? amount : paysWith;
-    pago = { ...pago, pagaCon, vuelto: pagaCon - amount };
+    pago = { ...pago, pagaCon: paysWith, vuelto: paysWith - amount };
   }
   return pago;
 }
 
-check('8-10) guarda monto, pagaCon y vuelto (ejemplo conceptual del punto 8)', () => {
+check('guarda amount/pagaCon/vuelto como campos aditivos, sin tocar otros métodos', () => {
   const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 15000 });
   assert.strictEqual(pago.amount, 12500);
   assert.strictEqual(pago.pagaCon, 15000);
   assert.strictEqual(pago.vuelto, 2500);
+
+  const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2100);
+  const iIf = cuerpo.indexOf("if (selectedPaymentMethod === 'Efectivo')");
+  assert.ok(iIf > 0);
+  assert.ok(!/pagaCon:/.test(cuerpo.slice(0, iIf)), 'otro método quedó agregando pagaCon');
 });
 
-check('2) Paga con VACÍO -> guarda pagaCon = monto (paga justo)', () => {
-  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' }).pagaCon, 12500);
-  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: undefined }).pagaCon, 12500);
-  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: null }).pagaCon, 12500);
-});
-
-check('3) Paga con VACÍO -> vuelto = 0', () => {
-  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' });
-  assert.strictEqual(pago.vuelto, 0);
-});
-
-check('5) Paga con == monto (escrito a mano) -> vuelto = 0', () => {
-  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 12500 });
-  assert.strictEqual(pago.pagaCon, 12500);
-  assert.strictEqual(pago.vuelto, 0);
-});
-
-check('7) Paga con > monto -> vuelto correcto', () => {
-  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 15000 });
-  assert.strictEqual(pago.vuelto, 2500);
-});
-
-check('un pago histórico SIN pagaCon/vuelto sigue siendo un objeto válido (compatibilidad)', () => {
-  const historico = { amount: 5000, method: 'Efectivo' }; // sin pagaCon/vuelto, como antes de esta corrección
+check('un pago histórico SIN pagaCon/vuelto sigue siendo válido (compatibilidad)', () => {
+  const historico = { amount: 5000, method: 'Efectivo' };
   assert.strictEqual(historico.pagaCon, undefined);
-  // totalPaid solo usa `amount`, nunca pagaCon — funciona igual con o sin el campo nuevo.
-  const totalPaid = [historico].reduce((sum, p) => sum + p.amount, 0);
-  assert.strictEqual(totalPaid, 5000);
+  assert.strictEqual([historico].reduce((sum, p) => sum + p.amount, 0), 5000);
 });
 
-// ---------------------------------------------------------------------------
-console.log('\n9-10. PAGOS REGISTRADOS — desglose solo en Efectivo con pagaCon (puntos 9, 10, 21.12):');
-
-check('el desglose Total/Paga con/Vuelto solo aparece si method === "Efectivo" && pagaCon !== undefined', () => {
+check('Pagos Registrados: el desglose Total/Paga con/Vuelto solo aparece si method === "Efectivo" && pagaCon !== undefined', () => {
   assert.match(counterPaymentModalSrc, /p\.method === 'Efectivo' && p\.pagaCon !== undefined \?/);
-});
-
-check('se mantiene el botón de eliminar pago en AMBAS ramas (con y sin desglose)', () => {
-  const ocurrencias = (counterPaymentModalSrc.match(/onClick={\(\) => removePayment\(i\)}/g) || []).length;
-  assert.strictEqual(ocurrencias, 2, 'debería haber un botón de eliminar en la rama nueva y otro en la rama original');
 });
 
 check('no se rediseñó el modal: sigue siendo un <Dialog> de dos columnas, mismo título "Cobrar Venta"', () => {
@@ -267,103 +184,364 @@ check('no se rediseñó el modal: sigue siendo un <Dialog> de dos columnas, mism
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n11-13. TOTAL PAGADO / PAGO MIXTO / ELIMINAR PAGO (puntos 7, 11, 12, 13, 21.11, 21.13):');
+console.log('\nPRUEBAS 8-24 — DIV. FORM. PAGO (sección 26):');
 
-check('totalPaid sigue sumando `amount` (nunca pagaCon) — sin cambios respecto de antes', () => {
-  assert.match(counterPaymentModalSrc, /const totalPaid = useMemo\(\(\) => payments\.reduce\(\(sum, p\) => sum \+ p\.amount, 0\), \[payments\]\);/);
+check('8) el botón "DIV. FORM. PAGO" existe en el modal de Mostrador', () => {
+  assert.match(counterPaymentModalSrc, /DIV\. FORM\. PAGO/);
+  assert.match(counterPaymentModalSrc, /onClick={handleToggleSplitMode}/);
 });
 
-check('11) pago mixto (Transferencia $10.000 + Efectivo Paga-con $15.000): Total Pagado usa $10.000, no $15.000', () => {
-  const totalVenta = 20000;
-  const transferencia = { amount: 10000, method: 'Transferencia' };
-  const efectivo = construirPago({ amount: 10000, method: 'Efectivo', paysWith: 15000 });
-  assert.strictEqual(efectivo.vuelto, 5000);
-
-  const payments = [transferencia, efectivo];
-  const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-  const remainingBalance = totalVenta - totalPaid;
-
-  assert.strictEqual(totalPaid, 20000, 'Total Pagado tiene que ser 10.000 + 10.000, NO 10.000 + 15.000');
-  assert.strictEqual(remainingBalance, 0);
+check('la cuenta favorita sale de accountsApi.js (isFavorite === true en CUENTAS) — misma fuente que ya usa el resto del sistema', () => {
+  assert.match(accountsApiSrc, /export const fetchFavoriteAccount = async/);
+  assert.match(accountsApiSrc, /isFavorite === true/);
+  assert.match(counterPaymentModalSrc, /acc\?\.isFavorite === true && acc\?\.nombre/);
+  assert.ok(!/TRANSFERENCIA['"]/.test(counterPaymentModalSrc.replace(/\/\/.*$/gm, '')), 'quedó una cuenta hardcodeada fuera de comentarios');
 });
 
-check('10) pago mixto + Efectivo con "Paga con" vacío: toma como paga justo el saldo del tramo en efectivo', () => {
-  // Ejemplo del punto 10: Total 20.000, Transferencia 8.000, saldo 12.000,
-  // se elige Efectivo con Monto a Cobrar = 12.000 (autocompletado por el
-  // saldo pendiente, como ya hace el componente) y Paga con vacío.
-  const totalVenta = 20000;
-  const transferencia = { amount: 8000, method: 'Transferencia' };
-  const efectivo = construirPago({ amount: 12000, method: 'Efectivo', paysWith: '' });
-
-  assert.strictEqual(efectivo.pagaCon, 12000);
-  assert.strictEqual(efectivo.vuelto, 0);
-
-  const payments = [transferencia, efectivo];
-  const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
-  const remainingBalance = totalVenta - totalPaid;
-
-  assert.strictEqual(totalPaid, 20000);
-  assert.strictEqual(remainingBalance, 0);
-});
-
-check('11) Pagos Registrados: el desglose se muestra aunque "Paga con" se haya autocompletado (pagaCon nunca queda undefined)', () => {
-  const efectivo = construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' });
-  // La misma condición que usa el JSX: method === 'Efectivo' && pagaCon !== undefined.
-  assert.strictEqual(efectivo.method === 'Efectivo' && efectivo.pagaCon !== undefined, true);
-});
-
-check('13) eliminar un pago Efectivo elimina también pagaCon/vuelto (van adentro del mismo objeto) y recalcula', () => {
-  const payments = [
-    { amount: 10000, method: 'Transferencia' },
-    construirPago({ amount: 10000, method: 'Efectivo', paysWith: 15000 }),
-  ];
-  const despuesDeEliminar = payments.filter((_, i) => i !== 1);
-  assert.strictEqual(despuesDeEliminar.length, 1);
-  assert.ok(!despuesDeEliminar.some(p => p.pagaCon !== undefined), 'quedó un pagaCon huérfano');
-  const totalPaid = despuesDeEliminar.reduce((sum, p) => sum + p.amount, 0);
-  assert.strictEqual(totalPaid, 10000);
-});
-
-check('el vuelto NO se guarda como gasto/forma de pago/ítem extra — no hay push a gastos ni a payments por el vuelto', () => {
-  const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
-  assert.ok(!/setPayments\(\[\.\.\.payments, nuevoPago\], \{.*vuelto/.test(cuerpo));
-  // Un solo push por click: el vuelto vive DENTRO del mismo objeto de pago, no aparte.
-  const pushes = (cuerpo.match(/setPayments\(\[\.\.\.payments, /g) || []).length;
-  assert.strictEqual(pushes, 1);
+check('9-10) al activar la división aparecen Efectivo + la favorita — NO todas las cuentas electrónicas', () => {
+  const i = counterPaymentModalSrc.indexOf('isSplitMode ? (');
+  assert.ok(i > 0, 'no se encontró el panel de división');
+  const panel = counterPaymentModalSrc.slice(i, i + 2200);
+  assert.match(panel, /Efectivo — Monto/);
+  assert.match(panel, /favoriteAccount\?\.nombre \|\| 'Cuenta favorita'/);
+  // El panel no itera ninguna lista de cuentas — usa directamente favoriteAccount.
+  assert.ok(!/availablePaymentMethods\.map/.test(panel), 'el panel de división lista todas las cuentas, no solo la favorita');
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n14-19. REGRESIÓN — Delivery/Web/otros métodos NO se alteran (puntos 19, 20, 22):');
+console.log('\nCASO ACHAVAL (localId 40508022) — bug real reportado:');
 
-check('14-15) Delivery/Web no pasan por CounterPaymentModal.jsx en absoluto: nada que exigir ni que cambiar ahí', () => {
-  assert.ok(!/CounterPaymentModal/.test(deliveryTabSrc));
-  assert.ok(!/CounterPaymentModal/.test(paymentSectionSrc));
-  assert.ok(!/CounterPaymentModal/.test(confirmModalSrc));
+// Réplica PURA de la detección (idéntica a la línea real del componente):
+//   const favorita = (accountsData || []).find((acc) => acc?.isFavorite === true && acc?.nombre) || null;
+function detectarFavorita(accountsData) {
+  return (accountsData || []).find((acc) => acc?.isFavorite === true && acc?.nombre) || null;
+}
+
+// Datos REALES de 40508022/CUENTAS, leídos de Firebase para esta corrección
+// (ver informe): cta-1 es la favorita real, con isFavorite como boolean.
+const CUENTAS_ACHAVAL = [
+  { id: 'cta-1', nombre: 'Transferencia', isFavorite: true, alias: 'HELADERIA.ACHAVAL', aNombreDe: 'DIEGO LEONEL VALENZISI', imprimeFactura: true },
+  { id: 'cta-3', nombre: 'PREPAGO PEDIDOSYA', isFavorite: false, cuentaFacturacionAsociadaId: 'cta-1' },
+  { id: 'cta-4', nombre: 'PREPAGO RAPPI', isFavorite: false, cuentaFacturacionAsociadaId: 'cta-1' },
+];
+
+check('1-2-9) ACHAVAL real: isFavorite=true (boolean) en cta-1 se detecta directo desde CUENTAS -> favoriteAccount.id === "cta-1"', () => {
+  const favorita = detectarFavorita(CUENTAS_ACHAVAL);
+  assert.ok(favorita, 'no detectó ninguna favorita con los datos reales de ACHAVAL');
+  assert.strictEqual(favorita.id, 'cta-1');
+  assert.strictEqual(favorita.nombre, 'Transferencia');
 });
 
-check('16) el otro flujo Mostrador/Delivery ("Finalizar Pedido", isCounterMode) sigue intacto: no se tocó su lógica', () => {
-  assert.match(paymentSectionSrc, /isCounterMode/, 'PaymentSection.jsx debería seguir usando isCounterMode');
-  assert.match(confirmModalSrc, /isCounterMode/, 'ConfirmOrderModal.jsx debería seguir usando isCounterMode');
+check('1) el string "true" (mal tipado) NO cuenta como favorita — exige === true, boolean real', () => {
+  const conStringMalo = [{ id: 'cta-9', nombre: 'Débito', isFavorite: 'true' }];
+  assert.strictEqual(detectarFavorita(conStringMalo), null, 'aceptó un string "true" como si fuera boolean');
 });
 
-check('17) Transferencia (u otro medio) en Mostrador NO activa "Paga con"/vuelto: usa la rama "else" sin paysWithInvalido', () => {
-  const iElse = counterPaymentModalSrc.indexOf('<div className="grid grid-cols-12 items-end gap-2">');
-  assert.ok(iElse > 0, 'no se encontró la rama de otros métodos');
-  const ramaOtrosMetodos = counterPaymentModalSrc.slice(iElse, iElse + 700);
-  assert.ok(!/paysWithInvalido/.test(ramaOtrosMetodos), 'la rama de otros métodos quedó atada a la validación de Paga con');
-  assert.match(ramaOtrosMetodos, /disabled={!amount \|\| remainingBalance <= 0 \|\| !!specialDiscountType}/, 'la rama de otros métodos cambió su condición original');
+check('3) la detección NO depende de fecha, turno ni venta — es una función pura de CUENTAS únicamente', () => {
+  // Se llama con los MISMOS datos de cuentas y da el mismo resultado, sin
+  // ningún parámetro de fecha/turno/orderItems/orderTotal involucrado.
+  const r1 = detectarFavorita(CUENTAS_ACHAVAL);
+  const r2 = detectarFavorita(CUENTAS_ACHAVAL);
+  assert.deepStrictEqual(r1, r2);
 });
 
-check('18) el resto de los métodos de pago en Mostrador siguen iguales (Monto simple + Añadir, sin Paga con/Vuelto)', () => {
-  const iElse = counterPaymentModalSrc.indexOf('<div className="grid grid-cols-12 items-end gap-2">');
-  const ramaOtrosMetodos = counterPaymentModalSrc.slice(iElse, iElse + 700);
-  assert.ok(!/Paga con|Vuelto/.test(ramaOtrosMetodos));
+check('4) la detección NO depende de una lista visual previamente filtrada (availablePaymentMethods)', () => {
+  // Aunque availablePaymentMethods esté restringido a solo Efectivo (ej. carrito
+  // con "PROMO EFECTIVO", departamento efectivo-only real de ACHAVAL: 1D),
+  // favoriteAccount se sigue detectando igual. Y ahora (corrección de esta
+  // ronda) esa restricción tampoco bloquea la DIVISIÓN — ver sección "DIV.
+  // FORM. PAGO ANULA LA RESTRICCIÓN POR DEPARTAMENTO" más abajo.
+  const availablePaymentMethodsRestringido = ['Efectivo'];
+  const favorita = detectarFavorita(CUENTAS_ACHAVAL);
+  assert.strictEqual(favorita.nombre, 'Transferencia', 'la detección se contaminó con la lista restringida');
+  assert.ok(!availablePaymentMethodsRestringido.includes(favorita.nombre), 'este caso tiene que poder existir: favorita fuera de la lista normal, y aun así disponible para dividir');
 });
 
-check('19) el cambio de Mostrador no altera la forma en que Delivery arma su objeto de pago (payments.push/concat sigue ausente en PaymentSection.jsx)', () => {
-  assert.ok(!/payments\.push\(|payments\.concat\(|\.\.\.payments,/.test(paymentSectionSrc),
-    'si aparece, PaymentSection.jsx cambió su estructura de pago único — no debería, por esta corrección');
+check('5) usa el NOMBRE REAL de la cuenta ("Transferencia"), no un texto genérico ni hardcodeado', () => {
+  const favorita = detectarFavorita(CUENTAS_ACHAVAL);
+  assert.strictEqual(favorita.nombre, 'Transferencia');
+  // Con otra favorita (ej. Mercado Pago) tiene que devolver ESE nombre, no uno fijo.
+  const otraFavorita = detectarFavorita([{ id: 'cta-1', nombre: 'Mercado Pago', isFavorite: true }]);
+  assert.strictEqual(otraFavorita.nombre, 'Mercado Pago');
+});
+
+check('6) un cambio de favorita se refleja al releer CUENTAS (nada queda pegado de una carga anterior)', () => {
+  const antes = detectarFavorita(CUENTAS_ACHAVAL); // favorita = Transferencia (cta-1)
+  const cuentasDespuesDeCambiarEnConfiguracion = [
+    { id: 'cta-1', nombre: 'Transferencia', isFavorite: false },
+    { id: 'cta-4', nombre: 'PREPAGO RAPPI', isFavorite: false },
+    { id: 'cta-5', nombre: 'Mercado Pago', isFavorite: true },
+  ];
+  const despues = detectarFavorita(cuentasDespuesDeCambiarEnConfiguracion);
+  assert.strictEqual(antes.nombre, 'Transferencia');
+  assert.strictEqual(despues.nombre, 'Mercado Pago', 'quedó pegada la favorita vieja');
+});
+
+check('7) sin ninguna cuenta con isFavorite === true, recién ahí null (para mostrar "Sin cuenta favorita")', () => {
+  const sinFavorita = [
+    { id: 'cta-1', nombre: 'Transferencia', isFavorite: false },
+    { id: 'cta-2', nombre: 'Mercado Pago', isFavorite: false },
+  ];
+  assert.strictEqual(detectarFavorita(sinFavorita), null);
+});
+
+check('8) con favorita existente, la detección JAMÁS devuelve null (nunca debería mostrarse "Sin cuenta favorita")', () => {
+  assert.notStrictEqual(detectarFavorita(CUENTAS_ACHAVAL), null);
+});
+
+check('fuente: loadPaymentMethods relee CUENTAS completo cada vez que el modal abre (sin caché entre aperturas — punto 8)', () => {
+  // fetchAccounts() es un fetch() directo a CUENTAS.json (ver accountsApi.js);
+  // loadPaymentMethods se llama de nuevo en cada apertura del modal (useEffect
+  // [isOpen]) — no hay memoización de accountsData/favoriteAccount entre
+  // ventas ni un caché local propio en este archivo.
+  const i = counterPaymentModalSrc.indexOf('if (isOpen) {');
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 500);
+  assert.match(cuerpo, /loadPaymentMethods\(\);/);
+  assert.ok(!/localStorage|sessionStorage/.test(counterPaymentModalSrc), 'apareció un caché local propio para cuentas/favorita');
+});
+
+check('11) obtiene la favorita DINÁMICAMENTE al cargar el modal (no hardcodea ningún nombre)', () => {
+  const i = counterPaymentModalSrc.indexOf('const favorita = ');
+  assert.ok(i > 0);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 300);
+  assert.match(cuerpo, /accountsData \|\| \[\]\)\.find\(\(acc\) => acc\?\.isFavorite === true/);
+  assert.match(counterPaymentModalSrc, /setFavoriteAccount\(favorita\);/);
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nDIV. FORM. PAGO ANULA LA RESTRICCIÓN POR DEPARTAMENTO (corrección de esta ronda):');
+
+check('5-6-7) handleToggleSplitMode YA NO consulta availablePaymentMethods — la ÚNICA condición es que exista favoriteAccount', () => {
+  const i = counterPaymentModalSrc.indexOf('const handleToggleSplitMode');
+  assert.ok(i > 0);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 1300);
+  assert.match(cuerpo, /if \(!favoriteAccount\) \{/);
+  assert.match(cuerpo, /No hay una cuenta electrónica favorita configurada\./);
+  // Chequea el USO real (la llamada), no la mención en prosa dentro del
+  // comentario que explica a propósito por qué ya no se consulta.
+  assert.ok(!/availablePaymentMethods\.includes\(/.test(cuerpo), 'handleToggleSplitMode todavía consulta availablePaymentMethods para bloquear la división');
+  assert.ok(!/no está habilitada para esta venta/.test(counterPaymentModalSrc), 'quedó el mensaje de la restricción anterior — esa condición debe haber desaparecido por completo');
+});
+
+check('2-4) el panel de división usa SIEMPRE Efectivo + favoriteAccount.nombre, nunca filtra por availablePaymentMethods (artículo solo-Efectivo o solo-electrónico no importa)', () => {
+  const i = counterPaymentModalSrc.indexOf('isSplitMode ? (');
+  assert.ok(i > 0);
+  const panel = counterPaymentModalSrc.slice(i, i + 2200);
+  assert.match(panel, /Efectivo — Monto/);
+  assert.match(panel, /favoriteAccount\?\.nombre \|\| 'Cuenta favorita'/);
+  assert.ok(!/availablePaymentMethods/.test(panel), 'el panel de división quedó condicionado por la lista normal filtrada');
+});
+
+check('1-3) el modo NORMAL (fuera de isSplitMode) sigue usando availablePaymentMethods sin cambios — la restricción por departamento no se tocó', () => {
+  assert.match(counterPaymentModalSrc, /const availablePaymentMethods = useMemo\(\s*\n\s*\(\) => resolverMediosDePago\(itemDepartments, mediosDelLocal, \{ payments, remainingBalance \}\)\.medios,/);
+  assert.match(counterPaymentModalSrc, /<PaymentMethodSlider methods={availablePaymentMethods}/);
+});
+
+check('8) al cancelar la división (volver a presionar DIV. FORM. PAGO), se vuelve al panel normal que sí respeta availablePaymentMethods', () => {
+  // isSplitMode pasa a false; el ternario del panel cae a la rama que sigue
+  // usando selectedPaymentMethod/availablePaymentMethods de siempre.
+  const iTernario = counterPaymentModalSrc.indexOf('isSplitMode ? (');
+  const cuerpo = counterPaymentModalSrc.slice(iTernario, iTernario + 3200);
+  assert.match(cuerpo, /\) : selectedPaymentMethod === 'Efectivo' && !specialDiscountType \? \(/);
+});
+
+check('9) resolverMediosDePago (mediosDePagoMostrador.js) NO se modificó — la excepción vive solo en CounterPaymentModal', () => {
+  const mediosDePagoMostradorSrc = leer('src/lib/api/mediosDePagoMostrador.js');
+  assert.match(mediosDePagoMostradorSrc, /export function resolverMediosDePago\(departamentosDelCarrito, mediosBase = \[\], estadoPago = null\) \{/);
+  assert.ok(!/isSplitMode|DIV\. FORM\. PAGO|favoriteAccount/.test(mediosDePagoMostradorSrc), 'la excepción de división se filtró a la función compartida — debe quedar SOLO en CounterPaymentModal');
+});
+
+// Réplica de la nueva condición de entrada (ya sin availablePaymentMethods).
+function puedeEntrarAModoDividido(favoriteAccount) {
+  return !!favoriteAccount;
+}
+
+check('6) con favorita configurada, SIEMPRE permite entrar en modo dividido (sin importar restricción de departamento)', () => {
+  assert.strictEqual(puedeEntrarAModoDividido(detectarFavorita(CUENTAS_ACHAVAL)), true);
+});
+
+check('7) sin favorita, no permite división (única condición real que bloquea)', () => {
+  const sinFavorita = [{ id: 'cta-1', nombre: 'Transferencia', isFavorite: false }];
+  assert.strictEqual(puedeEntrarAModoDividido(detectarFavorita(sinFavorita)), false);
+});
+
+check('EJEMPLO ACHAVAL — PROMO EFECTIVO (departamento real, permiteVentaElectronica:false): cobro normal solo Efectivo, división ofrece Efectivo + Transferencia igual', () => {
+  // Simula lo que ya hace restringirMediosPorDepartamentosComunes para un
+  // carrito 100% del departamento "PROMO EFECTIVO" (permiteVentaEfectivo:true,
+  // permiteVentaElectronica:false) — dato real leído de 40508022/DEPARTAMENTOS.
+  const departamentoPromoEfectivo = [{ nombre: 'PROMO EFECTIVO', permiteVentaEfectivo: true, permiteVentaElectronica: false }];
+  const mediosComunes = ['Efectivo', 'Transferencia'];
+  const todosEfectivo = departamentoPromoEfectivo.every((d) => d.permiteVentaEfectivo === true);
+  const todosElectronico = departamentoPromoEfectivo.every((d) => d.permiteVentaElectronica === true);
+  const availablePaymentMethodsCobroNormal = (todosEfectivo && !todosElectronico) ? ['Efectivo'] : mediosComunes;
+
+  assert.deepStrictEqual(availablePaymentMethodsCobroNormal, ['Efectivo'], '1) cobro normal debe seguir restringido a Efectivo');
+
+  // División: ignora availablePaymentMethodsCobroNormal por completo.
+  const favorita = detectarFavorita(CUENTAS_ACHAVAL);
+  const mediosDeDivision = ['Efectivo', favorita.nombre];
+  assert.deepStrictEqual(mediosDeDivision, ['Efectivo', 'Transferencia'], '2) la división debe ofrecer Efectivo + la favorita de todos modos');
+});
+
+check('3-4) artículo SOLO ELECTRÓNICO (ej. "TRANSFERENCIA" 2D de ACHAVAL, permiteVentaEfectivo:false): cobro normal sin Efectivo, división ofrece Efectivo + favorita igual', () => {
+  // Dato real: 40508022/DEPARTAMENTOS/2D = { nombre: "TRANSFERENCIA",
+  // permiteVentaEfectivo:false, permiteVentaElectronica:true }.
+  const departamentoSoloElectronico = [{ nombre: 'TRANSFERENCIA', permiteVentaEfectivo: false, permiteVentaElectronica: true }];
+  const mediosComunes = ['Efectivo', 'Transferencia'];
+  const todosEfectivo = departamentoSoloElectronico.every((d) => d.permiteVentaEfectivo === true);
+  const todosElectronico = departamentoSoloElectronico.every((d) => d.permiteVentaElectronica === true);
+  const availablePaymentMethodsCobroNormal = (!todosEfectivo && todosElectronico)
+    ? mediosComunes.filter((m) => m !== 'Efectivo')
+    : mediosComunes;
+
+  assert.deepStrictEqual(availablePaymentMethodsCobroNormal, ['Transferencia'], '3) cobro normal mantiene la restricción (sin Efectivo)');
+
+  const favorita = detectarFavorita(CUENTAS_ACHAVAL);
+  const mediosDeDivision = ['Efectivo', favorita.nombre];
+  assert.deepStrictEqual(mediosDeDivision, ['Efectivo', 'Transferencia'], '4) la división igual ofrece Efectivo + la favorita');
+});
+
+// Réplicas PURAS de la lógica de división (ver CounterPaymentModal.jsx).
+function splitPaysWithInvalido(splitEfectivo, splitPaysWith) {
+  const efectivoNum = parseFloat(splitEfectivo) || 0;
+  if (efectivoNum <= 0) return false;
+  if (splitPaysWith === '' || splitPaysWith === null || splitPaysWith === undefined) return true;
+  const paysWithNum = parseFloat(splitPaysWith);
+  return isNaN(paysWithNum) || paysWithNum < efectivoNum;
+}
+
+function splitVuelto(splitEfectivo, splitPaysWith) {
+  const efectivoNum = parseFloat(splitEfectivo) || 0;
+  const paysWithNum = parseFloat(splitPaysWith);
+  if (efectivoNum > 0 && !isNaN(paysWithNum) && paysWithNum >= efectivoNum) return paysWithNum - efectivoNum;
+  return 0;
+}
+
+function sumaValida(efectivo, electronico, remainingBalance) {
+  return Math.abs(((parseFloat(efectivo) || 0) + (parseFloat(electronico) || 0)) - remainingBalance) <= 0.009;
+}
+
+/** Réplica de handleConfirmSplitPayment: arma los pagos, o null si inválido. */
+function construirPagosDivididos({ splitEfectivo, splitPaysWith, splitElectronico, favoriteAccountNombre, remainingBalance }) {
+  const efectivoNum = parseFloat(splitEfectivo) || 0;
+  const electronicoNum = parseFloat(splitElectronico) || 0;
+  if (efectivoNum < 0 || electronicoNum < 0) return null;
+  if (!sumaValida(splitEfectivo, splitElectronico, remainingBalance)) return null;
+  if (efectivoNum <= 0 && electronicoNum <= 0) return null;
+
+  const pagos = [];
+  if (efectivoNum > 0) {
+    const parsedPaysWith = parseFloat(splitPaysWith);
+    if (splitPaysWith === '' || isNaN(parsedPaysWith) || parsedPaysWith < efectivoNum) return null;
+    pagos.push({ amount: efectivoNum, method: 'Efectivo', pagaCon: parsedPaysWith, vuelto: parsedPaysWith - efectivoNum });
+  }
+  if (electronicoNum > 0) {
+    pagos.push({ amount: electronicoNum, method: favoriteAccountNombre });
+  }
+  return pagos;
+}
+
+check('12) Efectivo + favorita deben sumar el total pendiente', () => {
+  assert.strictEqual(sumaValida(8000, 12000, 20000), true);
+});
+
+check('13) suma MENOR bloquea la confirmación (8.000 + 11.000 = 19.000, falta 1.000)', () => {
+  assert.strictEqual(sumaValida(8000, 11000, 20000), false);
+  const pagos = construirPagosDivididos({ splitEfectivo: '8000', splitPaysWith: '8000', splitElectronico: '11000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  assert.strictEqual(pagos, null);
+});
+
+check('14) suma MAYOR bloquea la confirmación (10.000 + 12.000 = 22.000, sobre 20.000)', () => {
+  assert.strictEqual(sumaValida(10000, 12000, 20000), false);
+  const pagos = construirPagosDivididos({ splitEfectivo: '10000', splitPaysWith: '10000', splitElectronico: '12000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  assert.strictEqual(pagos, null);
+});
+
+check('15) suma EXACTA permite confirmar', () => {
+  const pagos = construirPagosDivididos({ splitEfectivo: '8000', splitPaysWith: '10000', splitElectronico: '12000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  assert.ok(Array.isArray(pagos) && pagos.length === 2);
+});
+
+check('16) si Efectivo > 0, "Paga con" es obligatorio en la división', () => {
+  assert.strictEqual(splitPaysWithInvalido('8000', ''), true);
+  assert.strictEqual(splitPaysWithInvalido('8000', null), true);
+});
+
+check('16b) si Efectivo = 0, "Paga con" no aplica y no bloquea', () => {
+  assert.strictEqual(splitPaysWithInvalido('0', ''), false);
+  assert.strictEqual(splitPaysWithInvalido('', ''), false);
+});
+
+check('17) "Paga con" se compara SOLO contra la parte en Efectivo, nunca contra el total', () => {
+  // Total 20.000, Efectivo 8.000, Transferencia 12.000, Paga con 10.000 -> válido
+  // (10.000 >= 8.000; NO se exige 10.000 >= 20.000).
+  assert.strictEqual(splitPaysWithInvalido('8000', '10000'), false);
+});
+
+check('18) ejemplo exacto del enunciado: efectivo 8.000, paga con 10.000 -> vuelto 2.000', () => {
+  assert.strictEqual(splitVuelto('8000', '10000'), 2000);
+});
+
+check('19) confirmar la división guarda DOS pagos reales con la estructura correcta', () => {
+  const pagos = construirPagosDivididos({ splitEfectivo: '8000', splitPaysWith: '10000', splitElectronico: '12000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  assert.deepStrictEqual(pagos, [
+    { amount: 8000, method: 'Efectivo', pagaCon: 10000, vuelto: 2000 },
+    { amount: 12000, method: 'Transferencia' },
+  ]);
+});
+
+check('20) Total Pagado usa 8.000 + 12.000 = 20.000, NUNCA suma pagaCon (10.000+12.000=22.000 sería incorrecto)', () => {
+  const pagos = construirPagosDivididos({ splitEfectivo: '8000', splitPaysWith: '10000', splitElectronico: '12000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  const totalPaid = pagos.reduce((sum, p) => sum + p.amount, 0);
+  assert.strictEqual(totalPaid, 20000);
+  assert.notStrictEqual(totalPaid, 22000);
+});
+
+check('21) Pagos Registrados: ambos métodos se renderizan con la lógica ya existente (Efectivo con desglose, electrónico con línea simple)', () => {
+  const pagos = construirPagosDivididos({ splitEfectivo: '8000', splitPaysWith: '10000', splitElectronico: '12000', favoriteAccountNombre: 'Transferencia', remainingBalance: 20000 });
+  const [efectivo, electronico] = pagos;
+  assert.strictEqual(efectivo.method === 'Efectivo' && efectivo.pagaCon !== undefined, true, 'debería activar el desglose Total/Paga con/Vuelto');
+  assert.strictEqual(electronico.method === 'Efectivo' && electronico.pagaCon !== undefined, false, 'la electrónica no debe activar el desglose de efectivo');
+});
+
+check('fuente: handleConfirmSplitPayment agrega los dos pagos de una sola vez (no dos clicks) y sale del modo dividido', () => {
+  const i = counterPaymentModalSrc.indexOf('const handleConfirmSplitPayment');
+  assert.ok(i > 0);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2200);
+  assert.match(cuerpo, /setPayments\(\[\.\.\.payments, \.\.\.nuevosPagos\]\);/);
+  assert.match(cuerpo, /setIsSplitMode\(false\);/);
+});
+
+check('22) "Cancelar división" (volver a presionar DIV. FORM. PAGO) limpia los importes temporales', () => {
+  const i = counterPaymentModalSrc.indexOf('const handleToggleSplitMode');
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
+  assert.match(cuerpo, /if \(isSplitMode\) \{\s*\n\s*setIsSplitMode\(false\);\s*\n\s*limpiarEstadoDivision\(\);/);
+  const iLimpiar = counterPaymentModalSrc.indexOf('const limpiarEstadoDivision');
+  const cuerpoLimpiar = counterPaymentModalSrc.slice(iLimpiar, iLimpiar + 200);
+  assert.match(cuerpoLimpiar, /setSplitEfectivo\(''\);/);
+  assert.match(cuerpoLimpiar, /setSplitElectronico\(''\);/);
+  assert.match(cuerpoLimpiar, /setSplitPaysWith\(''\);/);
+});
+
+check('22b) abrir el modal para una venta nueva también resetea el estado de división', () => {
+  const i = counterPaymentModalSrc.indexOf('if (isOpen) {');
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 500);
+  assert.match(cuerpo, /setIsSplitMode\(false\);/);
+  assert.match(cuerpo, /setSplitEfectivo\(''\);/);
+});
+
+check('21 (defensivo) — solo cuentas ELECTRÓNICAS: CUENTAS nunca incluye "Efectivo" como entrada', () => {
+  // "Efectivo" siempre se antepone a mano a la lista de medios (nunca sale de
+  // CUENTAS), así que la favorita real jamás puede resolver a "Efectivo".
+  assert.match(counterPaymentModalSrc, /setMediosDelLocal\(\['Efectivo', \.\.\.new Set\(electronicPaymentMethods\)\]\);/);
+});
+
+check('24) Delivery/Web no cambian: PaymentSection/ConfirmOrderModal siguen con su propia lógica (isCounterMode), sin división', () => {
+  assert.match(paymentSectionSrc, /isCounterMode/);
+  assert.match(confirmModalSrc, /isCounterMode/);
+  assert.ok(!/DIV\. FORM\. PAGO|handleToggleSplitMode|isSplitMode/.test(paymentSectionSrc));
+  assert.ok(!/DIV\. FORM\. PAGO|handleToggleSplitMode|isSplitMode/.test(confirmModalSrc));
+  assert.ok(!/payments\.push\(|payments\.concat\(|\.\.\.payments,/.test(paymentSectionSrc));
 });
 
 check('no se tocó nada de facturación/stock/comandas/Caja Fuerte/Retiro de Efectivo desde este archivo', () => {

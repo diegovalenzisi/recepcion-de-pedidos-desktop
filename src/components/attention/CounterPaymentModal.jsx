@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
-import { Plus, Trash2, Loader2, CheckCircle, Wallet, Gift, ThumbsDown, Trophy, FileText, Calculator } from 'lucide-react';
+import { Plus, Trash2, Loader2, CheckCircle, Wallet, Gift, ThumbsDown, Trophy, FileText, Calculator, Split } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { fetchAccounts } from '@/lib/api/accountsApi';
@@ -43,7 +43,19 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
   const [mediosDelLocal, setMediosDelLocal] = useState(['Efectivo']);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
-  
+
+  // DIV. FORM. PAGO — divide el saldo pendiente entre Efectivo y la cuenta
+  // electrónica FAVORITA del local (fetchFavoriteAccount, accountsApi.js —
+  // misma fuente que ya usa el resto del sistema, nunca una cuenta inventada
+  // ni hardcodeada). Estado 100% separado del flujo normal de a un medio por
+  // vez: no lo toca ni lo reemplaza, solo agrega un atajo para el caso
+  // Efectivo + electrónica en una sola pantalla (puntos 5-19).
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [favoriteAccount, setFavoriteAccount] = useState(null);
+  const [splitEfectivo, setSplitEfectivo] = useState('');
+  const [splitElectronico, setSplitElectronico] = useState('');
+  const [splitPaysWith, setSplitPaysWith] = useState('');
+
   const [specialDiscountType, setSpecialDiscountType] = useState(null);
   const [responsibleEmployee, setResponsibleEmployee] = useState(null);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
@@ -64,6 +76,15 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
           fetchData('departamentos'),
         ]);
         const electronicPaymentMethods = (accountsData || []).map(acc => acc.nombre).filter(Boolean);
+
+        // Cuenta electrónica FAVORITA del local — MISMA fuente que ya usa el
+        // resto del sistema (CUENTAS/{id}/isFavorite, ver accountsApi.js),
+        // reutilizada acá tal cual en vez de reconsultar Firebase aparte.
+        // `CUENTAS` son siempre electrónicas (Efectivo nunca vive ahí — se
+        // antepone a mano más abajo), así que no hace falta filtrarla por
+        // nombre para descartar un falso "Efectivo" favorito (punto 21).
+        const favorita = (accountsData || []).find((acc) => acc?.isFavorite === true && acc?.nombre) || null;
+        setFavoriteAccount(favorita);
 
         // MISMA función que NewOrderModal.jsx/ConfirmOrderModal (Delivery) —
         // ver mediosDePagoMostrador.js. `orderItems` ya trae el id real del
@@ -114,6 +135,10 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
       setEmiteFactura(false);
       setIsSubmitting(false);
       setPaysWith('');
+      setIsSplitMode(false);
+      setSplitEfectivo('');
+      setSplitElectronico('');
+      setSplitPaysWith('');
       loadPaymentMethods();
     }
   }, [isOpen]);
@@ -192,24 +217,18 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     // `disabled` del botón, para que un bypass del botón (ej. Enter en el
     // input) no cuele un pago con un importe insuficiente.
     //
-    // Regla vigente:
-    //   campo VACÍO ("", null, undefined)  -> paga justo: pagaCon = monto, vuelto = 0
+    // Regla vigente — "Paga con" es OBLIGATORIO (reemplaza la regla anterior
+    // de "vacío = paga justo", que queda eliminada):
+    //   campo VACÍO ("", null, undefined)  -> INVÁLIDO, se bloquea
+    //   pagaCon < monto                     -> INVÁLIDO, se bloquea
     //   pagaCon == monto                    -> válido, vuelto = 0
     //   pagaCon > monto                     -> válido, vuelto = pagaCon - monto
-    //   pagaCon < monto (escrito a mano)    -> inválido, se bloquea
-    // Un "0" escrito a mano NO es "vacío": se trata como un importe
-    // insuficiente y se bloquea igual que cualquier otro valor menor.
     if (selectedPaymentMethod === 'Efectivo') {
       const paysWithVacio = paysWith === '' || paysWith === null || paysWith === undefined;
-      let parsedPaysWith;
-      if (paysWithVacio) {
-        parsedPaysWith = parsedAmount; // no informado -> paga justo
-      } else {
-        parsedPaysWith = parseFloat(paysWith);
-        if (isNaN(parsedPaysWith) || parsedPaysWith < parsedAmount) {
-          toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' no puede ser menor al monto a cobrar." });
-          return;
-        }
+      const parsedPaysWith = parseFloat(paysWith);
+      if (paysWithVacio || isNaN(parsedPaysWith) || parsedPaysWith < parsedAmount) {
+        toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' es obligatorio y no puede ser menor al monto a cobrar." });
+        return;
       }
       // pagaCon/vuelto son METADATA del pago en efectivo: el monto que se
       // aplica a la venta sigue siendo `parsedAmount` (Total Pagado nunca usa
@@ -221,7 +240,141 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     setPayments([...payments, nuevoPago]);
     setPaysWith('');
   };
-  
+
+  // ------------------------------------------------------------------------
+  // DIV. FORM. PAGO — entra/sale del modo dividido. Requiere una cuenta
+  // favorita electrónica REALMENTE disponible para esta venta (ya resuelta
+  // por resolverMediosDePago, misma restricción por departamento que el
+  // selector normal — punto 8): si no hay, no se inventa ninguna (punto 20).
+  // ------------------------------------------------------------------------
+  const limpiarEstadoDivision = () => {
+    setSplitEfectivo('');
+    setSplitElectronico('');
+    setSplitPaysWith('');
+  };
+
+  const handleToggleSplitMode = () => {
+    if (isSplitMode) {
+      setIsSplitMode(false);
+      limpiarEstadoDivision();
+      return;
+    }
+    // ÚNICA condición para poder dividir: que exista una cuenta favorita real
+    // (CUENTAS/{id}/isFavorite === true, `favoriteAccount` — ver
+    // loadPaymentMethods). A PROPÓSITO no se consulta `availablePaymentMethods`
+    // acá: ese filtro por departamento (solo Efectivo / solo electrónico) sigue
+    // rigiendo el cobro NORMAL sin cambios, pero DIV. FORM. PAGO es una
+    // excepción explícita — mientras `isSplitMode` está activo, Efectivo +
+    // la favorita quedan SIEMPRE habilitados para esa operación de cobro,
+    // sin importar la restricción del artículo/departamento. Al cancelar la
+    // división (setIsSplitMode(false) arriba) se vuelve de inmediato al
+    // comportamiento normal, que sigue respetando esa restricción tal cual.
+    if (!favoriteAccount) {
+      toast({ variant: 'destructive', title: 'Sin cuenta favorita', description: 'No hay una cuenta electrónica favorita configurada.' });
+      return;
+    }
+    limpiarEstadoDivision();
+    setIsSplitMode(true);
+  };
+
+  // Ayuda para completar el segundo importe (punto 14): al tipear un importe
+  // VÁLIDO y dentro de rango en un campo, se autocompleta el restante en el
+  // otro para que la suma dé el saldo pendiente. Si lo que se tipeó todavía
+  // no es un número válido, el otro campo queda como estaba — nunca se
+  // fuerza un valor mientras el operador está a mitad de escribir. Ambos
+  // campos siguen siendo editables a mano en cualquier momento.
+  const handleSplitEfectivoChange = (value) => {
+    setSplitEfectivo(value);
+    const num = parseFloat(value);
+    if (!isNaN(num) && num >= 0 && num <= remainingBalance + 0.001) {
+      setSplitElectronico((remainingBalance - num).toFixed(2));
+    }
+  };
+
+  const handleSplitElectronicoChange = (value) => {
+    setSplitElectronico(value);
+    const num = parseFloat(value);
+    if (!isNaN(num) && num >= 0 && num <= remainingBalance + 0.001) {
+      setSplitEfectivo((remainingBalance - num).toFixed(2));
+    }
+  };
+
+  const splitAsignado = useMemo(
+    () => (parseFloat(splitEfectivo) || 0) + (parseFloat(splitElectronico) || 0),
+    [splitEfectivo, splitElectronico]
+  );
+  const splitFalta = useMemo(() => remainingBalance - splitAsignado, [remainingBalance, splitAsignado]);
+
+  // "Paga con" en la división corresponde EXCLUSIVAMENTE a la parte en
+  // Efectivo (punto 11) — nunca se compara contra el total de la venta.
+  // Solo es obligatorio si hay algo asignado a Efectivo (punto 12).
+  const splitVuelto = useMemo(() => {
+    const efectivoNum = parseFloat(splitEfectivo) || 0;
+    const paysWithNum = parseFloat(splitPaysWith);
+    if (efectivoNum > 0 && !isNaN(paysWithNum) && paysWithNum >= efectivoNum) return paysWithNum - efectivoNum;
+    return 0;
+  }, [splitEfectivo, splitPaysWith]);
+
+  const splitPaysWithInvalido = useMemo(() => {
+    const efectivoNum = parseFloat(splitEfectivo) || 0;
+    if (efectivoNum <= 0) return false; // sin efectivo asignado, "Paga con" no aplica
+    if (splitPaysWith === '' || splitPaysWith === null || splitPaysWith === undefined) return true;
+    const paysWithNum = parseFloat(splitPaysWith);
+    return isNaN(paysWithNum) || paysWithNum < efectivoNum;
+  }, [splitEfectivo, splitPaysWith]);
+
+  const splitSumaExacta = Math.abs(splitFalta) <= 0.009;
+  const splitMontosNegativos = (parseFloat(splitEfectivo) || 0) < 0 || (parseFloat(splitElectronico) || 0) < 0;
+  const splitConfirmDisabled = !splitSumaExacta || splitPaysWithInvalido || splitAsignado <= 0 || splitMontosNegativos;
+
+  /**
+   * Confirma la división: arma y agrega LOS DOS pagos reales de una sola vez
+   * (punto 18 — no hace falta que el operador agregue una forma, después la
+   * otra). Revalida todo lo mismo que ya deshabilita el botón, por si se
+   * dispara el submit sin pasar por él.
+   */
+  const handleConfirmSplitPayment = () => {
+    if (specialDiscountType) return;
+    const efectivoNum = parseFloat(splitEfectivo) || 0;
+    const electronicoNum = parseFloat(splitElectronico) || 0;
+
+    if (efectivoNum < 0 || electronicoNum < 0) {
+      toast({ variant: 'destructive', title: 'Importe inválido', description: 'Los importes no pueden ser negativos.' });
+      return;
+    }
+    if (Math.abs((efectivoNum + electronicoNum) - remainingBalance) > 0.009) {
+      toast({
+        variant: 'destructive',
+        title: 'La suma no coincide',
+        description: `Efectivo + ${favoriteAccount?.nombre || 'la cuenta favorita'} debe ser exactamente ${formatCurrency(remainingBalance)}.`,
+      });
+      return;
+    }
+    if (efectivoNum <= 0 && electronicoNum <= 0) {
+      toast({ variant: 'destructive', title: 'Sin importes', description: 'Asigná un importe a Efectivo y/o a la cuenta favorita.' });
+      return;
+    }
+
+    const nuevosPagos = [];
+
+    if (efectivoNum > 0) {
+      const parsedPaysWith = parseFloat(splitPaysWith);
+      if (splitPaysWith === '' || isNaN(parsedPaysWith) || parsedPaysWith < efectivoNum) {
+        toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' es obligatorio y no puede ser menor al monto en efectivo." });
+        return;
+      }
+      nuevosPagos.push({ amount: efectivoNum, method: 'Efectivo', pagaCon: parsedPaysWith, vuelto: parsedPaysWith - efectivoNum });
+    }
+
+    if (electronicoNum > 0) {
+      nuevosPagos.push({ amount: electronicoNum, method: favoriteAccount.nombre });
+    }
+
+    setPayments([...payments, ...nuevosPagos]);
+    setIsSplitMode(false);
+    limpiarEstadoDivision();
+  };
+
   const removePayment = (index) => {
     if (specialDiscountType) return;
     setPayments(payments.filter((_, i) => i !== index));
@@ -276,12 +429,13 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     return 0;
   }, [paysWith, amount]);
 
-  // Campo VACÍO ("", null, undefined) = paga justo -> siempre válido, nunca
-  // deshabilita "Añadir Pago". Un valor ESCRITO solo es inválido si es menor
-  // al monto a cobrar (igual ya es válido: vuelto 0). handleAddPayment
-  // revalida esto mismo por si se dispara el submit sin pasar por el botón.
+  // "Paga con" es OBLIGATORIO (la regla anterior de "vacío = paga justo"
+  // queda eliminada): un campo vacío deshabilita "Añadir Pago" igual que un
+  // valor menor al monto. Igual al monto sigue siendo válido (vuelto 0).
+  // handleAddPayment revalida esto mismo por si se dispara el submit sin
+  // pasar por el botón.
   const paysWithInvalido = useMemo(() => {
-    if (paysWith === '' || paysWith === null || paysWith === undefined) return false;
+    if (paysWith === '' || paysWith === null || paysWith === undefined) return true;
     const payValue = parseFloat(paysWith);
     const amountValue = parseFloat(amount);
     return isNaN(payValue) || isNaN(amountValue) || payValue < amountValue;
@@ -325,11 +479,60 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
             {(remainingBalance > 0.009 || specialDiscountType) && (
               <div className="space-y-4">
                 <PaymentMethodSlider methods={availablePaymentMethods} onSelect={setSelectedPaymentMethod} selectedMethod={selectedPaymentMethod}/>
+                {!specialDiscountType && (
+                  <Button
+                    variant={isSplitMode ? 'secondary' : 'outline'}
+                    className="w-full"
+                    onClick={handleToggleSplitMode}
+                  >
+                    <Split className="mr-2 h-4 w-4" />
+                    {isSplitMode ? 'CANCELAR DIVISIÓN' : 'DIV. FORM. PAGO'}
+                  </Button>
+                )}
               </div>
             )}
 
             {remainingBalance <= 0.009 && !specialDiscountType ? null
-              : selectedPaymentMethod === 'Efectivo' && !specialDiscountType ? (
+              : isSplitMode ? (
+                <div className="space-y-3 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                    <h4 className="font-semibold text-blue-900 text-sm">Dividir Forma de Pago</h4>
+
+                    <div>
+                        <Label htmlFor="splitEfectivo" className="text-xs font-semibold text-gray-600 mb-1 block">Efectivo — Monto</Label>
+                        <Input id="splitEfectivo" type="number" value={splitEfectivo} onChange={(e) => handleSplitEfectivoChange(e.target.value)} className="h-10 text-lg" placeholder="0.00" />
+                    </div>
+
+                    {(parseFloat(splitEfectivo) || 0) > 0 && (
+                      <div className="grid grid-cols-2 gap-4 pl-2 border-l-2 border-green-200">
+                          <div>
+                              <Label htmlFor="splitPaysWith" className="text-xs font-semibold text-gray-600 mb-1 block">Paga con</Label>
+                              <Input id="splitPaysWith" type="number" value={splitPaysWith} onChange={(e) => setSplitPaysWith(e.target.value)} className="h-10 text-lg" placeholder="0.00" />
+                          </div>
+                          <div>
+                              <Label className="text-xs font-semibold text-gray-600 mb-1 block">Vuelto</Label>
+                              <div className="h-10 flex items-center font-bold text-green-700">{formatCurrency(splitVuelto)}</div>
+                          </div>
+                      </div>
+                    )}
+
+                    <div>
+                        <Label htmlFor="splitElectronico" className="text-xs font-semibold text-gray-600 mb-1 block">{favoriteAccount?.nombre || 'Cuenta favorita'} — Monto</Label>
+                        <Input id="splitElectronico" type="number" value={splitElectronico} onChange={(e) => handleSplitElectronicoChange(e.target.value)} className="h-10 text-lg" placeholder="0.00" />
+                    </div>
+
+                    <div className="bg-white p-2 rounded border border-blue-200 shadow-sm text-sm space-y-1">
+                        <div className="flex justify-between"><span>Total asignado:</span><span className="font-semibold">{formatCurrency(splitAsignado)}</span></div>
+                        <div className="flex justify-between">
+                          <span>Falta asignar:</span>
+                          <span className={`font-semibold ${splitSumaExacta ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(splitFalta)}</span>
+                        </div>
+                    </div>
+
+                    <Button className="w-full h-10 text-base" onClick={handleConfirmSplitPayment} disabled={splitConfirmDisabled}>
+                        <Plus className="mr-2 h-4 w-4"/> Añadir Pago
+                    </Button>
+                </div>
+              ) : selectedPaymentMethod === 'Efectivo' && !specialDiscountType ? (
                 <div className="space-y-3 p-3 bg-green-50 rounded-lg border border-green-100">
                     <div className="grid grid-cols-2 gap-4">
                         <div>
