@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.130",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.130%2FRecepcion-de-Pedidos-Setup-1.3.130.exe?alt=media",
-  "sha256": "098437942547e3ba2681a3c6f057d03d430528d92c8039cc60e1ee30ad509ff9",
-  "size": 150081134,
-  "mandatory": false,
+  "latest": "1.3.132",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.132%2FRecepcion-de-Pedidos-Setup-1.3.132.exe?alt=media",
+  "sha256": "e43fa3db68b3a330bac25fc71738c041b41144bca694142c4a77e6752865821d",
+  "size": 150081933,
+  "mandatory": true,
   "releaseDate": "2026-09-15",
-  "notes": "Version 1.3.130. Mostrador + Efectivo: Paga con vacio = paga justo (vuelto 0), igual al monto ahora es valido. Incluye todo lo de 1.3.129: Retiro de Efectivo y anti-downgrade del actualizador."
+  "notes": "Version 1.3.132. ACTUALIZACION OBLIGATORIA. DIV. FORM. PAGO en Mostrador ya no respeta restricciones de departamento (solo efectivo/solo electronico) al dividir el pago: siempre ofrece Efectivo + la cuenta electronica favorita. El cobro normal sigue respetando esas restricciones sin cambios. Incluye todo lo acumulado desde 1.3.129: Retiro de Efectivo, Paga con obligatorio + Vuelto en Mostrador, y el fix anti-downgrade del actualizador."
 }

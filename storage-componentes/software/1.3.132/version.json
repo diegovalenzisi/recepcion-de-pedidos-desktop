@@ -1,0 +1,7 @@
+{
+  "version": "1.3.132",
+  "installer": "Recepcion-de-Pedidos-Setup-1.3.132.exe",
+  "releaseDate": "2026-09-15",
+  "sha256": "e43fa3db68b3a330bac25fc71738c041b41144bca694142c4a77e6752865821d",
+  "notes": "ACTUALIZACION OBLIGATORIA. DIV. FORM. PAGO en Mostrador ya no respeta restricciones de departamento (solo efectivo/solo electronico) al dividir el pago: siempre ofrece Efectivo + la cuenta electronica favorita. El cobro normal sigue respetando esas restricciones sin cambios. Incluye todo lo acumulado desde 1.3.129: Retiro de Efectivo, Paga con obligatorio + Vuelto en Mostrador, y el fix anti-downgrade del actualizador."
+}
