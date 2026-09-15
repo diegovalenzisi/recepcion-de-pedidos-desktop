@@ -1,6 +1,14 @@
 // "COBRAR VENTA" (CounterPaymentModal.jsx) — Mostrador + Efectivo: foco
-// automático en "Paga con", obligatorio y > Monto a Cobrar, cálculo de
-// vuelto, y desglose Total/Paga con/Vuelto en Pagos Registrados.
+// automático en "Paga con" (nunca obligatorio: vacío = paga justo), cálculo
+// de vuelto, y desglose Total/Paga con/Vuelto en Pagos Registrados.
+//
+// REGLA VIGENTE (reemplaza la versión anterior, que exigía pagaCon > monto):
+//   campo VACÍO ("", null, undefined)  -> paga justo: pagaCon = monto, vuelto = 0
+//   pagaCon == monto                    -> válido, vuelto = 0
+//   pagaCon > monto                     -> válido, vuelto = pagaCon - monto
+//   pagaCon < monto (escrito a mano)    -> inválido, se bloquea
+// Un "0" escrito a mano NO es "vacío": es un importe insuficiente y se
+// bloquea igual que cualquier otro valor menor al monto.
 //
 // IDENTIFICACIÓN DE MOSTRADOR: este modal ("Cobrar Venta") es exclusivo del
 // flujo de Mostrador — se monta SOLO desde CounterPage.jsx/CounterTab.jsx,
@@ -78,59 +86,72 @@ check('"Paga con" se limpia con cada cambio de método (nunca queda pegado de Ef
 });
 
 // ---------------------------------------------------------------------------
-console.log('\n4-6. "PAGA CON" OBLIGATORIO + VUELTO — solo Efectivo (puntos 4, 5, 6, 21.2-21.7):');
+console.log('\n1,4-6. "AÑADIR PAGO" SIEMPRE HABILITADO + VUELTO — solo Efectivo (puntos 1, 4, 5, 6):');
 
-check('paysWithInvalido exige ESTRICTAMENTE mayor (igual NO alcanza)', () => {
+check('paysWithInvalido trata el campo VACÍO como válido (nunca deshabilita el botón)', () => {
   const i = counterPaymentModalSrc.indexOf('const paysWithInvalido = useMemo');
   assert.ok(i > 0);
   const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
-  assert.match(cuerpo, /payValue <= amountValue/);
+  assert.match(cuerpo, /if \(paysWith === '' \|\| paysWith === null \|\| paysWith === undefined\) return false;/);
 });
 
-check('el botón "Añadir Pago" (rama Efectivo) se deshabilita con paysWithInvalido', () => {
+check('paysWithInvalido ya NO exige estrictamente mayor: pagaCon == monto es válido', () => {
+  const i = counterPaymentModalSrc.indexOf('const paysWithInvalido = useMemo');
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 400);
+  assert.match(cuerpo, /payValue < amountValue/);
+  assert.ok(!/payValue <= amountValue/.test(cuerpo), 'volvió a exigir estrictamente mayor');
+});
+
+check('el botón "Añadir Pago" (rama Efectivo) NUNCA se deshabilita solo por el campo vacío', () => {
   assert.match(counterPaymentModalSrc, /disabled={!amount \|\| remainingBalance <= 0 \|\| paysWithInvalido}/);
 });
 
-check('handleAddPayment revalida "Efectivo → paysWith > amount" (no solo el disabled del botón) — punto 5', () => {
+check('handleAddPayment: campo vacío -> paga justo (pagaCon = monto); escrito y menor -> bloquea (punto 5)', () => {
   const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2200);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2400);
   assert.match(cuerpo, /if \(selectedPaymentMethod === 'Efectivo'\) \{/);
-  assert.match(cuerpo, /parsedPaysWith <= parsedAmount/);
-  assert.match(cuerpo, /El importe de 'Paga con' debe ser mayor al monto a cobrar\./);
+  assert.match(cuerpo, /const paysWithVacio = paysWith === '' \|\| paysWith === null \|\| paysWith === undefined;/);
+  assert.match(cuerpo, /parsedPaysWith = parsedAmount; \/\/ no informado -> paga justo/);
+  assert.match(cuerpo, /parsedPaysWith < parsedAmount/);
+  assert.match(cuerpo, /El importe de 'Paga con' no puede ser menor al monto a cobrar\./);
 });
 
-check('mensaje de error visible en pantalla cuando es inválido', () => {
+check('mensaje de error visible en pantalla, con el texto actualizado (ya no dice "debe ser mayor")', () => {
   assert.match(counterPaymentModalSrc, /paysWith && paysWithInvalido/);
-  assert.match(counterPaymentModalSrc, /El importe de 'Paga con' debe ser mayor al monto a cobrar\./);
+  assert.match(counterPaymentModalSrc, /El importe de 'Paga con' no puede ser menor al monto a cobrar\./);
+  assert.ok(!/debe ser mayor al monto a cobrar/.test(counterPaymentModalSrc), 'quedó el mensaje viejo (regla anterior)');
 });
 
-// Réplica PURA de paysWithInvalido, para probar la tabla exacta del punto 4.
+// Réplica PURA de paysWithInvalido, para probar la tabla exacta del punto 6.
 function paysWithInvalido(paysWith, amount) {
+  if (paysWith === '' || paysWith === null || paysWith === undefined) return false;
   const payValue = parseFloat(paysWith);
   const amountValue = parseFloat(amount);
-  return paysWith === '' || isNaN(payValue) || isNaN(amountValue) || payValue <= amountValue;
+  return isNaN(payValue) || isNaN(amountValue) || payValue < amountValue;
 }
 
 const MONTO_A_COBRAR = '12500';
 
-check('1) foco automático: ya cubierto arriba por inspección de fuente (no hay DOM real en este runner)', () => {
+check('1/9) foco automático + botón nunca deshabilitado por vacío: ya cubierto arriba por inspección de fuente', () => {
   assert.ok(true);
 });
 
-check('2) vacío NO permite', () => {
-  assert.strictEqual(paysWithInvalido('', MONTO_A_COBRAR), true);
+check('2) campo VACÍO -> válido (Añadir Pago habilitado)', () => {
+  assert.strictEqual(paysWithInvalido('', MONTO_A_COBRAR), false);
+  assert.strictEqual(paysWithInvalido(null, MONTO_A_COBRAR), false);
+  assert.strictEqual(paysWithInvalido(undefined, MONTO_A_COBRAR), false);
 });
 
-check('3) 0 NO permite', () => {
+check('3) "0" escrito a mano NO es "vacío": se bloquea como cualquier valor insuficiente', () => {
   assert.strictEqual(paysWithInvalido('0', MONTO_A_COBRAR), true);
 });
 
-check('4) valor MENOR ($10.000) NO permite', () => {
+check('valor MENOR ($10.000) sigue sin permitir (punto 6/8)', () => {
   assert.strictEqual(paysWithInvalido('10000', MONTO_A_COBRAR), true);
 });
 
-check('5) valor IGUAL ($12.500) NO permite', () => {
-  assert.strictEqual(paysWithInvalido('12500', MONTO_A_COBRAR), true);
+check('4) valor IGUAL ($12.500) ahora SÍ permite (paga justo, vuelto 0)', () => {
+  assert.strictEqual(paysWithInvalido('12500', MONTO_A_COBRAR), false);
 });
 
 check('6) valor MAYOR ($12.501, $13.000, $15.000) SÍ permite', () => {
@@ -161,7 +182,7 @@ console.log('\n7-8. DATOS GUARDADOS — monto/pagaCon/vuelto, sin romper pagos h
 
 check('el pago Efectivo guarda amount, pagaCon y vuelto como campos ADITIVOS', () => {
   const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2200);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
   assert.match(cuerpo, /nuevoPago = \{ \.\.\.nuevoPago, pagaCon: parsedPaysWith, vuelto: parsedPaysWith - parsedAmount \}/);
   // El método que se guarda sigue siendo `amount`/`method` como siempre —
   // pagaCon/vuelto se agregan, no reemplazan la forma existente.
@@ -170,18 +191,23 @@ check('el pago Efectivo guarda amount, pagaCon y vuelto como campos ADITIVOS', (
 
 check('otros métodos (no Efectivo) NO agregan pagaCon/vuelto — mismo payload de siempre', () => {
   const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2200);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
   const iIf = cuerpo.indexOf("if (selectedPaymentMethod === 'Efectivo')");
   assert.ok(iIf > 0);
-  // Nada antes del if agrega pagaCon: el objeto base es siempre {amount, method}.
-  assert.ok(!/pagaCon/.test(cuerpo.slice(0, iIf)));
+  // Nada antes del if ASIGNA pagaCon: el objeto base es siempre {amount, method}.
+  // (busca "pagaCon:", la asignación real — no alcanza con "pagaCon" a secas,
+  // que también aparece en los comentarios que explican la regla vigente).
+  assert.ok(!/pagaCon:/.test(cuerpo.slice(0, iIf)));
 });
 
-// Réplica del payload real que produce handleAddPayment.
+// Réplica del payload real que produce handleAddPayment — incluye la
+// normalización "vacío -> paga justo" (paysWith undefined/null/'' -> amount).
 function construirPago({ amount, method, paysWith }) {
   let pago = { amount, method };
   if (method === 'Efectivo') {
-    pago = { ...pago, pagaCon: paysWith, vuelto: paysWith - amount };
+    const vacio = paysWith === '' || paysWith === null || paysWith === undefined;
+    const pagaCon = vacio ? amount : paysWith;
+    pago = { ...pago, pagaCon, vuelto: pagaCon - amount };
   }
   return pago;
 }
@@ -190,6 +216,28 @@ check('8-10) guarda monto, pagaCon y vuelto (ejemplo conceptual del punto 8)', (
   const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 15000 });
   assert.strictEqual(pago.amount, 12500);
   assert.strictEqual(pago.pagaCon, 15000);
+  assert.strictEqual(pago.vuelto, 2500);
+});
+
+check('2) Paga con VACÍO -> guarda pagaCon = monto (paga justo)', () => {
+  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' }).pagaCon, 12500);
+  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: undefined }).pagaCon, 12500);
+  assert.strictEqual(construirPago({ amount: 12500, method: 'Efectivo', paysWith: null }).pagaCon, 12500);
+});
+
+check('3) Paga con VACÍO -> vuelto = 0', () => {
+  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' });
+  assert.strictEqual(pago.vuelto, 0);
+});
+
+check('5) Paga con == monto (escrito a mano) -> vuelto = 0', () => {
+  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 12500 });
+  assert.strictEqual(pago.pagaCon, 12500);
+  assert.strictEqual(pago.vuelto, 0);
+});
+
+check('7) Paga con > monto -> vuelto correcto', () => {
+  const pago = construirPago({ amount: 12500, method: 'Efectivo', paysWith: 15000 });
   assert.strictEqual(pago.vuelto, 2500);
 });
 
@@ -239,6 +287,31 @@ check('11) pago mixto (Transferencia $10.000 + Efectivo Paga-con $15.000): Total
   assert.strictEqual(remainingBalance, 0);
 });
 
+check('10) pago mixto + Efectivo con "Paga con" vacío: toma como paga justo el saldo del tramo en efectivo', () => {
+  // Ejemplo del punto 10: Total 20.000, Transferencia 8.000, saldo 12.000,
+  // se elige Efectivo con Monto a Cobrar = 12.000 (autocompletado por el
+  // saldo pendiente, como ya hace el componente) y Paga con vacío.
+  const totalVenta = 20000;
+  const transferencia = { amount: 8000, method: 'Transferencia' };
+  const efectivo = construirPago({ amount: 12000, method: 'Efectivo', paysWith: '' });
+
+  assert.strictEqual(efectivo.pagaCon, 12000);
+  assert.strictEqual(efectivo.vuelto, 0);
+
+  const payments = [transferencia, efectivo];
+  const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+  const remainingBalance = totalVenta - totalPaid;
+
+  assert.strictEqual(totalPaid, 20000);
+  assert.strictEqual(remainingBalance, 0);
+});
+
+check('11) Pagos Registrados: el desglose se muestra aunque "Paga con" se haya autocompletado (pagaCon nunca queda undefined)', () => {
+  const efectivo = construirPago({ amount: 12500, method: 'Efectivo', paysWith: '' });
+  // La misma condición que usa el JSX: method === 'Efectivo' && pagaCon !== undefined.
+  assert.strictEqual(efectivo.method === 'Efectivo' && efectivo.pagaCon !== undefined, true);
+});
+
 check('13) eliminar un pago Efectivo elimina también pagaCon/vuelto (van adentro del mismo objeto) y recalcula', () => {
   const payments = [
     { amount: 10000, method: 'Transferencia' },
@@ -253,7 +326,7 @@ check('13) eliminar un pago Efectivo elimina también pagaCon/vuelto (van adentr
 
 check('el vuelto NO se guarda como gasto/forma de pago/ítem extra — no hay push a gastos ni a payments por el vuelto', () => {
   const i = counterPaymentModalSrc.indexOf('const handleAddPayment');
-  const cuerpo = counterPaymentModalSrc.slice(i, i + 2200);
+  const cuerpo = counterPaymentModalSrc.slice(i, i + 2900);
   assert.ok(!/setPayments\(\[\.\.\.payments, nuevoPago\], \{.*vuelto/.test(cuerpo));
   // Un solo push por click: el vuelto vive DENTRO del mismo objeto de pago, no aparte.
   const pushes = (cuerpo.match(/setPayments\(\[\.\.\.payments, /g) || []).length;

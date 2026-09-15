@@ -187,15 +187,29 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
 
     let nuevoPago = { amount: parsedAmount, method: selectedPaymentMethod };
 
-    // "Paga con" > Monto a Cobrar es obligatorio SOLO para Efectivo (esta
-    // pantalla es de Mostrador siempre — ver comentario junto al componente).
-    // Se revalida acá, no solo con el `disabled` del botón, para que un bypass
-    // del botón (ej. Enter en el input) no cuele un pago sin vuelto (punto 5).
+    // "Paga con" es SOLO para Efectivo (esta pantalla es de Mostrador siempre
+    // — ver comentario junto al componente). Se revalida acá, no solo con el
+    // `disabled` del botón, para que un bypass del botón (ej. Enter en el
+    // input) no cuele un pago con un importe insuficiente.
+    //
+    // Regla vigente:
+    //   campo VACÍO ("", null, undefined)  -> paga justo: pagaCon = monto, vuelto = 0
+    //   pagaCon == monto                    -> válido, vuelto = 0
+    //   pagaCon > monto                     -> válido, vuelto = pagaCon - monto
+    //   pagaCon < monto (escrito a mano)    -> inválido, se bloquea
+    // Un "0" escrito a mano NO es "vacío": se trata como un importe
+    // insuficiente y se bloquea igual que cualquier otro valor menor.
     if (selectedPaymentMethod === 'Efectivo') {
-      const parsedPaysWith = parseFloat(paysWith);
-      if (isNaN(parsedPaysWith) || parsedPaysWith <= parsedAmount) {
-        toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' debe ser mayor al monto a cobrar." });
-        return;
+      const paysWithVacio = paysWith === '' || paysWith === null || paysWith === undefined;
+      let parsedPaysWith;
+      if (paysWithVacio) {
+        parsedPaysWith = parsedAmount; // no informado -> paga justo
+      } else {
+        parsedPaysWith = parseFloat(paysWith);
+        if (isNaN(parsedPaysWith) || parsedPaysWith < parsedAmount) {
+          toast({ variant: 'destructive', title: 'Importe inválido', description: "El importe de 'Paga con' no puede ser menor al monto a cobrar." });
+          return;
+        }
       }
       // pagaCon/vuelto son METADATA del pago en efectivo: el monto que se
       // aplica a la venta sigue siendo `parsedAmount` (Total Pagado nunca usa
@@ -262,13 +276,15 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
     return 0;
   }, [paysWith, amount]);
 
-  // "Paga con" > Monto a Cobrar (estrictamente mayor: igual NO alcanza) —
-  // puntos 4 y 18. Deshabilita "Añadir Pago"; handleAddPayment revalida lo
-  // mismo por si se dispara el submit sin pasar por el botón (punto 5).
+  // Campo VACÍO ("", null, undefined) = paga justo -> siempre válido, nunca
+  // deshabilita "Añadir Pago". Un valor ESCRITO solo es inválido si es menor
+  // al monto a cobrar (igual ya es válido: vuelto 0). handleAddPayment
+  // revalida esto mismo por si se dispara el submit sin pasar por el botón.
   const paysWithInvalido = useMemo(() => {
+    if (paysWith === '' || paysWith === null || paysWith === undefined) return false;
     const payValue = parseFloat(paysWith);
     const amountValue = parseFloat(amount);
-    return paysWith === '' || isNaN(payValue) || isNaN(amountValue) || payValue <= amountValue;
+    return isNaN(payValue) || isNaN(amountValue) || payValue < amountValue;
   }, [paysWith, amount]);
 
   const specialDiscountOptions = [
@@ -343,7 +359,7 @@ const CounterPaymentModal = ({ isOpen, onClose, orderTotal, orderItems, onConfir
                     )}
                     {paysWith && paysWithInvalido && (
                         <p className="text-xs font-medium text-red-600">
-                          El importe de 'Paga con' debe ser mayor al monto a cobrar.
+                          El importe de 'Paga con' no puede ser menor al monto a cobrar.
                         </p>
                     )}
                      <Button className="w-full h-10 text-base" onClick={handleAddPayment} disabled={!amount || remainingBalance <= 0 || paysWithInvalido}>
