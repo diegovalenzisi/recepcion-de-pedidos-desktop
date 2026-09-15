@@ -1,9 +1,9 @@
 {
-  "latest": "1.3.129",
-  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.129%2FRecepcion-de-Pedidos-Setup-1.3.129.exe?alt=media",
-  "sha256": "15659ecad86048d224aea7f6a1af1f61f71fa9cf606957af1ee21eb69f60718e",
-  "size": 150081818,
+  "latest": "1.3.130",
+  "installerUrl": "https://firebasestorage.googleapis.com/v0/b/achava3703.firebasestorage.app/o/instalaciones%2Fsoftware%2F1.3.130%2FRecepcion-de-Pedidos-Setup-1.3.130.exe?alt=media",
+  "sha256": "098437942547e3ba2681a3c6f057d03d430528d92c8039cc60e1ee30ad509ff9",
+  "size": 150081134,
   "mandatory": false,
   "releaseDate": "2026-09-15",
-  "notes": "Version 1.3.129. Retiro de Efectivo (Dueno y Encargado, multi-fecha/turno/BACKUP, anti-duplicado, no modifica Caja Fuerte). Paga con obligatorio y calculo de Vuelto en Mostrador + Efectivo, con Total/Paga con/Vuelto en Pagos Registrados. Corrige el actualizador: nunca permite downgrade aunque mandatory sea true."
+  "notes": "Version 1.3.130. Mostrador + Efectivo: Paga con vacio = paga justo (vuelto 0), igual al monto ahora es valido. Incluye todo lo de 1.3.129: Retiro de Efectivo y anti-downgrade del actualizador."
 }
